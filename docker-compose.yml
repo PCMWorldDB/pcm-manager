@@ -1,0 +1,118 @@
+version: '3.8'
+
+x-common-env: &common-env
+  FLASK_APP: wsgi.py
+  FLASK_ENV: ${FLASK_ENV:-development}
+  SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-this-in-production}
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PROVISIONER_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+  REDIS_URL: redis://redis:6379/0
+
+x-common-depends: &common-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pcm-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pcm-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: pcm-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - pcm-network
+
+  flask:
+    build:
+      context: .
+      dockerfile: docker/flask/Dockerfile
+    container_name: pcm-flask
+    environment:
+      <<: *common-env
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      CYCLING_API_KEY: ${CYCLING_API_KEY:-your-api-key-here}
+      CYCLING_API_URL: ${CYCLING_API_URL:-https://api.example.com}
+      # Admin user creation (optional)
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    volumes:
+      - ./app:/app/app
+      - ./migrations:/app/migrations
+      - app_data:/app/data
+    ports:
+      - "5000:5000"
+    depends_on: *common-depends
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - pcm-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/flask/Dockerfile
+    container_name: pcm-worker
+    command: celery -A app.extensions.celery worker --loglevel=info
+    environment:
+      <<: *common-env
+    volumes:
+      - ./app:/app/app
+      - app_data:/app/data
+    depends_on: *common-depends
+    networks:
+      - pcm-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: pcm-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./app/static:/app/static:ro
+      - app_data:/app/data:ro
+    depends_on:
+      - flask
+    networks:
+      - pcm-network
+
+volumes:
+  postgres_data:
+  app_data:
+
+networks:
+  pcm-network:
+    driver: bridge
