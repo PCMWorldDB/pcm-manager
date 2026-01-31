@@ -95,16 +95,16 @@ def _seed_roles():
     
     # Create resources
     resources_data = [
-        {'name': 'users', 'app_section': 'admin', 'description': 'User management'},
-        {'name': 'roles', 'app_section': 'admin', 'description': 'Role management'},
-        {'name': 'namespaces', 'app_section': 'admin', 'description': 'Namespace management'},
-        {'name': 'riders', 'app_section': 'stat_manager', 'description': 'Rider data'},
-        {'name': 'teams', 'app_section': 'stat_manager', 'description': 'Team data'},
-        {'name': 'races', 'app_section': 'stat_manager', 'description': 'Race data'},
-        {'name': 'stats', 'app_section': 'stat_manager', 'description': 'Statistics'},
-        {'name': 'photos', 'app_section': 'photo_manager', 'description': 'Photo management'},
-        {'name': 'palmares', 'app_section': 'palmares_manager', 'description': 'Career achievements'},
-        {'name': 'releases', 'app_section': 'release_manager', 'description': 'Release management'},
+        {'name': 'users', 'app_panel': 'admin', 'description': 'User management'},
+        {'name': 'roles', 'app_panel': 'admin', 'description': 'Role management'},
+        {'name': 'namespaces', 'app_panel': 'admin', 'description': 'Namespace management'},
+        {'name': 'riders', 'app_panel': 'stat_manager', 'description': 'Rider data'},
+        {'name': 'teams', 'app_panel': 'stat_manager', 'description': 'Team data'},
+        {'name': 'races', 'app_panel': 'stat_manager', 'description': 'Race data'},
+        {'name': 'stats', 'app_panel': 'stat_manager', 'description': 'Statistics'},
+        {'name': 'photos', 'app_panel': 'photo_manager', 'description': 'Photo management'},
+        {'name': 'palmares', 'app_panel': 'palmares_manager', 'description': 'Career achievements'},
+        {'name': 'releases', 'app_panel': 'release_manager', 'description': 'Release management'},
     ]
     
     resources = {}
@@ -226,7 +226,6 @@ def create_admin_command(username, password):
     """Create an admin user"""
     
     # Check if user already exists
-
     if User.query.filter_by(username=username).first():
         click.echo(f'Error: User with username {username} already exists')
         return

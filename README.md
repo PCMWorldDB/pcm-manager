@@ -9,7 +9,7 @@ A Flask-based web application for managing Pro Cycling Manager (PCM) mod databas
 - **Namespace Databases**: One PostgreSQL database per CDB instance, containing riders, teams, races, palmares, photos, and stats
 - **SQLite CDB Files**: PCM-compatible game database files (input/output)
 
-### Five Application Sections
+### Five Application panels
 1. **Stat Manager**: Edit rider/team/race statistics
 2. **Photo Manager**: Upload and manage photos for entities
 3. **Palmares Manager**: Manage career achievements with API integration

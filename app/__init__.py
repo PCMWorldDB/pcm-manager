@@ -17,6 +17,12 @@ def create_app(config_name=None):
     # Initialize extensions
     init_extensions(app)
     
+    # Configure User model relationships on every app startup
+    # This is safe because configure_user_relationships() checks if tables exist
+    with app.app_context():
+        from app.models.user import configure_user_relationships
+        configure_user_relationships()
+    
     # Register blueprints
     register_blueprints(app)
     

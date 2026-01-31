@@ -63,7 +63,9 @@
 {% if apps %}
 <div class="apps-grid">
     {% for app in apps %}
-    <a href="#" class="app-tile" onclick="alert('{{ app.name }} coming soon!'); return false;">
+    <a href="{% if app.name == 'admin' %}{{ url_for('web.admin') }}{% else %}#{% endif %}" 
+       class="app-tile" 
+       {% if app.name != 'admin' %}onclick="alert('{{ app.name }} coming soon!'); return false;"{% endif %}>
         <div class="icon">{{ app.icon }}</div>
         <h3>{{ app.display_name }}</h3>
         <p>{{ app.description }}</p>

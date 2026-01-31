@@ -133,6 +133,12 @@ class Config:
     # WTForms
     WTF_CSRF_ENABLED = True
     WTF_CSRF_TIME_LIMIT = None
+    
+    # PCM Versions (for namespace creation dropdown)
+    PCM_VERSIONS = [
+        ('PCM 2024', 'PCM 2024'),
+        ('PCM 2025', 'PCM 2025'),
+    ]
 
 
 class DevelopmentConfig(Config):

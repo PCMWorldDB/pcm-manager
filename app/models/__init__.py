@@ -5,6 +5,7 @@ from app.models.namespace import Namespace
 from app.models.user import User
 from app.models.release import Release
 
+
 # Association tables and relationship configuration are handled in CLI after db.create_all()
 
 

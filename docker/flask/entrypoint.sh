@@ -32,7 +32,7 @@ if [ "$TABLE_EXISTS" = "f" ]; then
     flask init-db
     echo "Database initialization complete!"
 else
-    echo "Database already initialized. Skipping initialization."
+    echo "Database already initialized."
 fi
 
 # Execute the main command (flask run, celery worker, etc.)

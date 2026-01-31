@@ -1,11 +1,24 @@
 """Web routes for UI"""
-from flask import render_template, redirect, url_for, flash, request
+from flask import render_template, redirect, url_for, flash, request, abort, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from app.web import web_bp
-from app.web.forms import LoginForm
-from app.models import User, Resource
+from app.web.forms import LoginForm, NamespaceForm
+from app.models import User, Resource, Namespace
 from app.extensions import db
 from datetime import datetime
+from functools import wraps
+
+
+def admin_required(f):
+    """Decorator to require admin access"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for('web.login'))
+        if not (current_user.is_superadmin or current_user.has_role('admin')):
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 @web_bp.route('/')
@@ -61,12 +74,12 @@ def logout():
 @web_bp.route('/dashboard')
 @login_required
 def dashboard():
-    """User dashboard showing available app sections"""
-    # Get all unique app sections the user has access to
-    app_sections = {}
+    """User dashboard showing available app panels"""
+    # Get all unique app panels the user has access to
+    app_panels = {}
     
     if current_user.is_superadmin:
-        # Superadmin gets all app sections
+        # Superadmin gets all app panels
         resources = Resource.query.all()
     else:
         # Get resources based on user's role permissions
@@ -76,27 +89,27 @@ def dashboard():
                 if permission.resource not in resources:
                     resources.append(permission.resource)
     
-    # Group by app_section
+    # Group by app_panel
     for resource in resources:
-        section = resource.app_section
-        if section not in app_sections:
-            app_sections[section] = {
-                'name': section,
-                'display_name': section.replace('_', ' ').title(),
-                'description': f'Manage and view {section.replace("_", " ")}',
-                'icon': get_app_icon(section),
+        panel = resource.app_panel
+        if panel not in app_panels:
+            app_panels[panel] = {
+                'name': panel,
+                'display_name': panel.replace('_', ' ').title(),
+                'description': f'Manage and view {panel.replace("_", " ")}',
+                'icon': get_app_icon(panel),
                 'resources': []
             }
-        app_sections[section]['resources'].append(resource.name)
+        app_panels[panel]['resources'].append(resource.name)
     
     # Convert to list for template
-    apps = list(app_sections.values())
+    apps = list(app_panels.values())
     
     return render_template('dashboard.html', apps=apps)
 
 
-def get_app_icon(app_section):
-    """Get icon emoji for app section"""
+def get_app_icon(app_panel):
+    """Get icon emoji for app panel"""
     icons = {
         'admin': '⚙️',
         'stat_manager': '📊',
@@ -104,4 +117,95 @@ def get_app_icon(app_section):
         'palmares_manager': '🏆',
         'release_manager': '📦',
     }
-    return icons.get(app_section, '📁')
+    return icons.get(app_panel, '📁')
+
+
+# ==================== Admin Panel Routes ====================
+
+@web_bp.route('/admin')
+@login_required
+@admin_required
+def admin():
+    """Admin panel home - redirect to users section"""
+    return redirect(url_for('web.admin_users'))
+
+
+@web_bp.route('/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    """Admin panel - Users management"""
+    users = User.query.order_by(User.created_at.desc()).all()
+    return render_template('admin/users.html', users=users, active_section='users')
+
+
+@web_bp.route('/admin/namespaces')
+@login_required
+@admin_required
+def admin_namespaces():
+    """Admin panel - Namespaces management"""
+    namespaces = Namespace.query.order_by(Namespace.created_at.desc()).all()
+    return render_template('admin/namespaces.html', namespaces=namespaces, active_section='namespaces')
+
+
+@web_bp.route('/admin/namespaces/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_namespace_create():
+    """Admin panel - Create new namespace"""
+    form = NamespaceForm()
+    
+    # Populate PCM version choices from config
+    form.pcm_version.choices = [('', '-- Select Version --')] + current_app.config['PCM_VERSIONS']
+    
+    if form.validate_on_submit():
+        # Check if namespace with same name or slug exists
+        existing = Namespace.query.filter(
+            (Namespace.name == form.name.data) | (Namespace.slug == form.slug.data)
+        ).first()
+        
+        if existing:
+            flash('A namespace with this name or slug already exists', 'error')
+            return render_template('admin/namespace_form.html', form=form, active_section='namespaces')
+        
+        # Generate database name from slug
+        database_name = f"pcm_{form.slug.data.replace('-', '_')}"
+        
+        # Create namespace (connection string will be set later when provisioning the database)
+        namespace = Namespace(
+            name=form.name.data,
+            slug=form.slug.data,
+            description=form.description.data,
+            database_name=database_name,
+            connection_string='',  # Placeholder - will be set during database provisioning
+            pcm_version=form.pcm_version.data,
+            database_year=form.database_year.data,
+            status=form.status.data,
+            created_by_id=current_user.id
+        )
+        
+        db.session.add(namespace)
+        db.session.commit()
+        
+        flash(f'Namespace "{namespace.name}" created successfully', 'success')
+        return redirect(url_for('web.admin_namespaces'))
+    
+    return render_template('admin/namespace_form.html', form=form, active_section='namespaces')
+
+
+@web_bp.route('/admin/namespaces/<int:namespace_id>/status', methods=['POST'])
+@login_required
+@admin_required
+def admin_namespace_update_status(namespace_id):
+    """Admin panel - Update namespace status via AJAX"""
+    namespace = Namespace.query.get_or_404(namespace_id)
+    new_status = request.form.get('status')
+    
+    if new_status not in ['active', 'draft', 'archived']:
+        return {'error': 'Invalid status'}, 400
+    
+    namespace.status = new_status
+    db.session.commit()
+    
+    flash(f'Namespace "{namespace.name}" status updated to {new_status}', 'success')
+    return redirect(url_for('web.admin_namespaces'))

@@ -54,9 +54,9 @@ def create_association_tables():
     """Create association tables using raw SQL to avoid FK resolution issues"""
     from app.extensions import db
     
-    # Create user_roles table
+    # Create user_role_mtm table
     db.session.execute(db.text("""
-        CREATE TABLE IF NOT EXISTS user_roles (
+        CREATE TABLE IF NOT EXISTS user_role_mtm (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             role_id INTEGER NOT NULL,
@@ -69,9 +69,9 @@ def create_association_tables():
         )
     """))
     
-    # Create user_namespaces table
+    # Create user_namespace_mtm table
     db.session.execute(db.text("""
-        CREATE TABLE IF NOT EXISTS user_namespaces (
+        CREATE TABLE IF NOT EXISTS user_namespace_mtm (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             namespace_id INTEGER NOT NULL,
@@ -88,33 +88,47 @@ def create_association_tables():
 
 
 def configure_user_relationships():
-    """Configure User relationships after all tables exist - reflect tables from DB"""
-    from sqlalchemy import Table, MetaData
+    """Configure User relationships after all tables exist - reflect tables from DB
+    
+    This function is safe to call at app startup - if the MTM tables don't exist yet,
+    it will silently skip configuration. The relationships will be configured when
+    init-db is run.
+    """
+    from sqlalchemy import Table, MetaData, inspect
     from app.models.role import Role
     from app.models.namespace import Namespace
+    
+    # Check if the MTM tables exist before trying to reflect them
+    inspector = inspect(db.engine)
+    existing_tables = inspector.get_table_names()
+    
+    if 'user_role_mtm' not in existing_tables or 'user_namespace_mtm' not in existing_tables:
+        # Tables don't exist yet - skip configuration
+        # This is expected on first app startup before init-db is run
+        return
     
     # Reflect the association tables from the database
     metadata = MetaData()
     metadata.bind = db.engine
     
-    user_roles_table = Table('user_roles', metadata, autoload_with=db.engine)
-    user_namespaces_table = Table('user_namespaces', metadata, autoload_with=db.engine)
+    user_role_mtm_table = Table('user_role_mtm', metadata, autoload_with=db.engine)
+    user_namespace_mtm_table = Table('user_namespace_mtm', metadata, autoload_with=db.engine)
     
     # Configure relationships with explicit join conditions
     User.roles = db.relationship(
         'Role',
-        secondary=user_roles_table,
-        primaryjoin=(User.id == user_roles_table.c.user_id),
-        secondaryjoin=(Role.id == user_roles_table.c.role_id),
+        secondary=user_role_mtm_table,
+        primaryjoin=(User.id == user_role_mtm_table.c.user_id),
+        secondaryjoin=(Role.id == user_role_mtm_table.c.role_id),
         backref='users',
         lazy='dynamic'
     )
     
     User.accessible_namespaces = db.relationship(
         'Namespace',
-        secondary=user_namespaces_table,
-        primaryjoin=(User.id == user_namespaces_table.c.user_id),
-        secondaryjoin=(Namespace.id == user_namespaces_table.c.namespace_id),
+        secondary=user_namespace_mtm_table,
+        primaryjoin=(User.id == user_namespace_mtm_table.c.user_id),
+        secondaryjoin=(Namespace.id == user_namespace_mtm_table.c.namespace_id),
         backref='authorized_users',
         lazy='dynamic'
     )

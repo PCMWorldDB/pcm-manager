@@ -45,6 +45,44 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     releases = db.relationship('Release', back_populates='namespace', cascade='all, delete-orphan')
     
+    @classmethod
+    def get_namespaces_with_authorized_users_view(cls):
+        """Get a joined view of namespaces with their authorized users"""
+        from sqlalchemy import Table, MetaData
+        from app.models.user import User
+        
+        metadata = MetaData()
+        metadata.bind = db.engine
+        user_namespace_mtm = Table('user_namespace_mtm', metadata, autoload_with=db.engine)
+        
+        return db.session.query(
+            cls,
+            User.username.label('user_username'),
+            User.is_active.label('user_is_active'),
+            user_namespace_mtm.c.granted_at.label('granted_at')
+        ).outerjoin(user_namespace_mtm, cls.id == user_namespace_mtm.c.namespace_id
+        ).outerjoin(User, user_namespace_mtm.c.user_id == User.id)
+    
+    def get_authorized_user_count(self):
+        """Get count of users authorized to access this namespace"""
+        from sqlalchemy import Table, MetaData, func
+        
+        metadata = MetaData()
+        metadata.bind = db.engine
+        user_namespace_mtm = Table('user_namespace_mtm', metadata, autoload_with=db.engine)
+        
+        count = db.session.query(func.count(user_namespace_mtm.c.user_id)).filter(
+            user_namespace_mtm.c.namespace_id == self.id
+        ).scalar()
+        
+        return count or 0
+    
+    def get_authorized_users_details(self):
+        """Get detailed information about users authorized for this namespace"""
+        return Namespace.get_namespaces_with_authorized_users_view().filter(
+            Namespace.id == self.id
+        ).all()
+    
     def __repr__(self):
         return f'<Namespace {self.name}>'
     
