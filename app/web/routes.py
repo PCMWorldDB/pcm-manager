@@ -2,8 +2,8 @@
 from flask import render_template, redirect, url_for, flash, request, abort, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from app.web import web_bp
-from app.web.forms import LoginForm, NamespaceForm
-from app.models import User, Resource, Namespace
+from app.web.forms import LoginForm, NamespaceForm, UserCreateForm, PasswordChangeForm, PasswordResetForm
+from app.models import User, Resource, Namespace, Role
 from app.extensions import db
 from datetime import datetime
 from functools import wraps
@@ -33,6 +33,9 @@ def index():
 def login():
     """User login page"""
     if current_user.is_authenticated:
+        # Check if user has temporary password and needs to change it
+        if current_user.is_temporary_password:
+            return redirect(url_for('web.change_password'))
         return redirect(url_for('web.dashboard'))
     
     form = LoginForm()
@@ -50,6 +53,11 @@ def login():
             # Update last login time
             user.last_login = datetime.utcnow()
             db.session.commit()
+            
+            # Check if user has temporary password
+            if user.is_temporary_password:
+                flash('You must change your temporary password before continuing.', 'warning')
+                return redirect(url_for('web.change_password'))
             
             flash(f'Welcome back, {user.username}!', 'success')
             
@@ -79,7 +87,7 @@ def dashboard():
     app_panels = {}
     
     if current_user.is_superadmin:
-        # Superadmin gets all app panels
+        # Superadmin gets all app panels (except admin)
         resources = Resource.query.all()
     else:
         # Get resources based on user's role permissions
@@ -89,9 +97,13 @@ def dashboard():
                 if permission.resource not in resources:
                     resources.append(permission.resource)
     
-    # Group by app_panel
+    # Group by app_panel, excluding 'admin' panel
     for resource in resources:
         panel = resource.app_panel
+        # Skip admin panel - it's now in settings dropdown
+        if panel == 'admin':
+            continue
+            
         if panel not in app_panels:
             app_panels[panel] = {
                 'name': panel,
@@ -209,3 +221,213 @@ def admin_namespace_update_status(namespace_id):
     
     flash(f'Namespace "{namespace.name}" status updated to {new_status}', 'success')
     return redirect(url_for('web.admin_namespaces'))
+
+
+# ==================== User Management Routes ====================
+
+@web_bp.route('/admin/users/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_user_create():
+    """Admin panel - Create new user"""
+    form = UserCreateForm()
+    
+    if form.validate_on_submit():
+        # Check if username already exists
+        existing = User.query.filter_by(username=form.username.data).first()
+        if existing:
+            flash('A user with this username already exists', 'error')
+            return render_template('admin/user_form.html', form=form, active_section='users')
+        
+        # Create new user with temporary password
+        user = User(
+            username=form.username.data,
+            is_active=False,  # Inactive by default
+            is_temporary_password=True  # Flag for password change requirement
+        )
+        user.set_password(form.temporary_password.data)
+        
+        db.session.add(user)
+        db.session.commit()
+        
+        flash(f'User "{user.username}" created successfully with temporary password. User must activate account and change password on first login.', 'success')
+        return redirect(url_for('web.admin_user_detail', user_id=user.id))
+    
+    return render_template('admin/user_form.html', form=form, active_section='users')
+
+
+@web_bp.route('/admin/user/<int:user_id>')
+@login_required
+@admin_required
+def admin_user_detail(user_id):
+    """Admin panel - View and manage user details"""
+    user = User.query.get_or_404(user_id)
+    
+    # Get all roles for assignment
+    all_roles = Role.query.order_by(Role.display_name).all()
+    
+    # Get all namespaces for assignment
+    all_namespaces = Namespace.query.order_by(Namespace.name).all()
+    
+    # Get user's current roles and namespaces
+    user_roles = user.roles.all() if hasattr(user, 'roles') else []
+    user_namespaces = user.accessible_namespaces.all() if hasattr(user, 'accessible_namespaces') else []
+    
+    return render_template('admin/user_detail.html', 
+                         user=user, 
+                         all_roles=all_roles,
+                         all_namespaces=all_namespaces,
+                         user_roles=user_roles,
+                         user_namespaces=user_namespaces,
+                         active_section='users')
+
+
+@web_bp.route('/admin/user/<int:user_id>/toggle-status', methods=['POST'])
+@login_required
+@admin_required
+def admin_user_toggle_status(user_id):
+    """Admin panel - Toggle user active status"""
+    user = User.query.get_or_404(user_id)
+    
+    # Prevent deactivating yourself
+    if user.id == current_user.id:
+        flash('You cannot deactivate your own account', 'error')
+        return redirect(url_for('web.admin_user_detail', user_id=user_id))
+    
+    user.is_active = not user.is_active
+    db.session.commit()
+    
+    status = 'activated' if user.is_active else 'deactivated'
+    flash(f'User "{user.username}" has been {status}', 'success')
+    return redirect(url_for('web.admin_user_detail', user_id=user_id))
+
+
+@web_bp.route('/admin/user/<int:user_id>/reset-password', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_user_reset_password(user_id):
+    """Admin panel - Reset user password"""
+    user = User.query.get_or_404(user_id)
+    form = PasswordResetForm()
+    
+    if form.validate_on_submit():
+        user.set_password(form.new_password.data)
+        user.is_temporary_password = True  # Mark as temporary
+        db.session.commit()
+        
+        flash(f'Password reset for "{user.username}". User must change password on next login.', 'success')
+        return redirect(url_for('web.admin_user_detail', user_id=user_id))
+    
+    return render_template('admin/user_reset_password.html', form=form, user=user, active_section='users')
+
+
+@web_bp.route('/admin/user/<int:user_id>/add-role', methods=['POST'])
+@login_required
+@admin_required
+def admin_user_add_role(user_id):
+    """Admin panel - Add role to user"""
+    user = User.query.get_or_404(user_id)
+    role_id = request.form.get('role_id')
+    
+    if not role_id:
+        flash('No role selected', 'error')
+        return redirect(url_for('web.admin_user_detail', user_id=user_id))
+    
+    role = Role.query.get_or_404(role_id)
+    
+    # Check if user already has this role
+    if user.roles.filter_by(id=role.id).first():
+        flash(f'User already has the "{role.display_name}" role', 'warning')
+    else:
+        user.roles.append(role)
+        db.session.commit()
+        flash(f'Role "{role.display_name}" added to user "{user.username}"', 'success')
+    
+    return redirect(url_for('web.admin_user_detail', user_id=user_id))
+
+
+@web_bp.route('/admin/user/<int:user_id>/remove-role/<int:role_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_user_remove_role(user_id, role_id):
+    """Admin panel - Remove role from user"""
+    user = User.query.get_or_404(user_id)
+    role = Role.query.get_or_404(role_id)
+    
+    if user.roles.filter_by(id=role.id).first():
+        user.roles.remove(role)
+        db.session.commit()
+        flash(f'Role "{role.display_name}" removed from user "{user.username}"', 'success')
+    else:
+        flash(f'User does not have the "{role.display_name}" role', 'warning')
+    
+    return redirect(url_for('web.admin_user_detail', user_id=user_id))
+
+
+@web_bp.route('/admin/user/<int:user_id>/add-namespace', methods=['POST'])
+@login_required
+@admin_required
+def admin_user_add_namespace(user_id):
+    """Admin panel - Grant namespace access to user"""
+    user = User.query.get_or_404(user_id)
+    namespace_id = request.form.get('namespace_id')
+    
+    if not namespace_id:
+        flash('No namespace selected', 'error')
+        return redirect(url_for('web.admin_user_detail', user_id=user_id))
+    
+    namespace = Namespace.query.get_or_404(namespace_id)
+    
+    # Check if user already has access
+    if user.accessible_namespaces.filter_by(id=namespace.id).first():
+        flash(f'User already has access to "{namespace.name}"', 'warning')
+    else:
+        user.accessible_namespaces.append(namespace)
+        db.session.commit()
+        flash(f'Access to namespace "{namespace.name}" granted to user "{user.username}"', 'success')
+    
+    return redirect(url_for('web.admin_user_detail', user_id=user_id))
+
+
+@web_bp.route('/admin/user/<int:user_id>/remove-namespace/<int:namespace_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_user_remove_namespace(user_id, namespace_id):
+    """Admin panel - Revoke namespace access from user"""
+    user = User.query.get_or_404(user_id)
+    namespace = Namespace.query.get_or_404(namespace_id)
+    
+    if user.accessible_namespaces.filter_by(id=namespace.id).first():
+        user.accessible_namespaces.remove(namespace)
+        db.session.commit()
+        flash(f'Access to namespace "{namespace.name}" revoked from user "{user.username}"', 'success')
+    else:
+        flash(f'User does not have access to "{namespace.name}"', 'warning')
+    
+    return redirect(url_for('web.admin_user_detail', user_id=user_id))
+
+
+# ==================== Password Change Route ====================
+
+@web_bp.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    """User password change page (for temporary passwords)"""
+    form = PasswordChangeForm()
+    
+    if form.validate_on_submit():
+        # Verify current password
+        if not current_user.check_password(form.current_password.data):
+            flash('Current password is incorrect', 'error')
+            return render_template('change_password.html', form=form)
+        
+        # Set new password
+        current_user.set_password(form.new_password.data)
+        current_user.is_temporary_password = False  # Remove temporary flag
+        db.session.commit()
+        
+        flash('Password changed successfully!', 'success')
+        return redirect(url_for('web.dashboard'))
+    
+    return render_template('change_password.html', form=form)
+

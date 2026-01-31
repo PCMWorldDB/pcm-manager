@@ -29,6 +29,9 @@
             <div class="card">
                 <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                     <h4 class="mb-0">👥 Users Management</h4>
+                    <a href="{{ url_for('web.admin_user_create') }}" class="btn btn-light btn-sm">
+                        ➕ Create User
+                    </a>
                 </div>
                 <div class="card-body">
                     <div class="table-responsive">
@@ -47,7 +50,9 @@
                                 {% for user in users %}
                                 <tr>
                                     <td>
-                                        <strong>{{ user.username }}</strong>
+                                        <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="text-decoration-none">
+                                            <strong>{{ user.username }}</strong>
+                                        </a>
                                     </td>
                                     <td>
                                         {% if user.roles.count() > 0 %}

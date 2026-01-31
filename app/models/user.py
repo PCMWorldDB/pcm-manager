@@ -10,8 +10,9 @@ class User(UserMixin, MainDBModel):
     
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
-    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=False, nullable=False)
     is_superadmin = db.Column(db.Boolean, default=False, nullable=False)
+    is_temporary_password = db.Column(db.Boolean, default=False, nullable=False)
     last_login = db.Column(db.DateTime)
     
     def set_password(self, password):
