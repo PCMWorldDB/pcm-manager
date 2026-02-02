@@ -59,11 +59,12 @@ docker compose exec webapp webapp create-admin
 
 ## Development Status
 
-**Completed:** Project structure, models, RBAC, Docker setup, auto-initialization
+- (DONE) Design and build webapp architecutre and tech stack
+- (DONE) Build basic user management config (create user, change user password, add/remove user roles)
+- (DONE) Build namespace management config (create namespace, import cdb into namespace, interal cdb model and table mappings)
+- (NOT STARTED) Create Stat Manager Panel (generate race result from FC, view cyclist stats from race result, modify stats)
+- (NOT STARTED) Create Palmares Manager Panel
 
-**In Progress:** Multi-DB management, namespace provisioning, migrations
-
-**TODO:** Web UI, API endpoints, namespace models, SQLite export, Celery tasks
 
 ## Configuration
 
