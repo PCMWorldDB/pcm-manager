@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PCM Manager{% endblock %}</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        /* Light mode (default) */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        
+        /* Dark mode */
+        body.dark-mode {
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        
+        body.dark-mode .header {
+            background: #2d3748;
+        }
+        
+        body.dark-mode .card {
+            background: #2d3748;
+            color: #e0e0e0;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .card-header {
+            background: #1a202c;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .list-group-item {
+            background: #2d3748;
+            color: #e0e0e0;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .list-group-item:hover {
+            background: #374151;
+        }
+        
+        body.dark-mode .list-group-item.active {
+            background: #4a5568;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .table {
+            color: #e0e0e0;
+        }
+        
+        body.dark-mode .table-hover tbody tr:hover {
+            background: #374151;
+        }
+        
+        body.dark-mode .form-control,
+        body.dark-mode .form-select {
+            background: #374151;
+            color: #e0e0e0;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .form-control:focus,
+        body.dark-mode .form-select:focus {
+            background: #374151;
+            color: #e0e0e0;
+            border-color: #60a5fa;
+        }
+        
+        body.dark-mode .dropdown-menu {
+            background: #2d3748;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .dropdown-item {
+            color: #e0e0e0;
+        }
+        
+        body.dark-mode .dropdown-item:hover {
+            background: #374151;
+            color: #e0e0e0;
+        }
+        
+        body.dark-mode .dropdown-divider {
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .btn-light {
+            background: #4a5568;
+            color: #e0e0e0;
+            border-color: #4a5568;
+        }
+        
+        body.dark-mode .btn-light:hover {
+            background: #5a6778;
+            border-color: #5a6778;
+        }
+        
+        body.dark-mode .alert-info {
+            background: #1e3a5f;
+            color: #90cdf4;
+            border-color: #2d5a8f;
+        }
+        
+        body.dark-mode .text-muted {
+            color: #9ca3af !important;
+        }
+        
+        body.dark-mode code {
+            background: #374151;
+            color: #fbbf24;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px 0;
+            margin-bottom: 30px;
+        }
+        .header .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 24px;
+        }
+        .header nav {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .header nav a {
+            color: white;
+            text-decoration: none;
+        }
+        .header nav a:hover {
+            text-decoration: underline;
+        }
+        .settings-dropdown {
+            position: relative;
+        }
+        .settings-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .settings-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .dropdown-menu {
+            min-width: 200px;
+        }
+        .dropdown-item {
+            color: #212529;
+            text-decoration: none;
+            display: block;
+            width: 100%;
+            padding: 0.5rem 1rem;
+            clear: both;
+            font-weight: 400;
+            white-space: nowrap;
+        }
+        .dropdown-item:hover {
+            background-color: #f8f9fa;
+            color: #1e2125;
+        }
+        .dropdown-item.username {
+            font-weight: bold;
+            color: #2c3e50;
+            cursor: default;
+        }
+        
+        body.dark-mode .dropdown-item.username {
+            color: #e0e0e0;
+        }
+        
+        .dropdown-item.username:hover {
+            background: none;
+        }
+        
+        /* Dark mode toggle switch */
+        .dark-mode-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .dark-mode-toggle:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+        
+        body.dark-mode .dark-mode-toggle:hover {
+            background: #374151;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #ccc;
+            border-radius: 12px;
+            transition: background 0.3s;
+            flex-shrink: 0;
+        }
+        
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: left 0.3s;
+        }
+        
+        body.dark-mode .toggle-switch {
+            background: #60a5fa;
+        }
+        
+        body.dark-mode .toggle-switch::after {
+            left: 22px;
+        }
+        
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        .flash {
+            padding: 12px 20px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        .flash.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .flash.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .flash.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .flash.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        {% block styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    {% if current_user.is_authenticated %}
+    <div class="header">
+        <div class="container">
+            <h1>
+                <img src="{{ url_for('static', filename='images/logo.jpg') }}" 
+                     alt="PCM Manager" 
+                     style="height: 32px; vertical-align: middle; margin-right: 10px;">
+                PCM Manager
+            </h1>
+            <nav>
+                <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+                
+                <!-- Settings Dropdown -->
+                <div class="dropdown settings-dropdown">
+                    <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        ⚙️
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="settingsDropdown">
+                        <li><span class="dropdown-item username">{{ current_user.username }}</span></li>
+                        <li><hr class="dropdown-divider"></li>
+                        
+                        <!-- Dark Mode Toggle -->
+                        <li>
+                            <div class="dark-mode-toggle" id="darkModeToggle">
+                                <span>🌙 Dark Mode</span>
+                                <div class="toggle-switch"></div>
+                            </div>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        
+                        {% if current_user.is_superadmin or current_user.has_role('admin') %}
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.admin') }}" style="color: inherit !important;">
+                                🛠️ Admin Panel
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        {% endif %}
+                        
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.change_password') }}" style="color: inherit !important;">
+                                🔑 Change Password
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.logout') }}" style="color: inherit !important;">
+                                🚪 Logout
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+    
+    <!-- Bootstrap 5 JS Bundle (includes Popper) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Dark Mode Toggle Script -->
+    <script>
+        // Check for saved dark mode preference on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'enabled') {
+                document.body.classList.add('dark-mode');
+            }
+            
+            // Dark mode toggle handler
+            const darkModeToggle = document.getElementById('darkModeToggle');
+            if (darkModeToggle) {
+                darkModeToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation(); // Prevent dropdown from closing
+                    
+                    document.body.classList.toggle('dark-mode');
+                    
+                    // Save preference
+                    if (document.body.classList.contains('dark-mode')) {
+                        localStorage.setItem('darkMode', 'enabled');
+                    } else {
+                        localStorage.setItem('darkMode', 'disabled');
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

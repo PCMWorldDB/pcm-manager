@@ -1,8 +1,8 @@
 """Flask application factory"""
 import os
 from flask import Flask
-from app.config import config
-from app.extensions import init_extensions
+from webapp.config import config
+from webapp.extensions import init_extensions
 
 
 def create_app(config_name=None):
@@ -16,6 +16,12 @@ def create_app(config_name=None):
     
     # Initialize extensions
     init_extensions(app)
+    
+    # Configure User model relationships on every app startup
+    # This is safe because configure_user_relationships() checks if tables exist
+    with app.app_context():
+        from webapp.models.main.user import configure_user_relationships
+        configure_user_relationships()
     
     # Register blueprints
     register_blueprints(app)
@@ -32,7 +38,7 @@ def create_app(config_name=None):
 
 def register_blueprints(app):
     """Register Flask blueprints"""
-    from app.web import web_bp
+    from webapp.web import web_bp
     app.register_blueprint(web_bp)
     
     # TODO: Register API blueprint when ready
@@ -42,17 +48,17 @@ def register_blueprints(app):
 
 def register_commands(app):
     """Register CLI commands"""
-    from app.cli import (
+    from webapp.cli import (
         init_db_command, 
         seed_roles_command, 
-        create_admin_command,
-        init_data_dirs_command
+        namespace,
+        cdb
     )
     
     app.cli.add_command(init_db_command)
     app.cli.add_command(seed_roles_command)
-    app.cli.add_command(create_admin_command)
-    app.cli.add_command(init_data_dirs_command)
+    app.cli.add_command(namespace)
+    app.cli.add_command(cdb)
 
 
 def register_error_handlers(app):

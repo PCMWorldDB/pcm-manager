@@ -31,3 +31,4 @@ gunicorn==21.2.0
 
 # Development
 Flask-DebugToolbar==0.14.1
+PyYAML==6.0.1

@@ -4,27 +4,27 @@ x-common-env: &common-env
   FLASK_APP: wsgi.py
   FLASK_ENV: ${FLASK_ENV:-development}
   SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-this-in-production}
-  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  PROVISIONER_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
-  REDIS_URL: redis://redis:6379/0
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
+  PROVISIONER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/postgres
+  REDIS_URL: redis://cache:6379/0
 
 x-common-depends: &common-depends
-  postgres:
+  database:
     condition: service_healthy
-  redis:
+  cache:
     condition: service_healthy
 
 services:
-  postgres:
+  database:
     image: postgres:15-alpine
-    container_name: pcm-postgres
+    container_name: database
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - database_vol:/var/lib/postgresql/data
       - ./docker/postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     ports:
       - "5432:5432"
@@ -34,11 +34,11 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - pcm-network
+      - pcm-manager-network
 
-  redis:
+  cache:
     image: redis:7-alpine
-    container_name: pcm-redis
+    container_name: cache
     ports:
       - "6379:6379"
     healthcheck:
@@ -47,13 +47,13 @@ services:
       timeout: 3s
       retries: 3
     networks:
-      - pcm-network
+      - pcm-manager-network
 
-  flask:
+  web:
     build:
       context: .
-      dockerfile: docker/flask/Dockerfile
-    container_name: pcm-flask
+      dockerfile: docker/webapp/Dockerfile
+    container_name: web
     environment:
       <<: *common-env
       POSTGRES_USER: ${POSTGRES_USER}
@@ -65,9 +65,9 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     volumes:
-      - ./app:/app/app
+      - ./webapp:/app/webapp
       - ./migrations:/app/migrations
-      - app_data:/app/data
+      - filestore_vol:/app/filestore
     ports:
       - "5000:5000"
     depends_on: *common-depends
@@ -78,41 +78,39 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - pcm-network
+      - pcm-manager-network
 
   worker:
     build:
       context: .
-      dockerfile: docker/flask/Dockerfile
-    container_name: pcm-worker
+      dockerfile: docker/webapp/Dockerfile
+    container_name: worker
     command: celery -A app.extensions.celery worker --loglevel=info
     environment:
       <<: *common-env
     volumes:
-      - ./app:/app/app
-      - app_data:/app/data
+      - ./webapp:/app/webapp
     depends_on: *common-depends
     networks:
-      - pcm-network
+      - pcm-manager-network
 
-  nginx:
+  reverse-proxy:
     image: nginx:alpine
-    container_name: pcm-nginx
+    container_name: reverse_proxy
     ports:
       - "80:80"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./app/static:/app/static:ro
-      - app_data:/app/data:ro
+      - ./webapp/static:/app/webapp/static:ro
     depends_on:
-      - flask
+      - web
     networks:
-      - pcm-network
+      - pcm-manager-network
 
 volumes:
-  postgres_data:
-  app_data:
+  database_vol:
+  filestore_vol:
 
 networks:
-  pcm-network:
+  pcm-manager-network:
     driver: bridge

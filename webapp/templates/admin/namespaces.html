@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - Namespaces{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <!-- Admin Navigation -->
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">⚙️ Admin Panel</h5>
+                </div>
+                <div class="list-group list-group-flush">
+                    <a href="{{ url_for('web.admin_users') }}" 
+                       class="list-group-item list-group-item-action {% if active_section == 'users' %}active{% endif %}">
+                        👥 Users
+                    </a>
+                    <a href="{{ url_for('web.admin_namespaces') }}" 
+                       class="list-group-item list-group-item-action {% if active_section == 'namespaces' %}active{% endif %}">
+                        🗂️ Namespaces
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Namespaces Content -->
+        <div class="col-md-9">
+            <div class="card">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h4 class="mb-0">🗂️ Namespaces Management</h4>
+                    <a href="{{ url_for('web.admin_namespace_create') }}" class="btn btn-light btn-sm">
+                        ➕ Create Namespace
+                    </a>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Slug</th>
+                                    <th>PCM Version</th>
+                                    <th>Status</th>
+                                    <th>Created By</th>
+                                    <th>Created</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for namespace in namespaces %}
+                                <tr style="cursor: pointer;" onclick="window.location='{{ url_for('web.admin_namespace_detail', namespace_id=namespace.id) }}';">
+                                    <td>
+                                        <strong>{{ namespace.name }}</strong>
+                                        {% if namespace.description %}
+                                        <br><small class="text-muted">{{ namespace.description[:50] }}{% if namespace.description|length > 50 %}...{% endif %}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td><code>{{ namespace.slug }}</code></td>
+                                    <td>
+                                        {% if namespace.pcm_version %}
+                                            {{ namespace.pcm_version }}
+                                            {% if namespace.database_year %}({{ namespace.database_year }}){% endif %}
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td onclick="event.stopPropagation();">
+                                        <form method="POST" action="{{ url_for('web.admin_namespace_update_status', namespace_id=namespace.id) }}" class="d-inline status-form" id="status-form-{{ namespace.id }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <input type="hidden" name="original_status" value="{{ namespace.status }}">
+                                            <div class="d-flex align-items-center gap-2">
+                                                <select name="status" class="form-select form-select-sm status-select" data-namespace-id="{{ namespace.id }}" data-original="{{ namespace.status }}" style="width: auto;">
+                                                    <option value="active" {% if namespace.status == 'active' %}selected{% endif %}>Active</option>
+                                                    <option value="draft" {% if namespace.status == 'draft' %}selected{% endif %}>Draft</option>
+                                                    <option value="archived" {% if namespace.status == 'archived' %}selected{% endif %}>Archived</option>
+                                                </select>
+                                                <button type="submit" class="btn btn-sm btn-success save-btn" id="save-btn-{{ namespace.id }}" style="display: none;">
+                                                    💾 Save
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </td>
+                                    <td>
+                                        {% if namespace.created_by %}
+                                            {{ namespace.created_by.username }}
+                                        {% else %}
+                                            <span class="text-muted">System</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ namespace.created_at.strftime('%Y-%m-%d') }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        
+                        {% if namespaces|length == 0 %}
+                        <div class="alert alert-info text-center">
+                            <p class="mb-2">No namespaces found in the system.</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Handle status dropdown changes
+    const statusSelects = document.querySelectorAll('.status-select');
+    
+    statusSelects.forEach(select => {
+        select.addEventListener('change', function() {
+            const namespaceId = this.dataset.namespaceId;
+            const originalStatus = this.dataset.original;
+            const currentStatus = this.value;
+            const saveBtn = document.getElementById(`save-btn-${namespaceId}`);
+            
+            // Show save button if status changed
+            if (currentStatus !== originalStatus) {
+                saveBtn.style.display = 'inline-block';
+            } else {
+                saveBtn.style.display = 'none';
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

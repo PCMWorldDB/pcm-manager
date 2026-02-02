@@ -22,10 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create data directories
-RUN mkdir -p /app/data/cdb-files /app/data/releases /app/data/photos
+RUN mkdir -p /app/filestore
 
 # Make entrypoint executable
-COPY docker/flask/entrypoint.sh /entrypoint.sh
+COPY docker/webapp/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Expose port

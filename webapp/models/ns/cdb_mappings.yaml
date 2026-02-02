@@ -1,0 +1,35 @@
+PCM_VERSION_MAPPINGS:
+  PCM2025:
+    cyclist: v1
+  PCM2024:
+    cyclist: v1
+
+CDB_TABLE_MAPPINGS:
+  v1:
+    cyclist:
+      cdb_table_name: DYN_cyclist
+      fields:
+        id: IDcyclist
+        first_cycling_id: value_f_current_ability
+        team_id: fkIDteam
+        region_id: fkIDregion
+        first_name: gene_sz_firstname
+        last_name: gene_sz_lastname
+        first_last_name: gene_sz_firstlastname
+        birth_date: gene_i_birthdate
+        weight_kg: gene_i_weight
+        size_cm: gene_i_size
+        stat_fla: charac_i_plain
+        stat_mo: charac_i_mountain
+        stat_mm: charac_i_medium_mountain
+        stat_dh: charac_i_downhilling
+        stat_hil: charac_i_hill
+        stat_tt: charac_i_timetrial
+        stat_prl: charac_i_prologue
+        stat_spr: charac_i_sprint
+        stat_acc: charac_i_acceleration
+        stat_end: charac_i_endurance
+        stat_res: charac_i_resistance
+        stat_rec: charac_i_recuperation
+        stat_cob: charac_i_cobble
+        stat_att: charac_i_baroudeur

@@ -9,7 +9,7 @@ A Flask-based web application for managing Pro Cycling Manager (PCM) mod databas
 - **Namespace Databases**: One PostgreSQL database per CDB instance, containing riders, teams, races, palmares, photos, and stats
 - **SQLite CDB Files**: PCM-compatible game database files (input/output)
 
-### Five Application Sections
+### Five Application panels
 1. **Stat Manager**: Edit rider/team/race statistics
 2. **Photo Manager**: Upload and manage photos for entities
 3. **Palmares Manager**: Manage career achievements with API integration
@@ -45,7 +45,7 @@ A Flask-based web application for managing Pro Cycling Manager (PCM) mod databas
 
 ```bash
 # View logs
-docker compose logs -f flask
+docker compose logs -f webapp
 
 # Stop services
 docker compose down
@@ -54,16 +54,17 @@ docker compose down
 docker compose down -v
 
 # Run Flask commands
-docker compose exec flask flask create-admin
+docker compose exec webapp webapp create-admin
 ```
 
 ## Development Status
 
-**Completed:** Project structure, models, RBAC, Docker setup, auto-initialization
+- (DONE) Design and build webapp architecutre and tech stack
+- (DONE) Build basic user management config (create user, change user password, add/remove user roles)
+- (DONE) Build namespace management config (create namespace, import cdb into namespace, interal cdb model and table mappings)
+- (NOT STARTED) Create Stat Manager Panel (generate race result from FC, view cyclist stats from race result, modify stats)
+- (NOT STARTED) Create Palmares Manager Panel
 
-**In Progress:** Multi-DB management, namespace provisioning, migrations
-
-**TODO:** Web UI, API endpoints, namespace models, SQLite export, Celery tasks
 
 ## Configuration
 
