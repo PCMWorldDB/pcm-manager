@@ -1,6 +1,6 @@
 """Main database models - Role-Based Access Control (RBAC)"""
-from app.extensions import db
-from app.models.base import MainDBModel
+from webapp.extensions import db
+from webapp.models.main.base import MainDBModel
 
 
 class Role(MainDBModel):
@@ -25,7 +25,7 @@ class Role(MainDBModel):
         user_role_mtm = Table('user_role_mtm', metadata, autoload_with=db.engine)
         
         # Import User here to avoid circular import
-        from app.models.user import User
+        from webapp.models.main.user import User
         
         return db.session.query(
             cls,

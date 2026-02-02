@@ -31,7 +31,7 @@
                     <h4 class="mb-0">➕ Create New Namespace</h4>
                 </div>
                 <div class="card-body">
-                    <form method="POST" action="{{ url_for('web.admin_namespace_create') }}">
+                    <form method="POST" action="{{ url_for('web.admin_namespace_create') }}" enctype="multipart/form-data">
                         {{ form.hidden_tag() }}
                         
                         <div class="row">
@@ -69,6 +69,19 @@
                             {{ form.description(class="form-control", rows=3, placeholder="Brief description of this namespace...") }}
                         </div>
                         
+                        <div class="mb-3">
+                            <label for="{{ form.cdb_file.id }}" class="form-label">
+                                {{ form.cdb_file.label.text }}
+                            </label>
+                            {{ form.cdb_file(class="form-control", accept=".sqlite") }}
+                            {% if form.cdb_file.errors %}
+                                <div class="invalid-feedback d-block">
+                                    {{ form.cdb_file.errors[0] }}
+                                </div>
+                            {% endif %}
+                            <small class="form-text text-muted">Upload a SQLite CDB database file (optional). File will be copied to the namespace import directory. Only .sqlite files are accepted.</small>
+                        </div>
+                        
                         <div class="row">
                             <div class="col-md-4 mb-3">
                                 <label for="{{ form.pcm_version.id }}" class="form-label">
@@ -93,11 +106,6 @@
                                 {{ form.status(class="form-select") }}
                                 <small class="form-text text-muted">Initial status</small>
                             </div>
-                        </div>
-                        
-                        <div class="alert alert-info">
-                            <strong>ℹ️ Note:</strong> Creating a namespace will register it in the system. 
-                            The database will need to be provisioned separately before it can be used.
                         </div>
                         
                         <div class="d-flex justify-content-between">

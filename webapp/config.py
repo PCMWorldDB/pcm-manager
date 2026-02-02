@@ -5,7 +5,7 @@ from datetime import timedelta
 # Path Helper Functions
 def get_base_data_path():
     """Get the base data directory path"""
-    storage_root = os.getenv('STORAGE_ROOT', './data')
+    storage_root = os.getenv('STORAGE_ROOT', './filestore')
     # Handle both relative and absolute paths
     if not os.path.isabs(storage_root):
         return os.path.join(os.getcwd(), storage_root)
@@ -14,7 +14,7 @@ def get_base_data_path():
 
 def get_namespace_path(namespace_name):
     """Get the base path for a specific namespace"""
-    return os.path.join(get_base_data_path(), namespace_name)
+    return os.path.join(get_base_data_path(), 'namespaces', namespace_name)
 
 
 def get_cdb_import_path(namespace_name):
@@ -106,7 +106,7 @@ class Config:
     PROVISIONER_DATABASE_URL = os.getenv('PROVISIONER_DATABASE_URL')
     
     # Redis & Celery
-    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    REDIS_URL = os.getenv('REDIS_URL', 'cache://localhost:6379/0')
     CELERY_BROKER_URL = REDIS_URL
     CELERY_RESULT_BACKEND = REDIS_URL
     
@@ -121,7 +121,7 @@ class Config:
     ALLOWED_EXTENSIONS = {'db', 'cdb', 'sqlite', 'sqlite3'}
     
     # Storage Paths (use helper functions for namespace-specific paths)
-    STORAGE_ROOT = os.getenv('STORAGE_ROOT', './data')
+    STORAGE_ROOT = os.getenv('STORAGE_ROOT', './filestore')
     
     # External API
     CYCLING_API_KEY = os.getenv('CYCLING_API_KEY')

@@ -1,5 +1,6 @@
 """Web forms for authentication and user input"""
 from flask_wtf import FlaskForm
+from flask_wtf.file import FileField, FileAllowed
 from wtforms import StringField, PasswordField, BooleanField, SubmitField, TextAreaField, SelectField, IntegerField
 from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError
 
@@ -86,7 +87,11 @@ class NamespaceForm(FlaskForm):
     ])
     description = TextAreaField('Description', validators=[Optional()])
     pcm_version = SelectField('PCM Version', validators=[Optional()])
-    database_year = IntegerField('Database Year', validators=[Optional()])
+    database_year = IntegerField('Database Year', validators=[Optional()], default=2025)
+    cdb_file = FileField('CDB Database File (SQLite)', validators=[
+        Optional(),
+        FileAllowed(['sqlite'], 'Only .sqlite files are allowed')
+    ])
     status = SelectField('Status', choices=[
         ('active', 'Active'),
         ('draft', 'Draft'),

@@ -2,13 +2,15 @@
 import os
 import click
 from flask.cli import with_appcontext
-from app.extensions import db, bcrypt
-from app.models import User, Role, Resource, Action, RolePermission
-from app.config import (
+from webapp.extensions import db, bcrypt
+from webapp.models import User, Role, Resource, Action, RolePermission, Namespace
+from webapp.config import (
     get_base_data_path,
     ensure_base_directories,
-    ensure_namespace_directories
+    ensure_namespace_directories,
+    get_cdb_import_path
 )
+from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
 
 
 @click.command('init-db')
@@ -22,11 +24,11 @@ def init_db_command():
     db.create_all(bind_key='main')
     
     # Create association tables using raw SQL (to avoid FK resolution issues)
-    from app.models.user import create_association_tables
+    from webapp.models.main.user import create_association_tables
     create_association_tables()
     
     # Configure User relationships AFTER all tables exist
-    from app.models.user import configure_user_relationships
+    from webapp.models.main.user import configure_user_relationships
     configure_user_relationships()
     
     click.echo('   ✓ Database tables created')
@@ -254,7 +256,7 @@ def create_admin_command(username, password):
 @with_appcontext
 def init_data_dirs_command(namespace):
     """Create data directory structure for CDB files"""
-    from app.models import Namespace
+    from webapp.models import Namespace
     
     # Ensure base directories exist first
     base_dirs = ensure_base_directories()
@@ -283,3 +285,73 @@ def init_data_dirs_command(namespace):
         click.echo(f'  ✓ Created: data/{ns_name}/photos')
     
     click.echo('\nData directory structure created successfully!')
+
+
+@click.group()
+def namespace():
+    """Namespace database management commands"""
+    pass
+
+@namespace.command('drop')
+@click.argument('namespace_slug')
+@click.option('--yes', is_flag=True, help='Skip confirmation prompt')
+@with_appcontext
+def drop_namespace(namespace_slug, yes):
+    """Drop a namespace database (DESTRUCTIVE!)
+    
+    Permanently deletes the namespace database and all its data.
+    
+    Usage: flask namespace drop <namespace-slug> [--yes]
+    """
+    # Find the namespace
+    ns = Namespace.query.filter_by(slug=namespace_slug).first()
+    if not ns:
+        click.echo(f"Error: Namespace '{namespace_slug}' not found", err=True)
+        return
+    
+    if not ns.connection_string:
+        click.echo("Namespace database not provisioned - nothing to drop")
+        return
+    
+    # Confirm deletion
+    if not yes:
+        click.echo(f"WARNING: This will permanently delete the database '{ns.database_name}'")
+        click.echo("All data will be lost!")
+        if not click.confirm('Are you sure you want to continue?'):
+            click.echo("Aborted")
+            return
+    
+    try:
+        provisioner = NamespaceProvisioner()
+        provisioner.drop_namespace_database(ns.database_name)
+        
+        # Clear connection string
+        ns.connection_string = ''
+        db.session.commit()
+        
+        click.echo(f"✓ Database '{ns.database_name}' dropped successfully")
+        
+    except Exception as e:
+        click.echo(f"Error dropping namespace database: {e}", err=True)
+
+
+@namespace.command('list')
+@with_appcontext
+def list_namespaces():
+    """List all namespaces and their status"""
+    namespaces = Namespace.query.order_by(Namespace.created_at.desc()).all()
+    
+    if not namespaces:
+        click.echo("No namespaces found")
+        return
+    
+    click.echo("\nNamespaces:")
+    click.echo("="*80)
+    
+    for ns in namespaces:
+        provisioned = "✓" if ns.connection_string else "✗"
+        has_cdb = "✓" if ns.sqlite_file_path else "✗"
+        
+        click.echo(f"{ns.slug:20s} | {ns.name:30s} | Provisioned: {provisioned} | CDB: {has_cdb}")
+    
+    click.echo("="*80)

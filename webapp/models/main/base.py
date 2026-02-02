@@ -1,6 +1,6 @@
 """Base model classes for main and namespace databases"""
 from datetime import datetime
-from app.extensions import db
+from webapp.extensions import db
 
 
 class MainDBModel(db.Model):

@@ -48,7 +48,7 @@
                             </thead>
                             <tbody>
                                 {% for namespace in namespaces %}
-                                <tr>
+                                <tr style="cursor: pointer;" onclick="window.location='{{ url_for('web.admin_namespace_detail', namespace_id=namespace.id) }}';">
                                     <td>
                                         <strong>{{ namespace.name }}</strong>
                                         {% if namespace.description %}
@@ -64,7 +64,7 @@
                                             <span class="text-muted">—</span>
                                         {% endif %}
                                     </td>
-                                    <td>
+                                    <td onclick="event.stopPropagation();">
                                         <form method="POST" action="{{ url_for('web.admin_namespace_update_status', namespace_id=namespace.id) }}" class="d-inline status-form" id="status-form-{{ namespace.id }}">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="original_status" value="{{ namespace.status }}">

@@ -1,6 +1,6 @@
 """Main database models - User management"""
-from app.extensions import db, bcrypt, login_manager
-from app.models.base import MainDBModel
+from webapp.extensions import db, bcrypt, login_manager
+from webapp.models.main.base import MainDBModel
 from flask_login import UserMixin
 
 
@@ -53,7 +53,7 @@ class User(UserMixin, MainDBModel):
 
 def create_association_tables():
     """Create association tables using raw SQL to avoid FK resolution issues"""
-    from app.extensions import db
+    from webapp.extensions import db
     
     # Create user_role_mtm table
     db.session.execute(db.text("""
@@ -96,8 +96,8 @@ def configure_user_relationships():
     init-db is run.
     """
     from sqlalchemy import Table, MetaData, inspect
-    from app.models.role import Role
-    from app.models.namespace import Namespace
+    from webapp.models.main.role import Role
+    from webapp.models.main.namespace import Namespace
     
     # Check if the MTM tables exist before trying to reflect them
     inspector = inspect(db.engine)
@@ -121,7 +121,7 @@ def configure_user_relationships():
         secondary=user_role_mtm_table,
         primaryjoin=(User.id == user_role_mtm_table.c.user_id),
         secondaryjoin=(Role.id == user_role_mtm_table.c.role_id),
-        backref='users',
+        backref=db.backref('users', lazy='dynamic'),
         lazy='dynamic'
     )
     
@@ -130,7 +130,7 @@ def configure_user_relationships():
         secondary=user_namespace_mtm_table,
         primaryjoin=(User.id == user_namespace_mtm_table.c.user_id),
         secondaryjoin=(Namespace.id == user_namespace_mtm_table.c.namespace_id),
-        backref='authorized_users',
+        backref=db.backref('authorized_users', lazy='dynamic'),
         lazy='dynamic'
     )
 

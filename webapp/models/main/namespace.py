@@ -1,6 +1,6 @@
 """Main database model - CDB Namespace registry"""
-from app.extensions import db
-from app.models.base import MainDBModel, SoftDeleteMixin
+from webapp.extensions import db
+from webapp.models.main.base import MainDBModel, SoftDeleteMixin
 from sqlalchemy_utils import EncryptedType
 from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
 import os
@@ -17,15 +17,6 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     
     # Database connection info
     database_name = db.Column(db.String(100), unique=True, nullable=False)
-    
-    # Encrypted connection string
-    connection_string = db.Column(
-        EncryptedType(db.String, 
-                     os.getenv('SECRET_KEY', os.getenv('SECRET_KEY', 'dev-secret-key-change-this')),
-                     AesEngine,
-                     'pkcs5'),
-        nullable=False
-    )
     
     # SQLite file info
     sqlite_file_path = db.Column(db.String(500))  # Path to current working SQLite file
@@ -49,7 +40,7 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     def get_namespaces_with_authorized_users_view(cls):
         """Get a joined view of namespaces with their authorized users"""
         from sqlalchemy import Table, MetaData
-        from app.models.user import User
+        from webapp.models.main.user import User
         
         metadata = MetaData()
         metadata.bind = db.engine
@@ -91,6 +82,19 @@ class Namespace(MainDBModel, SoftDeleteMixin):
         """Check if namespace is active"""
         return self.status == 'active' and not self.is_deleted
     
-    def get_database_uri(self):
-        """Get the decrypted database connection string"""
-        return self.connection_string
+    def build_connection_string(self):
+        """Build connection string dynamically for namespace database"""
+        base_url = os.getenv('PROVISIONER_DATABASE_URL')
+        if not base_url:
+            raise ValueError('PROVISIONER_DATABASE_URL environment variable not set')
+        
+        # Parse the base URL and replace database name
+        # Format: postgresql://user:pass@host:port/dbname
+        if '://' in base_url:
+            protocol_part, rest = base_url.split('://', 1)
+            if '@' in rest:
+                credentials, host_db = rest.rsplit('@', 1)
+                host_part = host_db.split('/')[0]
+                return f"{protocol_part}://{credentials}@{host_part}/{self.database_name}"
+        
+        raise ValueError(f"Invalid database URL format: {base_url}")

@@ -45,7 +45,7 @@ A Flask-based web application for managing Pro Cycling Manager (PCM) mod databas
 
 ```bash
 # View logs
-docker compose logs -f flask
+docker compose logs -f webapp
 
 # Stop services
 docker compose down
@@ -54,7 +54,7 @@ docker compose down
 docker compose down -v
 
 # Run Flask commands
-docker compose exec flask flask create-admin
+docker compose exec webapp webapp create-admin
 ```
 
 ## Development Status

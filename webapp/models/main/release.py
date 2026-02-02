@@ -1,6 +1,6 @@
 """Main database model - Release tracking"""
-from app.extensions import db
-from app.models.base import MainDBModel
+from webapp.extensions import db
+from webapp.models.main.base import MainDBModel
 
 
 class Release(MainDBModel):
