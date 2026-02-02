@@ -134,10 +134,10 @@ class Config:
     WTF_CSRF_ENABLED = True
     WTF_CSRF_TIME_LIMIT = None
     
-    # PCM Versions (for namespace creation dropdown)
+    # PCM Versions ('value', 'label')
     PCM_VERSIONS = [
-        ('PCM 2024', 'PCM 2024'),
-        ('PCM 2025', 'PCM 2025'),
+        ('PCM2024', 'PCM 2024'), 
+        ('PCM2025', 'PCM 2025'),
     ]
 
 

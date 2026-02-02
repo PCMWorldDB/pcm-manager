@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, text
 from sqlalchemy_utils import database_exists, create_database
 from webapp.models.ns.schema import (
-    NamespaceBase, SchemaVersion, NAMESPACE_TABLES, CDBCyclist,
+    NamespaceBase, NAMESPACE_TABLES, CDBCyclist,
     get_field_mapping, get_cdb_table_name
 )
 from datetime import datetime
@@ -73,26 +73,7 @@ class NamespaceProvisioner:
         # Create all tables
         NamespaceBase.metadata.create_all(engine)
         logger.info(f"Created schema with {len(NAMESPACE_TABLES)} tables")
-        
-        # Insert initial schema version
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        
-        try:
-            version = SchemaVersion(
-                version=1,
-                applied_at=int(datetime.utcnow().timestamp()),
-                description='Initial schema - CDBCyclist table'
-            )
-            session.add(version)
-            session.commit()
-            logger.info("Initialized schema version tracking")
-        except Exception as e:
-            session.rollback()
-            logger.warning(f"Could not initialize schema version: {e}")
-        finally:
-            session.close()
-            engine.dispose()
+    
     
     def build_connection_string(self, database_name, base_url=None):
         """Build connection string for namespace database
@@ -222,7 +203,7 @@ class CDBImporter:
         """
         # Get field mapping for this PCM version
         mapping = get_field_mapping(self.pcm_version, 'cyclist')
-        cdb_table_name = mapping['table_name']
+        cdb_table_name = mapping['cdb_table_name']
         field_map = mapping['fields']
         
         # Build SELECT query with CDB field names

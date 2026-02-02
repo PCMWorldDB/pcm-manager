@@ -1,5 +1,6 @@
 """Flask CLI commands for database initialization and seeding"""
 import os
+import sqlite3
 import click
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
@@ -220,72 +221,6 @@ def seed_roles_command():
     _seed_roles()
 
 
-@click.command('create-admin')
-@click.option('--username', prompt=True, help='Admin username')
-@click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True, help='Admin password')
-@with_appcontext
-def create_admin_command(username, password):
-    """Create an admin user"""
-    
-    # Check if user already exists
-    if User.query.filter_by(username=username).first():
-        click.echo(f'Error: User with username {username} already exists')
-        return
-    
-    # Create admin user
-    admin_user = User(
-        username=username,
-        is_active=True,
-        is_superadmin=True
-    )
-    admin_user.set_password(password)
-    
-    # Assign admin role
-    admin_role = Role.query.filter_by(name='admin').first()
-    if admin_role:
-        admin_user.roles.append(admin_role)
-    
-    db.session.add(admin_user)
-    db.session.commit()
-    
-    click.echo(f'Admin user created successfully: {username}')
-
-
-@click.command('init-ns-data-dirs')
-@click.option('--namespace', help='Specific namespace to create directories for')
-@with_appcontext
-def init_data_dirs_command(namespace):
-    """Create data directory structure for CDB files"""
-    from webapp.models import Namespace
-    
-    # Ensure base directories exist first
-    base_dirs = ensure_base_directories()
-    base_path = get_base_data_path()
-    click.echo(f'Ensuring base directories exist: {get_base_data_path()}')
-    
-    if namespace:
-        # Create for specific namespace
-        namespaces_to_create = [namespace]
-    else:
-        # Create for all namespaces in database
-        namespaces_to_create = [ns.name for ns in Namespace.query.all()]
-        
-        if not namespaces_to_create:
-            click.echo('No namespaces found in database. Provide --namespace option or create namespaces first.')
-            return
-    
-    click.echo(f'Creating data directory structure in: {base_path}')
-    
-    for ns_name in namespaces_to_create:
-        # Create namespace directories using commons functions
-        created_dirs = ensure_namespace_directories(ns_name)
-        
-        click.echo(f'  ✓ Created: data/{ns_name}/cdb/import')
-        click.echo(f'  ✓ Created: data/{ns_name}/cdb/releases')
-        click.echo(f'  ✓ Created: data/{ns_name}/photos')
-    
-    click.echo('\nData directory structure created successfully!')
-
 
 @click.group()
 def namespace():
@@ -355,3 +290,143 @@ def list_namespaces():
         click.echo(f"{ns.slug:20s} | {ns.name:30s} | Provisioned: {provisioned} | CDB: {has_cdb}")
     
     click.echo("="*80)
+
+
+@click.group()
+def cdb():
+    """CDB analysis and inspection commands"""
+    pass
+
+
+@cdb.command('analyze')
+@click.argument('sqlite_path')
+def analyze_cdb(sqlite_path):
+    """Analyze SQLite CDB file and display table structure
+    
+    Connects to a PCM CDB (SQLite) file and displays all tables with their columns.
+    
+    Usage: flask cdb analyze <path_to_sqlite_file>
+    """
+    if not os.path.exists(sqlite_path):
+        click.echo(f"Error: File not found: {sqlite_path}", err=True)
+        return
+    
+    conn = sqlite3.connect(sqlite_path)
+    cursor = conn.cursor()
+    
+    # Get all tables
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    tables = [row[0] for row in cursor.fetchall()]
+    
+    click.echo(f"\n{'='*80}")
+    click.echo(f"CDB Analysis: {os.path.basename(sqlite_path)}")
+    click.echo(f"{'='*80}\n")
+    click.echo(f"Found {len(tables)} tables\n")
+    
+    # Analyze each table
+    for table_name in tables:
+        # Get column information
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns = cursor.fetchall()
+        
+        # Get row count
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        row_count = cursor.fetchone()[0]
+        
+        click.echo(f"Table: {table_name} ({row_count} rows)")
+        click.echo(f"{'-'*80}")
+        for col in columns:
+            col_id, col_name, col_type, not_null, default_val, is_pk = col
+            pk_marker = " [PK]" if is_pk else ""
+            null_marker = " NOT NULL" if not_null else ""
+            click.echo(f"  {col_name:<40} {col_type:<15}{pk_marker}{null_marker}")
+        click.echo()
+    
+    conn.close()
+
+
+@cdb.command('inspect')
+@click.argument('sqlite_path')
+@click.argument('table_name')
+def inspect_table(sqlite_path, table_name):
+    """Inspect a specific table in a SQLite CDB file
+    
+    Shows column names, types, and generates YAML mapping template.
+    
+    Usage: flask cdb inspect <sqlite_path> <table_name>
+    """
+    if not os.path.exists(sqlite_path):
+        click.echo(f"Error: File not found: {sqlite_path}", err=True)
+        return
+    
+    try:
+        conn = sqlite3.connect(sqlite_path)
+        cursor = conn.cursor()
+        
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,)
+        )
+        if not cursor.fetchone():
+            click.echo(f"Error: Table '{table_name}' not found in database", err=True)
+            click.echo("\nAvailable tables:")
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            for row in cursor.fetchall():
+                click.echo(f"  - {row[0]}")
+            conn.close()
+            return
+        
+        # Get column information
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns = cursor.fetchall()
+        
+        # Get row count
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        row_count = cursor.fetchone()[0]
+        
+        # Print header
+        click.echo(f"\n{'='*80}")
+        click.echo(f"Table: {table_name}")
+        click.echo(f"Rows: {row_count:,}")
+        click.echo(f"{'='*80}\n")
+        
+        # Print column information
+        click.echo(f"{'Column Name':<40} {'Type':<15} {'Flags'}")
+        click.echo(f"{'-'*80}")
+        
+        for col in columns:
+            col_id, col_name, col_type, not_null, default_val, is_pk = col
+            
+            flags = []
+            if is_pk:
+                flags.append("PRIMARY KEY")
+            if not_null:
+                flags.append("NOT NULL")
+            if default_val is not None:
+                flags.append(f"DEFAULT {default_val}")
+            
+            flags_str = ", ".join(flags) if flags else ""
+            click.echo(f"{col_name:<40} {col_type:<15} {flags_str}")
+        
+        click.echo()
+        
+        # Print column names as comma-separated list
+        click.echo("Column names (comma-separated):")
+        click.echo(", ".join([col[1] for col in columns]))
+        click.echo()
+        
+        # Print YAML mapping template
+        click.echo("\nYAML field mapping template:")
+        for col in columns:
+            col_name = col[1]
+            # Suggest internal field name
+            internal_name = col_name.lower().replace('gene_sz_', '').replace('gene_i_', '').replace('gene_f_', '').replace('gene_b_', '').replace('fkid', '').replace('value_', '')
+            click.echo(f"      # {internal_name}: {col_name}")
+        
+        conn.close()
+        
+    except sqlite3.Error as e:
+        click.echo(f"SQLite error: {e}", err=True)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)

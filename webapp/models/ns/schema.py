@@ -22,57 +22,37 @@ class CDBCyclist(NamespaceBase):
     """
     __tablename__ = 'cdb_cyclist'
     
-    # Primary key
+    # IDs
     id = Column(Integer, primary_key=True)
-    
+    first_cycling_id = Column(Integer, index=True)
+    region_id = Column(Integer)
+    team_id = Column(Integer)
+
     # Basic info
-    first_name = Column(String(50))
-    last_name = Column(String(50))
-    nation = Column(String(3))  # 3-letter country code
-    
-    # Dates
-    birthdate = Column(Integer)  # PCM stores dates as integers
-    birth_year = Column(Integer)
-    birth_month = Column(Integer)
-    birth_day = Column(Integer)
-    
-    # Physical attributes
-    weight = Column(Integer)  # in kg
-    height = Column(Integer)  # in cm
-    
-    # Cyclist type and characteristics
-    rider_type = Column(Integer)  # Rider type (climber, sprinter, etc.)
-    potential = Column(Integer)  # Potential rating
+    first_name = Column(String(100))
+    last_name = Column(String(100))
+    first_last_name = Column(String(200))
+
+    #photo = Column(String(255))
+    birth_date = Column(Integer)
+    size_cm = Column(Float)  # Height in cm
+    weight_kg = Column(Float)  # Weight in kg
     
     # Skills (main attributes)
-    mountain = Column(Integer)  # Mountain/climbing skill
-    hill = Column(Integer)  # Hill climbing skill
-    time_trial = Column(Integer)  # Time trial skill
-    prologue = Column(Integer)  # Prologue skill
-    flat = Column(Integer)  # Flat terrain skill
-    sprint = Column(Integer)  # Sprint skill
-    acceleration = Column(Integer)  # Acceleration
-    endurance = Column(Integer)  # Endurance/stamina
-    resistance = Column(Integer)  # Resistance/toughness
-    recovery = Column(Integer)  # Recovery ability
-    
-    # Additional attributes
-    cobbles = Column(Integer)  # Cobblestone skill
-    attack = Column(Integer)  # Attack skill
-    fighter = Column(Integer)  # Fighter/combativeness
-    
-    # Career info
-    level = Column(Integer)  # Overall level/rating
-    training_program = Column(String(50))  # Training program
-    
-    # Contract and team
-    team_id = Column(Integer)  # Foreign key to team
-    year_pro = Column(Integer)  # Year turned professional
-    contract_year = Column(Integer)  # Contract end year
-    wage = Column(Integer)  # Wage/salary
-    
-    # Status flags
-    is_locked = Column(Boolean, default=False)  # Locked from editing
+    stat_mo = Column(Integer)  # Mountain/climbing skill
+    stat_mm = Column(Integer)  # Medium mountain skill
+    stat_dh = Column(Integer)  # Downhill skill
+    stat_hil = Column(Integer)  # Hill climbing skill
+    stat_tt = Column(Integer)  # Time trial skill
+    stat_prl = Column(Integer)  # Prologue skill
+    stat_fla = Column(Integer)  # Flat terrain skill
+    stat_spr = Column(Integer)  # Sprint skill
+    stat_acc = Column(Integer)  # Acceleration
+    stat_end = Column(Integer)  # Endurance/stamina
+    stat_res = Column(Integer)  # Resistance/toughness
+    stat_rec = Column(Integer)  # Recovery ability
+    stat_cob = Column(Integer)  # Cobblestone skill
+    stat_att = Column(Integer)  # Attack skill
     
     def __repr__(self):
         return f'<Cyclist {self.first_name} {self.last_name}>'
@@ -100,30 +80,47 @@ def get_table_by_name(name):
 # Load PCM Version Field Mappings from YAML
 # Maps PCM CDB fields to internal model fields
 def get_cdb_mappings():
-    """Load PCM version mappings from YAML file"""
+    """Load CDB mappings from YAML file
+    
+    Returns:
+        dict: Complete mapping configuration with PCM_VERSION_MAPPINGS and CDB_TABLE_MAPPINGS
+    """
     yaml_path = os.path.join(os.path.dirname(__file__), 'cdb_mappings.yaml')
     with open(yaml_path, 'r') as f:
         return yaml.safe_load(f)
 
 
 def get_field_mapping(pcm_version, table_type='cyclist'):
-    """Get field mapping for a specific PCM version
+    """Get field mapping for a specific PCM version and table type
     
     Args:
         pcm_version: PCM version string (e.g., 'PCM2025')
         table_type: Type of table (e.g., 'cyclist')
         
     Returns:
-        dict: Mapping of internal fields to CDB fields
+        dict: Mapping configuration with 'cdb_table_name' and 'fields'
     """
     cdb_mappings = get_cdb_mappings()
-    version_mapping = cdb_mappings.get(pcm_version.upper())
-    if not version_mapping:
+    
+    # Get the mapping version for this PCM version and table type
+    version_mappings = cdb_mappings.get('PCM_VERSION_MAPPINGS', {})
+    pcm_config = version_mappings.get(pcm_version.upper())
+    if not pcm_config:
         raise ValueError(f"Unsupported PCM version: {pcm_version}")
     
-    table_mapping = version_mapping.get(table_type)
+    mapping_version = pcm_config.get(table_type)
+    if not mapping_version:
+        raise ValueError(f"Table type '{table_type}' not defined for PCM version {pcm_version}")
+    
+    # Get the actual table mapping from CDB_TABLE_MAPPINGS
+    table_mappings = cdb_mappings.get('CDB_TABLE_MAPPINGS', {})
+    version_config = table_mappings.get(mapping_version)
+    if not version_config:
+        raise ValueError(f"Mapping version '{mapping_version}' not found in CDB_TABLE_MAPPINGS")
+    
+    table_mapping = version_config.get(table_type)
     if not table_mapping:
-        raise ValueError(f"Unsupported table type: {table_type}")
+        raise ValueError(f"Table type '{table_type}' not defined in mapping version '{mapping_version}'")
     
     return table_mapping
 
@@ -139,4 +136,4 @@ def get_cdb_table_name(pcm_version, table_type='cyclist'):
         str: CDB table name
     """
     mapping = get_field_mapping(pcm_version, table_type)
-    return mapping['table_name']
+    return mapping['cdb_table_name']

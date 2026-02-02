@@ -1,91 +1,35 @@
-# PCM CDB Field Mappings
-# Maps internal model fields to PCM version-specific CDB fields
-# Each PCM version can have different table names and field names in the CDB
+PCM_VERSION_MAPPINGS:
+  PCM2025:
+    cyclist: v1
+  PCM2024:
+    cyclist: v1
 
-PCM2025:
-  cyclist:
-    table_name: DYN_cyclist
-    fields:
-      id: IDcyclist
-      first_name: gene_sz_firstname
-      last_name: gene_sz_lastname
-      nation: gene_sz_nation
-      birthdate: gene_i_birthdate
-      birth_year: gene_i_birth_year
-      birth_month: gene_i_birth_month
-      birth_day: gene_i_birth_day
-      weight: gene_i_weight
-      height: gene_i_height
-      rider_type: gene_i_type
-      potential: gene_i_potential
-      mountain: gene_i_mountain
-      hill: gene_i_hill
-      time_trial: gene_i_tt
-      prologue: gene_i_prologue
-      flat: gene_i_flat
-      sprint: gene_i_sprint
-      acceleration: gene_i_acceleration
-      endurance: gene_i_endurance
-      resistance: gene_i_resistance
-      recovery: gene_i_recovery
-      cobbles: gene_i_cobbles
-      attack: gene_i_attack
-      fighter: gene_i_fighter
-      level: gene_i_level
-      training_program: gene_sz_program
-      team_id: gene_fkIDteam
-      year_pro: gene_i_year_pro
-      contract_year: gene_i_contract_year
-      wage: gene_i_wage
-      is_locked: gene_b_locked
-
-WDB2026:
-  cyclist:
-    table_name: DYN_cyclist
-    fields:
-      id: IDcyclist
-      first_name: gene_sz_firstname
-      last_name: gene_sz_lastname
-      # nation: null  # Not in main cyclist table
-      birthdate: gene_i_birthdate
-      # birth_year: null  # Not in main cyclist table
-      # birth_month: null  # Not in main cyclist table
-      # birth_day: null  # Not in main cyclist table
-      weight: gene_i_weight
-      height: gene_i_size
-      rider_type: fkIDtype_rider
-      potential: value_f_potentiel
-      # Skills are likely in a separate table in WDB2026
-      # mountain: null
-      # hill: null
-      # time_trial: null
-      # prologue: null
-      # flat: null
-      # sprint: null
-      # acceleration: null
-      # endurance: null
-      # resistance: null
-      # recovery: null
-      # cobbles: null
-      # attack: null
-      # fighter: null
-      level: value_f_current_ability
-      # training_program: null
-      team_id: fkIDteam
-      # year_pro: null
-      # contract_year: null
-      # wage: null
-      # is_locked: null
-
-# Future versions can be added here
-# PCM2024:
-#   cyclist:
-#     table_name: DYN_cyclist
-#     fields:
-#       ...
-# 
-# PCM2023:
-#   cyclist:
-#     table_name: DYN_cyclist
-#     fields:
-#       ...
+CDB_TABLE_MAPPINGS:
+  v1:
+    cyclist:
+      cdb_table_name: DYN_cyclist
+      fields:
+        id: IDcyclist
+        first_cycling_id: value_f_current_ability
+        team_id: fkIDteam
+        region_id: fkIDregion
+        first_name: gene_sz_firstname
+        last_name: gene_sz_lastname
+        first_last_name: gene_sz_firstlastname
+        birth_date: gene_i_birthdate
+        weight_kg: gene_i_weight
+        size_cm: gene_i_size
+        stat_fla: charac_i_plain
+        stat_mo: charac_i_mountain
+        stat_mm: charac_i_medium_mountain
+        stat_dh: charac_i_downhilling
+        stat_hil: charac_i_hill
+        stat_tt: charac_i_timetrial
+        stat_prl: charac_i_prologue
+        stat_spr: charac_i_sprint
+        stat_acc: charac_i_acceleration
+        stat_end: charac_i_endurance
+        stat_res: charac_i_resistance
+        stat_rec: charac_i_recuperation
+        stat_cob: charac_i_cobble
+        stat_att: charac_i_baroudeur

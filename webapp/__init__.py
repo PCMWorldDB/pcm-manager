@@ -51,16 +51,14 @@ def register_commands(app):
     from webapp.cli import (
         init_db_command, 
         seed_roles_command, 
-        create_admin_command,
-        init_data_dirs_command,
-        namespace
+        namespace,
+        cdb
     )
     
     app.cli.add_command(init_db_command)
     app.cli.add_command(seed_roles_command)
-    app.cli.add_command(create_admin_command)
-    app.cli.add_command(init_data_dirs_command)
     app.cli.add_command(namespace)
+    app.cli.add_command(cdb)
 
 
 def register_error_handlers(app):

@@ -86,7 +86,7 @@ class NamespaceForm(FlaskForm):
         Regexp(r'^[a-z0-9-]+$', message='Slug must contain only lowercase letters, numbers, and hyphens')
     ])
     description = TextAreaField('Description', validators=[Optional()])
-    pcm_version = SelectField('PCM Version', validators=[Optional()])
+    pcm_version = SelectField('PCM Version', validators=[Optional()], default='PCM2025')
     database_year = IntegerField('Database Year', validators=[Optional()], default=2025)
     cdb_file = FileField('CDB Database File (SQLite)', validators=[
         Optional(),
