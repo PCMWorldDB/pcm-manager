@@ -80,19 +80,19 @@ services:
     networks:
       - pcm-manager-network
 
-  worker:
-    build:
-      context: .
-      dockerfile: docker/webapp/Dockerfile
-    container_name: worker
-    command: celery -A app.extensions.celery worker --loglevel=info
-    environment:
-      <<: *common-env
-    volumes:
-      - ./webapp:/app/webapp
-    depends_on: *common-depends
-    networks:
-      - pcm-manager-network
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/webapp/Dockerfile
+  #   container_name: worker
+  #   command: celery -A app.extensions.celery worker --loglevel=info
+  #   environment:
+  #     <<: *common-env
+  #   volumes:
+  #     - ./webapp:/app/webapp
+  #   depends_on: *common-depends
+  #   networks:
+  #     - pcm-manager-network
 
   reverse-proxy:
     image: nginx:alpine

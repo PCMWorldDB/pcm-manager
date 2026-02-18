@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import click
+from flask import current_app
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
 from webapp.models import User, Role, Resource, Action, RolePermission, Namespace
@@ -12,6 +13,81 @@ from webapp.config import (
     get_cdb_import_path
 )
 from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
+
+
+def sync_firstcycling_seasons():
+    """Ensure FirstCycling data exists for configured seasons/genders."""
+    from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
+    from webapp.models.main.firstcycling import FirstCyclingRace, FirstCyclingTeam, FirstCyclingRider
+
+    seasons_config = current_app.config.get('SEASONS', []) or []
+    if not seasons_config:
+        click.echo('   - No SEASONS config found; skipping FirstCycling season sync check')
+        return
+
+    season_entries = []
+    if isinstance(seasons_config, list):
+        season_entries = list(seasons_config)
+    else:
+        click.echo('   - Invalid SEASONS config format; expected list of dicts', err=True)
+        return
+
+    if not season_entries:
+        click.echo('   - SEASONS config is empty; skipping FirstCycling season sync check')
+        return
+
+    client = FirstCyclingClient()
+
+    for season_settings in season_entries:
+        if not isinstance(season_settings, dict):
+            click.echo(f"   - Skipping invalid season entry '{season_settings}'")
+            continue
+
+        season_key = season_settings.get('year')
+        try:
+            season_year = int(season_key)
+        except (TypeError, ValueError):
+            click.echo(f"   - Skipping invalid season key '{season_key}'")
+            continue
+
+        gender = season_settings.get('gender')
+        if gender not in ('Men', 'Women'):
+            click.echo(f"   - Skipping invalid gender '{gender}'")
+            continue
+
+        race_query = FirstCyclingRace.query.filter_by(season_year=season_year, gender=gender)
+        team_query = FirstCyclingTeam.query.filter_by(team_year=season_year, gender=gender)
+
+        race_count = race_query.count()
+        team_count = team_query.count()
+
+        if race_count > 0 and team_count > 0:
+            click.echo(
+                f'   - FirstCycling data already present for season {season_year} [{gender}] '
+                f'(races={race_count}, teams={team_count}'
+            )
+            continue
+
+        click.echo(
+            f'   - Missing FirstCycling data for season {season_year} [{gender}] '
+            f'(races={race_count}, teams={team_count}); syncing...'
+        )
+
+        try:
+            summary = client.sync_season_roster(
+                season_year=season_year,
+                gender=gender,
+                commit=True,
+            )
+            click.echo(
+                f"     ✓ Sync complete for {season_year} [{gender}] "
+                f"(races={summary['races']['synced']}, teams={summary['teams']['fetched']})"
+                f"riders={summary['riders']['fetched']})"
+            )
+        except FirstCyclingAPIError as exc:
+            click.echo(f'     ✗ FirstCycling sync failed for {season_year} [{gender}]: {exc}', err=True)
+        except Exception as exc:
+            click.echo(f'     ✗ Unexpected sync error for {season_year} [{gender}]: {exc}', err=True)
 
 
 @click.command('init-db')
@@ -39,12 +115,17 @@ def init_db_command():
     _seed_roles()
     click.echo('   ✓ Roles seeded')
     
-    # Step 3: Create admin user (if credentials provided via env vars)
+    # Step 3: Ensure external FirstCycling season data exists for configured seasons/genders
+    click.echo('\n3. Syncing FirstCycling seasons...')
+    sync_firstcycling_seasons()
+    click.echo('   ✓ FirstCycling season sync completed')
+
+    # Step 4: Create admin user (if credentials provided via env vars)
     admin_username = os.getenv('ADMIN_USERNAME')
     admin_password = os.getenv('ADMIN_PASSWORD')
     
     if admin_username and admin_password:
-        click.echo(f'\n3. Creating admin user: {admin_username}...')
+        click.echo(f'\n4. Creating admin user: {admin_username}...')
         
         # Check if user already exists
         existing_user = User.query.filter_by(username=admin_username).first()
@@ -67,7 +148,7 @@ def init_db_command():
             db.session.commit()
             click.echo(f'   ✓ Admin user created: {admin_username}')
     else:
-        click.echo('\n3. Skipping admin user creation (no credentials provided)')
+        click.echo('\n4. Skipping admin user creation (no credentials provided)')
         click.echo('   Use "flask create-admin" to create an admin user manually')
     
     click.echo('\n=== Initialization Complete ===\n')

@@ -2,6 +2,13 @@ import os
 from datetime import timedelta
 
 
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 # Path Helper Functions
 def get_base_data_path():
     """Get the base data directory path"""
@@ -79,7 +86,7 @@ class Config:
     # SQLAlchemy - Main Database
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_ECHO = False
+    SQLALCHEMY_ECHO = _env_bool('SQLALCHEMY_ECHO', False)
     
     # SQLAlchemy - Connection Pooling
     SQLALCHEMY_ENGINE_OPTIONS = {
@@ -124,8 +131,8 @@ class Config:
     STORAGE_ROOT = os.getenv('STORAGE_ROOT', './filestore')
     
     # External API
-    CYCLING_API_KEY = os.getenv('CYCLING_API_KEY')
-    CYCLING_API_URL = os.getenv('CYCLING_API_URL')
+    FIRST_CYCLING_BASE_URL = os.getenv('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
+    FIRST_CYCLING_API_PATH = os.getenv('FIRST_CYCLING_API_PATH')
     
     # Security
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))
@@ -140,11 +147,14 @@ class Config:
         ('PCM2025', 'PCM 2025'),
     ]
 
+    SEASONS = [
+        {'year': 2025, 'gender': 'Men'}
+    ]
+
 
 class DevelopmentConfig(Config):
     """Development configuration"""
     DEBUG = True
-    SQLALCHEMY_ECHO = True
     FLASK_ENV = 'development'
 
 
