@@ -16,6 +16,7 @@ from webapp.models.main.firstcycling import (
     FirstCyclingTeam,
 )
 
+RACE_TYPES_WHITELIST = ['ROAD']
 
 class FirstCyclingAPIError(Exception):
     """Raised when the FirstCycling API request fails"""
@@ -153,7 +154,7 @@ class FirstCyclingClient:
 
         synced_at = synced_at or datetime.utcnow()
         race_type = payload.get('type')
-        if isinstance(race_type, str) and race_type.strip().upper() == 'CYCLOCROSS':
+        if isinstance(race_type, str) and race_type.strip().upper() not in RACE_TYPES_WHITELIST:
             return None
 
         stages = payload.get('stages')
