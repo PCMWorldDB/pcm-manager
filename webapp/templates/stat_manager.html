@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block title %}Stats Manager - PCM Manager{% endblock %}
+
+{% block styles %}
+.panel-card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    margin-bottom: 20px;
+}
+.panel-card .card-body {
+    padding: 20px;
+}
+.filters-grid {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 12px;
+    align-items: flex-end;
+}
+.filter-item {
+    flex: 0 0 auto;
+}
+.filter-item-nation {
+    width: 200px;
+}
+.filter-item-compact {
+    width: 125px;
+}
+.filter-item-date {
+    width: 170px;
+}
+.filter-item-checkbox {
+    width: 135px;
+}
+.table-wrapper {
+    overflow-x: auto;
+}
+.stage-row {
+    background: #f8f9fa;
+}
+.stage-row td {
+    font-size: 0.9rem;
+}
+.toggle-btn {
+    min-width: 90px;
+}
+body.dark-mode .panel-card {
+    background: #2d3748;
+    box-shadow: none;
+    border: 1px solid #4a5568;
+}
+body.dark-mode .stage-row {
+    background: #374151;
+}
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-1">Stats Manager</h2>
+        <p class="text-muted mb-0">Select a season to view and filter races and stages.</p>
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <form method="get" action="{{ url_for('web.stat_manager') }}">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label for="year" class="form-label">Year</label>
+                    <select id="year" name="year" class="form-select" required>
+                        <option value="">-- Select Year --</option>
+                        {% for year in seasons | map(attribute='year') | unique | list %}
+                        <option value="{{ year }}" {% if selected_year == year %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label for="gender" class="form-label">Gender</label>
+                    <select id="gender" name="gender" class="form-select" required>
+                        <option value="">-- Select Gender --</option>
+                        {% for gender in seasons | map(attribute='gender') | unique | list %}
+                        <option value="{{ gender }}" {% if selected_gender == gender %}selected{% endif %}>{{ gender }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <button class="btn btn-primary w-100" type="submit">Load Season</button>
+                </div>
+            </div>
+
+            {% if season_selected %}
+            <hr class="my-4">
+            <div class="filters-grid">
+                <div class="filter-item filter-item-nation">
+                    <label class="form-label" for="nation_name">Nation</label>
+                    <select id="nation_name" name="nation_name" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.nation_names %}
+                        <option value="{{ value }}" {% if selected_filters.nation_name == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-compact">
+                    <label class="form-label" for="category">Category</label>
+                    <select id="category" name="category" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.categories %}
+                        <option value="{{ value }}" {% if selected_filters.category == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-compact">
+                    <label class="form-label" for="classification">Classification</label>
+                    <select id="classification" name="classification" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.classifications %}
+                        <option value="{{ value }}" {% if selected_filters.classification == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-date">
+                    <label class="form-label" for="start_date_from">Start Date From</label>
+                    <input
+                        id="start_date_from"
+                        name="start_date_from"
+                        type="date"
+                        class="form-control"
+                        value="{{ selected_filters.start_date_from }}">
+                </div>
+                <div class="filter-item filter-item-date">
+                    <label class="form-label" for="start_date_to">Start Date To</label>
+                    <input
+                        id="start_date_to"
+                        name="start_date_to"
+                        type="date"
+                        class="form-control"
+                        value="{{ selected_filters.start_date_to }}">
+                </div>
+                <div class="filter-item filter-item-checkbox">
+                    <label class="form-label" for="is_stage_race">Stage Race</label>
+                    <select id="is_stage_race" name="is_stage_race" class="form-select">
+                        <option value="" {% if not selected_filters.is_stage_race %}selected{% endif %}>All</option>
+                        <option value="true" {% if selected_filters.is_stage_race == 'true' %}selected{% endif %}>True</option>
+                        <option value="false" {% if selected_filters.is_stage_race == 'false' %}selected{% endif %}>False</option>
+                    </select>
+                </div>
+            </div>
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-outline-primary" type="submit">Apply Filters</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('web.stat_manager', year=selected_year, gender=selected_gender) }}">Clear Filters</a>
+            </div>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+{% if season_selected %}
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Races ({{ races|length }})</h5>
+
+        {% if races %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width: 110px;">Stages</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Nation</th>
+                        <th>Classification</th>
+                        <th>Start Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for race in races %}
+                    {% set stage_rows = race.race_stages | sort(attribute='stage_number') %}
+                    {% set has_stages = stage_rows|length > 0 %}
+                    <tr>
+                        <td>
+                            {% if has_stages %}
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-secondary toggle-btn"
+                                data-race-id="{{ race.id }}"
+                                data-stage-count="{{ stage_rows|length }}">
+                                Show ({{ stage_rows|length }})
+                            </button>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>{{ race.name or '-' }}</td>
+                        <td>{{ race.category or '-' }}</td>
+                        <td>{{ race.nation_name or '-' }}</td>
+                        <td>{{ race.classification or '-' }}</td>
+                        <td>{{ race.start_date or '-' }}</td>
+                    </tr>
+
+                    {% if has_stages %}
+                        {% for stage in stage_rows %}
+                        <tr class="stage-row stage-row-{{ race.id }}" style="display: none;">
+                            <td class="text-end">↳ Stage</td>
+                            <td colspan="4">
+                                #{{ stage.stage_number or '?' }}: {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
+                            </td>
+                            <td>{{ stage.stage_date or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No races found for the selected season/filters.</p>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    Select year and gender to load races for the stats manager.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleStages(raceId, button) {
+    const rows = document.querySelectorAll('.stage-row-' + raceId);
+    if (!rows.length) {
+        return;
+    }
+
+    const isHidden = rows[0].style.display === 'none';
+    rows.forEach(row => {
+        row.style.display = isHidden ? 'table-row' : 'none';
+    });
+
+    const stageCount = button.getAttribute('data-stage-count') || rows.length;
+    button.textContent = isHidden ? `Hide (${stageCount})` : `Show (${stageCount})`;
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.toggle-btn[data-race-id]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const raceId = button.getAttribute('data-race-id');
+            toggleStages(raceId, button);
+        });
+    });
+});
+</script>
+{% endblock %}
