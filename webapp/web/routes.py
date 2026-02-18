@@ -1,16 +1,76 @@
 """Web routes for UI"""
 import logging
+from datetime import datetime
+
 from flask import render_template, redirect, url_for, flash, request, abort, current_app
 from flask_login import login_user, logout_user, login_required, current_user
+from sqlalchemy.orm import selectinload
+
 from webapp.web import web_bp
 from webapp.web.forms import LoginForm, NamespaceForm, UserCreateForm, PasswordChangeForm, PasswordResetForm
-from webapp.models import User, Resource, Namespace, Role, AuditLog, AuditAction
+from webapp.models import User, Resource, Namespace, Role, AuditLog, AuditAction, FirstCyclingRace
 from webapp.extensions import db
-from datetime import datetime
 from functools import wraps
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+
+def _user_resources():
+    if current_user.is_superadmin:
+        return Resource.query.all()
+
+    resources = []
+    for role in current_user.roles:
+        for permission in role.permissions:
+            if permission.resource not in resources:
+                resources.append(permission.resource)
+    return resources
+
+
+def _can_access_panel(panel_name):
+    if current_user.is_superadmin:
+        return True
+
+    for resource in _user_resources():
+        if resource.app_panel == panel_name:
+            return True
+    return False
+
+
+def _get_panel_url(app_panel):
+    panel_routes = {
+        'stat_manager': 'web.stat_manager',
+    }
+
+    endpoint = panel_routes.get(app_panel)
+    if not endpoint:
+        return None
+    return url_for(endpoint)
+
+
+def _load_config_seasons():
+    configured = current_app.config.get('SEASONS', []) or []
+    seasons = []
+    for entry in configured:
+        if not isinstance(entry, dict):
+            continue
+        year_value = entry.get('year')
+        gender_value = entry.get('gender')
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(gender_value, str) or not gender_value.strip():
+            continue
+        gender = gender_value.strip()
+        seasons.append({'year': year, 'gender': gender})
+
+    unique = {(entry['year'], entry['gender']) for entry in seasons}
+    return [
+        {'year': year, 'gender': gender}
+        for year, gender in sorted(unique, key=lambda value: (value[0], value[1]))
+    ]
 
 def admin_required(f):
     """Decorator to require admin access"""
@@ -116,17 +176,7 @@ def dashboard():
     """User dashboard showing available app panels"""
     # Get all unique app panels the user has access to
     app_panels = {}
-    
-    if current_user.is_superadmin:
-        # Superadmin gets all app panels (except admin)
-        resources = Resource.query.all()
-    else:
-        # Get resources based on user's role permissions
-        resources = []
-        for role in current_user.roles:
-            for permission in role.permissions:
-                if permission.resource not in resources:
-                    resources.append(permission.resource)
+    resources = _user_resources()
     
     # Group by app_panel, excluding 'admin' panel
     for resource in resources:
@@ -141,6 +191,7 @@ def dashboard():
                 'display_name': panel.replace('_', ' ').title(),
                 'description': f'Manage and view {panel.replace("_", " ")}',
                 'icon': get_app_icon(panel),
+                'url': _get_panel_url(panel),
                 'resources': []
             }
         app_panels[panel]['resources'].append(resource.name)
@@ -161,6 +212,116 @@ def get_app_icon(app_panel):
         'release_manager': '📦',
     }
     return icons.get(app_panel, '📁')
+
+
+@web_bp.route('/stat-manager')
+@login_required
+def stat_manager():
+    """Stats manager panel: select season and filter races/stages."""
+    if not _can_access_panel('stat_manager'):
+        abort(403)
+
+    seasons = _load_config_seasons()
+    selected_year = request.args.get('year', type=int)
+    selected_gender = request.args.get('gender', type=str)
+
+    if selected_gender is not None:
+        selected_gender = selected_gender.strip()
+
+    season_selected = (
+        selected_year is not None
+        and isinstance(selected_gender, str)
+        and selected_gender != ''
+        and any(item['year'] == selected_year and item['gender'] == selected_gender for item in seasons)
+    )
+
+    races = []
+    filter_choices = {
+        'categories': [],
+        'nation_names': [],
+        'classifications': [],
+    }
+
+    selected_filters = {
+        'category': request.args.get('category', type=str) or '',
+        'nation_name': request.args.get('nation_name', type=str) or '',
+        'classification': request.args.get('classification', type=str) or '',
+        'start_date_from': request.args.get('start_date_from', type=str) or '',
+        'start_date_to': request.args.get('start_date_to', type=str) or '',
+        'is_stage_race': request.args.get('is_stage_race', type=str) or '',
+    }
+
+    if season_selected:
+        if not selected_filters['start_date_from']:
+            selected_filters['start_date_from'] = f'{selected_year}-01-01'
+        if not selected_filters['start_date_to']:
+            selected_filters['start_date_to'] = f'{selected_year}-12-31'
+
+        base_query = FirstCyclingRace.query.filter_by(
+            season_year=selected_year,
+            gender=selected_gender,
+        )
+
+        filter_choices['categories'] = [
+            value for (value,) in base_query.with_entities(FirstCyclingRace.category).distinct().order_by(FirstCyclingRace.category).all()
+            if value
+        ]
+        filter_choices['nation_names'] = [
+            value for (value,) in base_query.with_entities(FirstCyclingRace.nation_name).distinct().order_by(FirstCyclingRace.nation_name).all()
+            if value
+        ]
+        filter_choices['classifications'] = [
+            value for (value,) in base_query.with_entities(FirstCyclingRace.classification).distinct().order_by(FirstCyclingRace.classification).all()
+            if value
+        ]
+
+        query = base_query.options(selectinload(FirstCyclingRace.race_stages))
+
+        if selected_filters['category']:
+            query = query.filter(FirstCyclingRace.category == selected_filters['category'])
+        if selected_filters['nation_name']:
+            query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation_name'])
+        if selected_filters['classification']:
+            query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
+
+        parsed_start_date_from = None
+        parsed_start_date_to = None
+        if selected_filters['start_date_from']:
+            try:
+                parsed_start_date_from = datetime.strptime(selected_filters['start_date_from'], '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        if selected_filters['start_date_to']:
+            try:
+                parsed_start_date_to = datetime.strptime(selected_filters['start_date_to'], '%Y-%m-%d').date()
+            except ValueError:
+                pass
+
+        if parsed_start_date_from is not None:
+            query = query.filter(FirstCyclingRace.start_date >= parsed_start_date_from)
+        if parsed_start_date_to is not None:
+            query = query.filter(FirstCyclingRace.start_date <= parsed_start_date_to)
+
+        if selected_filters['is_stage_race'] == 'true':
+            query = query.filter(FirstCyclingRace.stage_count > 1)
+        elif selected_filters['is_stage_race'] == 'false':
+            query = query.filter((FirstCyclingRace.stage_count.is_(None)) | (FirstCyclingRace.stage_count <= 1))
+
+        races = query.order_by(
+            FirstCyclingRace.start_date.asc().nullslast(),
+            FirstCyclingRace.name.asc(),
+        ).all()
+
+    return render_template(
+        'stat_manager.html',
+        seasons=seasons,
+        selected_year=selected_year,
+        selected_gender=selected_gender,
+        season_selected=season_selected,
+        races=races,
+        filter_choices=filter_choices,
+        selected_filters=selected_filters,
+    )
 
 
 # ==================== Admin Panel Routes ====================
