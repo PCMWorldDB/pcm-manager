@@ -5,6 +5,12 @@ from webapp.models.main.namespace import Namespace
 from webapp.models.main.user import User
 from webapp.models.main.release import Release
 from webapp.models.main.audit_log import AuditLog, AuditAction
+from webapp.models.main.firstcycling import (
+    FirstCyclingRace,
+    FirstCyclingRaceStage,
+    FirstCyclingTeam,
+    FirstCyclingRider,
+)
 
 
 # Association tables and relationship configuration are handled in CLI after db.create_all()
@@ -24,4 +30,8 @@ __all__ = [
     'Release',
     'AuditLog',
     'AuditAction',
+    'FirstCyclingRace',
+    'FirstCyclingRaceStage',
+    'FirstCyclingTeam',
+    'FirstCyclingRider',
 ]
