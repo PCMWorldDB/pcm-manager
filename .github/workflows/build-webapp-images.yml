@@ -1,0 +1,48 @@
+name: Build Webapp Images
+
+on:
+  push:
+    branches:
+      - main
+      - release/dev
+
+jobs:
+  build-prod:
+    name: Build prod image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build webapp image (prod)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/webapp/Dockerfile
+          push: false
+          tags: pcm-manager-webapp:prod
+
+  build-dev:
+    name: Build dev image
+    if: github.ref == 'refs/heads/release/dev'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build webapp image (dev)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/webapp/Dockerfile
+          push: false
+          tags: pcm-manager-webapp:dev
