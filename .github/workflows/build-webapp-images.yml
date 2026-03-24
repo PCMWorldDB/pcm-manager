@@ -35,7 +35,7 @@ jobs:
           context: .
           file: docker/webapp/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/pcm-manager-webapp:prod
+          tags: ghcr.io/pcmworlddb/pcm-manager-webapp:prod
 
   build-dev:
     name: Build dev image
@@ -65,4 +65,4 @@ jobs:
           context: .
           file: docker/webapp/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/pcm-manager-webapp:dev
+          tags: ghcr.io/pcmworlddb/pcm-manager-webapp:dev
