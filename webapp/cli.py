@@ -1,7 +1,11 @@
 """Flask CLI commands for database initialization and seeding"""
 import os
+import time
 import sqlite3
 import click
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import OperationalError
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
 from webapp.models import User, Role, Resource, Action, RolePermission, Namespace
@@ -18,38 +22,51 @@ from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
 @with_appcontext
 def init_db_command():
     """Initialize database, seed roles, and create admin user (all in one)"""
-    click.echo('=== PCM Manager Database Initialization ===')
-    
+    initialize_database(log=click.echo)
+
+
+def initialize_database(log=None):
+    """Initialize database schema, seed data, and optional admin user."""
+    if log is None:
+        log = lambda _: None
+
+    log('=== PCM Manager Database Initialization ===')
+
+    # Step 0: Provision database and required extension
+    log('\n0. Ensuring database and extensions are provisioned...')
+    _provision_main_database(log=log)
+    log('   ✓ Database provisioning complete')
+
     # Step 1: Create tables
-    click.echo('\n1. Creating database tables...')
+    log('\n1. Creating database tables...')
     db.create_all(bind_key='main')
-    
+
     # Create association tables using raw SQL (to avoid FK resolution issues)
     from webapp.models.main.user import create_association_tables
     create_association_tables()
-    
+
     # Configure User relationships AFTER all tables exist
     from webapp.models.main.user import configure_user_relationships
     configure_user_relationships()
-    
-    click.echo('   ✓ Database tables created')
-    
+
+    log('   ✓ Database tables created')
+
     # Step 2: Seed roles
-    click.echo('\n2. Seeding roles, resources, actions, and permissions...')
-    _seed_roles()
-    click.echo('   ✓ Roles seeded')
-    
+    log('\n2. Seeding roles, resources, actions, and permissions...')
+    _seed_roles(log=log)
+    log('   ✓ Roles seeded')
+
     # Step 3: Create admin user (if credentials provided via env vars)
     admin_username = os.getenv('ADMIN_USERNAME')
     admin_password = os.getenv('ADMIN_PASSWORD')
-    
+
     if admin_username and admin_password:
-        click.echo(f'\n3. Creating admin user: {admin_username}...')
-        
+        log(f'\n3. Creating admin user: {admin_username}...')
+
         # Check if user already exists
         existing_user = User.query.filter_by(username=admin_username).first()
         if existing_user:
-            click.echo(f'   ⚠ Admin user already exists, skipping')
+            log('   Admin user already exists, skipping')
         else:
             admin_user = User(
                 username=admin_username,
@@ -57,24 +74,80 @@ def init_db_command():
                 is_superadmin=True
             )
             admin_user.set_password(admin_password)
-            
+
             # Assign admin role
             admin_role = Role.query.filter_by(name='admin').first()
             if admin_role:
                 admin_user.roles.append(admin_role)
-            
+
             db.session.add(admin_user)
             db.session.commit()
-            click.echo(f'   ✓ Admin user created: {admin_username}')
+            log(f'   ✓ Admin user created: {admin_username}')
     else:
-        click.echo('\n3. Skipping admin user creation (no credentials provided)')
-        click.echo('   Use "flask create-admin" to create an admin user manually')
-    
-    click.echo('\n=== Initialization Complete ===\n')
+        log('\n3. Skipping admin user creation (no credentials provided)')
+        log('   Use "flask create-admin" to create an admin user manually')
+
+    log('\n=== Initialization Complete ===\n')
 
 
-def _seed_roles():
+def _provision_main_database(log=None):
+    """Ensure main database exists and required extensions are enabled."""
+    if log is None:
+        log = lambda _: None
+
+    database_url = os.getenv('DATABASE_URL')
+    provisioner_url = os.getenv('PROVISIONER_DATABASE_URL')
+
+    if not database_url:
+        raise click.ClickException('DATABASE_URL is not configured')
+
+    if not provisioner_url:
+        raise click.ClickException('PROVISIONER_DATABASE_URL is not configured')
+
+    main_db_name = make_url(database_url).database
+    if not main_db_name:
+        raise click.ClickException('Could not determine database name from DATABASE_URL')
+
+    retries = 10
+    delay_seconds = 2
+    last_error = None
+
+    # Create the target application database if it does not exist.
+    for attempt in range(1, retries + 1):
+        try:
+            admin_engine = create_engine(provisioner_url, isolation_level='AUTOCOMMIT')
+            with admin_engine.connect() as conn:
+                exists = conn.execute(
+                    text('SELECT 1 FROM pg_database WHERE datname = :database_name'),
+                    {'database_name': main_db_name}
+                ).scalar()
+
+                if not exists:
+                    safe_name = main_db_name.replace('"', '""')
+                    conn.execute(text(f'CREATE DATABASE "{safe_name}"'))
+                    log(f'   Created database: {main_db_name}')
+                else:
+                    log(f'   Database already exists: {main_db_name}')
+            admin_engine.dispose()
+            break
+        except OperationalError as exc:
+            last_error = exc
+            if attempt == retries:
+                raise click.ClickException(
+                    f'Unable to connect to provisioner database after {retries} attempts: {exc}'
+                )
+            log(f'   Provisioning database not ready (attempt {attempt}/{retries}), retrying...')
+            time.sleep(delay_seconds)
+
+    if last_error:
+        raise click.ClickException(str(last_error))
+
+
+def _seed_roles(log=None):
     """Internal function to seed roles, resources, actions, and permissions"""
+    if log is None:
+        log = lambda _: None
+
     # Create roles
     roles_data = [
         {'name': 'admin', 'display_name': 'Administrator', 
@@ -93,7 +166,7 @@ def _seed_roles():
         if not role:
             role = Role(**role_data)
             db.session.add(role)
-            click.echo(f'  Created role: {role.name}')
+            log(f'  Created role: {role.name}')
         roles[role.name] = role
     
     # Create resources
@@ -116,7 +189,7 @@ def _seed_roles():
         if not resource:
             resource = Resource(**resource_data)
             db.session.add(resource)
-            click.echo(f'  Created resource: {resource.name}')
+            log(f'  Created resource: {resource.name}')
         resources[resource.name] = resource
     
     # Create actions
@@ -137,7 +210,7 @@ def _seed_roles():
         if not action:
             action = Action(**action_data)
             db.session.add(action)
-            click.echo(f'  Created action: {action.name}')
+            log(f'  Created action: {action.name}')
         actions[action.name] = action
     
     db.session.commit()
@@ -210,7 +283,7 @@ def _seed_roles():
                     db.session.add(permission)
     
     db.session.commit()
-    click.echo('Roles, resources, actions, and permissions seeded successfully!')
+    log('Roles, resources, actions, and permissions seeded successfully!')
 
 
 @click.command('seed-roles')
