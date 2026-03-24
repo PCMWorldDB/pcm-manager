@@ -19,20 +19,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY webapp/ /app/webapp/
+COPY wsgi.py /app/wsgi.py
 
 # Create data directories
 RUN mkdir -p /app/filestore
 
-# Make entrypoint executable
-COPY docker/webapp/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
 # Expose port
-EXPOSE 5000
-
-# Set entrypoint
-ENTRYPOINT ["/entrypoint.sh"]
+EXPOSE 6000
 
 # Default command
-CMD ["flask", "run", "--host=0.0.0.0"]
+CMD ["gunicorn", "--bind", "0.0.0.0:6000", "--workers", "2", "--threads", "4", "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]

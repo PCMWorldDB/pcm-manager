@@ -5,7 +5,7 @@ from datetime import timedelta
 # Path Helper Functions
 def get_base_data_path():
     """Get the base data directory path"""
-    storage_root = os.getenv('STORAGE_ROOT', './filestore')
+    storage_root = './filestore'
     # Handle both relative and absolute paths
     if not os.path.isabs(storage_root):
         return os.path.join(os.getcwd(), storage_root)
@@ -119,9 +119,6 @@ class Config:
     # File Upload
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB for SQLite files
     ALLOWED_EXTENSIONS = {'db', 'cdb', 'sqlite', 'sqlite3'}
-    
-    # Storage Paths (use helper functions for namespace-specific paths)
-    STORAGE_ROOT = os.getenv('STORAGE_ROOT', './filestore')
     
     # External API
     CYCLING_API_KEY = os.getenv('CYCLING_API_KEY')

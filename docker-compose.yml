@@ -2,30 +2,29 @@ version: '3.8'
 
 x-common-env: &common-env
   FLASK_APP: wsgi.py
-  FLASK_ENV: ${FLASK_ENV:-development}
+  FLASK_ENV: development
+  BCRYPT_LOG_ROUNDS: 12
   SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-this-in-production}
-  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/main
   PROVISIONER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/postgres
   REDIS_URL: redis://cache:6379/0
 
 x-common-depends: &common-depends
   database:
     condition: service_healthy
-  cache:
-    condition: service_healthy
+  # cache:
+  #   condition: service_healthy
 
 services:
   database:
     image: postgres:15-alpine
     container_name: database
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - database_vol:/var/lib/postgresql/data
-      - ./docker/postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -36,18 +35,18 @@ services:
     networks:
       - pcm-manager-network
 
-  cache:
-    image: redis:7-alpine
-    container_name: cache
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-    networks:
-      - pcm-manager-network
+  # cache:
+  #   image: redis:7-alpine
+  #   container_name: cache
+  #   ports:
+  #     - "6379:6379"
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 3
+  #   networks:
+  #     - pcm-manager-network
 
   web:
     build:
@@ -58,7 +57,6 @@ services:
       <<: *common-env
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
       CYCLING_API_KEY: ${CYCLING_API_KEY:-your-api-key-here}
       CYCLING_API_URL: ${CYCLING_API_URL:-https://api.example.com}
       # Admin user creation (optional)
@@ -69,10 +67,10 @@ services:
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
     ports:
-      - "5000:5000"
+      - "6000:6000"
     depends_on: *common-depends
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:6000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -80,19 +78,19 @@ services:
     networks:
       - pcm-manager-network
 
-  worker:
-    build:
-      context: .
-      dockerfile: docker/webapp/Dockerfile
-    container_name: worker
-    command: celery -A app.extensions.celery worker --loglevel=info
-    environment:
-      <<: *common-env
-    volumes:
-      - ./webapp:/app/webapp
-    depends_on: *common-depends
-    networks:
-      - pcm-manager-network
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/webapp/Dockerfile
+  #   container_name: worker
+  #   command: celery -A app.extensions.celery worker --loglevel=info
+  #   environment:
+  #     <<: *common-env
+  #   volumes:
+  #     - ./webapp:/app/webapp
+  #   depends_on: *common-depends
+  #   networks:
+  #     - pcm-manager-network
 
   reverse-proxy:
     image: nginx:alpine

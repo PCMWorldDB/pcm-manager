@@ -20,8 +20,8 @@ def create_app(config_name=None):
     # Configure User model relationships on every app startup
     # This is safe because configure_user_relationships() checks if tables exist
     with app.app_context():
-        from webapp.models.main.user import configure_user_relationships
-        configure_user_relationships()
+        from webapp.cli import initialize_database
+        initialize_database(log=app.logger.info)
     
     # Register blueprints
     register_blueprints(app)
