@@ -3,6 +3,9 @@
 {% block title %}Stats Manager - PCM Manager{% endblock %}
 
 {% block styles %}
+body > .container {
+    max-width: 1600px;
+}
 .panel-card {
     background: white;
     border-radius: 8px;
@@ -11,6 +14,17 @@
 }
 .panel-card .card-body {
     padding: 20px;
+}
+.section-block {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fafafa;
+}
+.section-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 12px;
 }
 .filters-grid {
     display: flex;
@@ -21,9 +35,6 @@
 .filter-item {
     flex: 0 0 auto;
 }
-.filter-item-nation {
-    width: 200px;
-}
 .filter-item-compact {
     width: 125px;
 }
@@ -32,6 +43,9 @@
 }
 .filter-item-checkbox {
     width: 135px;
+}
+.filter-item-name {
+    width: 260px;
 }
 .table-wrapper {
     overflow-x: auto;
@@ -50,6 +64,10 @@ body.dark-mode .panel-card {
     box-shadow: none;
     border: 1px solid #4a5568;
 }
+body.dark-mode .section-block {
+    background: #1f2937;
+    border-color: #4b5563;
+}
 body.dark-mode .stage-row {
     background: #374151;
 }
@@ -59,13 +77,15 @@ body.dark-mode .stage-row {
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h2 class="mb-1">Stats Manager</h2>
-        <p class="text-muted mb-0">Select a season to view and filter races and stages.</p>
+        <p class="text-muted mb-0">Select a season to view races and open race pages.</p>
     </div>
 </div>
 
 <div class="panel-card card">
     <div class="card-body">
         <form method="get" action="{{ url_for('web.stat_manager') }}">
+            <div class="section-block">
+                <h5 class="section-title">Select a Season</h5>
             <div class="row g-3">
                 <div class="col-md-4">
                     <label for="year" class="form-label">Year</label>
@@ -86,21 +106,24 @@ body.dark-mode .stage-row {
                     </select>
                 </div>
                 <div class="col-md-4 d-flex align-items-end">
-                    <button class="btn btn-primary w-100" type="submit">Load Season</button>
+                    <button class="btn btn-primary px-4" type="submit">Select</button>
                 </div>
+            </div>
             </div>
 
             {% if season_selected %}
-            <hr class="my-4">
+            <div class="section-block mt-3">
+            <h5 class="section-title">Search Races</h5>
             <div class="filters-grid">
-                <div class="filter-item filter-item-nation">
-                    <label class="form-label" for="nation_name">Nation</label>
-                    <select id="nation_name" name="nation_name" class="form-select">
-                        <option value="">All</option>
-                        {% for value in filter_choices.nation_names %}
-                        <option value="{{ value }}" {% if selected_filters.nation_name == value %}selected{% endif %}>{{ value }}</option>
-                        {% endfor %}
-                    </select>
+                <div class="filter-item filter-item-name">
+                    <label class="form-label" for="race_name">Race Name</label>
+                    <input
+                        id="race_name"
+                        name="race_name"
+                        type="text"
+                        class="form-control"
+                        placeholder="Search race name"
+                        value="{{ selected_filters.race_name }}">
                 </div>
                 <div class="filter-item filter-item-compact">
                     <label class="form-label" for="category">Category</label>
@@ -149,7 +172,8 @@ body.dark-mode .stage-row {
             </div>
             <div class="d-flex gap-2 mt-3">
                 <button class="btn btn-outline-primary" type="submit">Apply Filters</button>
-                <a class="btn btn-outline-secondary" href="{{ url_for('web.stat_manager', year=selected_year, gender=selected_gender) }}">Clear Filters</a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('web.stat_manager', year=selected_year, gender=selected_gender, race_name='') }}">Clear Filters</a>
+            </div>
             </div>
             {% endif %}
         </form>
@@ -169,7 +193,6 @@ body.dark-mode .stage-row {
                         <th style="width: 110px;">Stages</th>
                         <th>Name</th>
                         <th>Category</th>
-                        <th>Nation</th>
                         <th>Classification</th>
                         <th>Start Date</th>
                     </tr>
@@ -192,20 +215,30 @@ body.dark-mode .stage-row {
                             -
                             {% endif %}
                         </td>
-                        <td>{{ race.name or '-' }}</td>
+                        <td>
+                            <a href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, year=selected_year, gender=selected_gender, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race) }}">
+                                {{ race.name or '-' }}
+                            </a>
+                        </td>
                         <td>{{ race.category or '-' }}</td>
-                        <td>{{ race.nation_name or '-' }}</td>
-                        <td>{{ race.classification or '-' }}</td>
+                        <td>{{ race.classification_label or '-' }}</td>
                         <td>{{ race.start_date or '-' }}</td>
                     </tr>
 
                     {% if has_stages %}
                         {% for stage in stage_rows %}
-                        <tr class="stage-row stage-row-{{ race.id }}" style="display: none;">
+                        <tr
+                            class="stage-row stage-row-{{ race.id }}"
+                            style="display: none;">
                             <td class="text-end">↳ Stage</td>
-                            <td colspan="4">
-                                #{{ stage.stage_number or '?' }}: {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
+                            <td>
+                                <a
+                                    href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, stage_id=stage.id, year=selected_year, gender=selected_gender, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race) }}"
+                                    >
+                                    #{{ stage.stage_number or '?' }}: {{ stage.stage_name or (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
+                                </a>
                             </td>
+                            <td colspan="2">{{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}</td>
                             <td>{{ stage.stage_date or '-' }}</td>
                         </tr>
                         {% endfor %}
@@ -245,7 +278,8 @@ function toggleStages(raceId, button) {
 
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.toggle-btn[data-race-id]').forEach(function (button) {
-        button.addEventListener('click', function () {
+        button.addEventListener('click', function (event) {
+            event.stopPropagation();
             const raceId = button.getAttribute('data-race-id');
             toggleStages(raceId, button);
         });

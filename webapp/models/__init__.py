@@ -8,6 +8,7 @@ from webapp.models.main.audit_log import AuditLog, AuditAction
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
     FirstCyclingRaceStage,
+    FirstCyclingRaceResult,
     FirstCyclingTeam,
     FirstCyclingRider,
 )
@@ -32,6 +33,7 @@ __all__ = [
     'AuditAction',
     'FirstCyclingRace',
     'FirstCyclingRaceStage',
+    'FirstCyclingRaceResult',
     'FirstCyclingTeam',
     'FirstCyclingRider',
 ]

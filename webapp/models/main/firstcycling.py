@@ -37,6 +37,12 @@ class FirstCyclingRace(MainDBModel):
         cascade='all, delete-orphan',
         passive_deletes=True,
     )
+    race_results = db.relationship(
+        'FirstCyclingRaceResult',
+        back_populates='race',
+        cascade='all, delete-orphan',
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         db.UniqueConstraint('race_id', 'season_year', name='uq_firstcycling_race_id_year'),
@@ -65,6 +71,12 @@ class FirstCyclingRaceStage(MainDBModel):
     stage_end_time = db.Column(db.Time, nullable=True)
 
     race = db.relationship('FirstCyclingRace', back_populates='race_stages')
+    stage_results = db.relationship(
+        'FirstCyclingRaceResult',
+        back_populates='stage',
+        cascade='all, delete-orphan',
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         db.UniqueConstraint('race_id', 'stage_number', name='uq_firstcycling_race_stage_number'),
@@ -73,6 +85,41 @@ class FirstCyclingRaceStage(MainDBModel):
 
     def __repr__(self):
         return f'<FirstCyclingRaceStage race_id={self.race_id} stage={self.stage_number}>'
+
+
+class FirstCyclingRaceResult(MainDBModel):
+    """Stores rider finishing positions for race-level or stage-level results"""
+    __tablename__ = 'firstcycling_race_results'
+
+    race_id = db.Column(db.Integer, db.ForeignKey('firstcycling_races.id', ondelete='CASCADE'), nullable=False, index=True)
+    stage_id = db.Column(db.Integer, db.ForeignKey('firstcycling_race_stages.id', ondelete='CASCADE'), nullable=True, index=True)
+    result_scope = db.Column(db.String(20), nullable=False, default='race', index=True)
+    rider_id = db.Column(db.Integer, nullable=False, index=True)
+    team_id = db.Column(db.Integer, nullable=True, index=True)
+    overall_position = db.Column(db.Integer, nullable=True, index=True)
+    overall_time = db.Column(db.String(40), nullable=True)
+    overall_time_seconds = db.Column(db.Integer, nullable=True)
+    stage_position = db.Column(db.Integer, nullable=True, index=True)
+    stage_time = db.Column(db.String(40), nullable=True)
+    stage_time_seconds = db.Column(db.Integer, nullable=True)
+    is_still_in_race = db.Column(db.Boolean, nullable=True)
+    last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    race = db.relationship('FirstCyclingRace', back_populates='race_results')
+    stage = db.relationship('FirstCyclingRaceStage', back_populates='stage_results')
+
+    __table_args__ = (
+        db.UniqueConstraint('race_id', 'result_scope', 'stage_id', 'rider_id', name='uq_firstcycling_race_result_scope_stage_rider'),
+        Index('ix_firstcycling_result_race_scope_overall_position', 'race_id', 'result_scope', 'overall_position'),
+        Index('ix_firstcycling_result_stage_position', 'race_id', 'stage_id', 'stage_position'),
+    )
+
+    def __repr__(self):
+        return (
+            f'<FirstCyclingRaceResult race_id={self.race_id} stage_id={self.stage_id} '
+            f'rider_id={self.rider_id} overall_position={self.overall_position} '
+            f'stage_position={self.stage_position}>'
+        )
 
 
 class FirstCyclingTeam(MainDBModel):

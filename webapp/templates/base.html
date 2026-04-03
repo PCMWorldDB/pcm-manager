@@ -143,10 +143,29 @@
         .header h1 {
             font-size: 24px;
         }
+        .header-title-link {
+            color: white;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+        }
+        .header-title-link:hover {
+            color: white;
+            text-decoration: none;
+            opacity: 0.9;
+        }
         .header nav {
             display: flex;
             align-items: center;
             gap: 20px;
+        }
+        .namespace-selector {
+            min-width: 240px;
+        }
+        .namespace-selector .form-select {
+            font-size: 0.9rem;
+            padding: 4px 30px 4px 10px;
+            min-height: 34px;
         }
         .header nav a {
             color: white;
@@ -286,13 +305,27 @@
     <div class="header">
         <div class="container">
             <h1>
-                <img src="{{ url_for('static', filename='images/logo.jpg') }}" 
-                     alt="PCM Manager" 
-                     style="height: 32px; vertical-align: middle; margin-right: 10px;">
-                PCM Manager
+                <a class="header-title-link" href="{{ url_for('web.dashboard') }}">
+                    <img src="{{ url_for('static', filename='images/logo.jpg') }}" 
+                         alt="PCM Manager" 
+                         style="height: 32px; vertical-align: middle; margin-right: 10px;">
+                    PCM Manager
+                </a>
             </h1>
             <nav>
-                <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+                {% if available_namespaces %}
+                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+                    <select name="namespace_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        {% for namespace in available_namespaces %}
+                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
+                            Namespace: {{ namespace.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
                 
                 <!-- Settings Dropdown -->
                 <div class="dropdown settings-dropdown">

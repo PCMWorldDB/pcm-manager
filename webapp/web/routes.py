@@ -1,19 +1,26 @@
 """Web routes for UI"""
 import logging
+import json
 from datetime import datetime
 
-from flask import render_template, redirect, url_for, flash, request, abort, current_app
+from flask import render_template, redirect, url_for, flash, request, abort, current_app, session
 from flask_login import login_user, logout_user, login_required, current_user
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from webapp.web import web_bp
 from webapp.web.forms import LoginForm, NamespaceForm, UserCreateForm, PasswordChangeForm, PasswordResetForm
-from webapp.models import User, Resource, Namespace, Role, AuditLog, AuditAction, FirstCyclingRace
+from webapp.models import User, Resource, Namespace, Role, Release, AuditLog, AuditAction, FirstCyclingRace
+from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
+from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.extensions import db
 from functools import wraps
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+STAT_DELTA_FIELDS = ('mo', 'mm', 'hil', 'tt', 'spr', 'acc', 'end', 'res', 'rec')
 
 
 def _user_resources():
@@ -41,12 +48,211 @@ def _can_access_panel(panel_name):
 def _get_panel_url(app_panel):
     panel_routes = {
         'stat_manager': 'web.stat_manager',
+        'release_manager': 'web.release_manager',
     }
 
     endpoint = panel_routes.get(app_panel)
     if not endpoint:
         return None
     return url_for(endpoint)
+
+
+def _get_accessible_namespaces():
+    if not current_user.is_authenticated:
+        return []
+
+    if current_user.is_superadmin:
+        return Namespace.query.filter_by(is_deleted=False).order_by(Namespace.name.asc()).all()
+
+    if hasattr(current_user, 'accessible_namespaces'):
+        return current_user.accessible_namespaces.order_by(Namespace.name.asc()).all()
+
+    return []
+
+
+def _get_selected_namespace(available_namespaces=None):
+    available_namespaces = available_namespaces if available_namespaces is not None else _get_accessible_namespaces()
+    if not available_namespaces:
+        session.pop('selected_namespace_id', None)
+        return None
+
+    selected_namespace_id = session.get('selected_namespace_id')
+    if selected_namespace_id is not None:
+        for namespace in available_namespaces:
+            if namespace.id == selected_namespace_id:
+                return namespace
+
+    selected_namespace = available_namespaces[0]
+    session['selected_namespace_id'] = selected_namespace.id
+    return selected_namespace
+
+
+def _load_namespace_cyclist_stats(namespace, rider_ids):
+    if namespace is None or not rider_ids:
+        return {}
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        _ensure_race_result_delta_table(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        first_cycling_id,
+                        stat_mo,
+                        stat_mm,
+                        stat_hil,
+                        stat_tt,
+                        stat_spr,
+                        stat_acc,
+                        stat_end,
+                        stat_res,
+                        stat_rec
+                    FROM cdb_cyclist
+                    WHERE first_cycling_id = ANY(:rider_ids)
+                    """
+                ),
+                {'rider_ids': list(rider_ids)},
+            ).mappings().all()
+    except Exception:
+        logger.exception('Failed to load cyclist stats from namespace %s', namespace.slug)
+        return {}
+    finally:
+        engine.dispose()
+
+    stats_map = {}
+    for row in rows:
+        stats_map[row['first_cycling_id']] = {
+            'mo': row['stat_mo'],
+            'mm': row['stat_mm'],
+            'hil': row['stat_hil'],
+            'tt': row['stat_tt'],
+            'spr': row['stat_spr'],
+            'acc': row['stat_acc'],
+            'end': row['stat_end'],
+            'res': row['stat_res'],
+            'rec': row['stat_rec'],
+        }
+
+    return stats_map
+
+
+def _load_namespace_race_result_deltas(namespace, first_cycling_race_id, first_cycling_stage_id, rider_ids):
+    """Load saved stat delta rows keyed by rider and stat name for one race."""
+    if namespace is None or first_cycling_race_id is None or first_cycling_stage_id is None or not rider_ids:
+        return {}
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        first_cycling_rider_id,
+                        stat_name,
+                        original_value,
+                        final_value,
+                        delta_value
+                    FROM race_result_delta
+                    WHERE first_cycling_race_id = :race_id
+                                            AND first_cycling_stage_id = :stage_id
+                      AND first_cycling_rider_id = ANY(:rider_ids)
+                    """
+                ),
+                {
+                    'race_id': first_cycling_race_id,
+                                        'stage_id': first_cycling_stage_id,
+                    'rider_ids': list(rider_ids),
+                },
+            ).mappings().all()
+    except Exception:
+        # Table may not exist yet for older namespaces; treat as no deltas.
+        logger.exception('Failed to load race result deltas from namespace %s', namespace.slug)
+        return {}
+    finally:
+        engine.dispose()
+
+    delta_map = {}
+    for row in rows:
+        rider_id = row['first_cycling_rider_id']
+        stat_name = (row['stat_name'] or '').strip().lower()
+        if rider_id is None or not stat_name:
+            continue
+
+        rider_delta = delta_map.setdefault(rider_id, {})
+        rider_delta[stat_name] = {
+            'original_value': row['original_value'],
+            'final_value': row['final_value'],
+            'delta_value': row['delta_value'],
+        }
+
+    return delta_map
+
+
+def _safe_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ensure_race_result_delta_table(engine):
+    """Create delta table/indexes if they do not already exist in namespace DB."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS race_result_delta (
+                id SERIAL PRIMARY KEY,
+                first_cycling_race_id INTEGER NOT NULL,
+                first_cycling_stage_id INTEGER NOT NULL DEFAULT 0,
+                cyclist_pcm_id INTEGER NOT NULL,
+                first_cycling_rider_id INTEGER NOT NULL,
+                stat_name VARCHAR(20) NOT NULL,
+                original_value INTEGER NOT NULL,
+                final_value INTEGER NOT NULL,
+                delta_value INTEGER NOT NULL,
+                UNIQUE (first_cycling_race_id, first_cycling_stage_id, cyclist_pcm_id, first_cycling_rider_id, stat_name)
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            ALTER TABLE race_result_delta
+            ADD COLUMN IF NOT EXISTS first_cycling_stage_id INTEGER NOT NULL DEFAULT 0
+            """
+        ))
+        conn.execute(text(
+            """
+            DROP INDEX IF EXISTS idx_race_result_delta_race_rider
+            """
+        ))
+        conn.execute(text(
+            """
+            DROP INDEX IF EXISTS idx_race_result_delta_race_stage_rider
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_race_result_delta_race_stage_rider
+            ON race_result_delta (first_cycling_race_id, first_cycling_stage_id, first_cycling_rider_id)
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_race_result_delta_scope
+            ON race_result_delta (
+                first_cycling_race_id,
+                first_cycling_stage_id,
+                cyclist_pcm_id,
+                first_cycling_rider_id,
+                stat_name
+            )
+            """
+        ))
 
 
 def _load_config_seasons():
@@ -64,13 +270,82 @@ def _load_config_seasons():
         if not isinstance(gender_value, str) or not gender_value.strip():
             continue
         gender = gender_value.strip()
-        seasons.append({'year': year, 'gender': gender})
+        seasons.append({
+            'year': year,
+            'gender': gender,
+            'is_default': bool(entry.get('is_default', False)),
+        })
 
-    unique = {(entry['year'], entry['gender']) for entry in seasons}
+    deduped = {}
+    for entry in seasons:
+        key = (entry['year'], entry['gender'])
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = dict(entry)
+            continue
+        if entry['is_default']:
+            existing['is_default'] = True
+
     return [
-        {'year': year, 'gender': gender}
-        for year, gender in sorted(unique, key=lambda value: (value[0], value[1]))
+        deduped[key]
+        for key in sorted(deduped.keys(), key=lambda value: (value[0], value[1]))
     ]
+
+
+def _resolve_default_season(seasons):
+    if not seasons:
+        return None
+
+    for entry in seasons:
+        if entry.get('is_default'):
+            return entry
+
+    return seasons[0]
+
+
+def _build_race_result_state(race):
+    race_stage_ids = {
+        stage.id
+        for stage in race.race_stages
+        if stage.id is not None
+    }
+
+    saved_stage_ids = {
+        result.stage_id
+        for result in race.race_results
+        if result.stage_id is not None
+    }
+    has_race_scope_result = any(
+        result.result_scope == 'race' and result.stage_id is None
+        for result in race.race_results
+    )
+
+    is_stage_race = len(race_stage_ids) > 0
+    all_stages_saved = is_stage_race and race_stage_ids.issubset(saved_stage_ids)
+    is_result_saved = all_stages_saved if is_stage_race else has_race_scope_result
+    is_future_race = race.start_date is not None and race.start_date > datetime.utcnow().date()
+
+    return {
+        'is_stage_race': is_stage_race,
+        'is_result_saved': is_result_saved,
+        'is_future_race': is_future_race,
+    }
+
+
+@web_bp.app_context_processor
+def inject_namespace_selector_context():
+    if not current_user.is_authenticated:
+        return {
+            'available_namespaces': [],
+            'selected_namespace': None,
+        }
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    return {
+        'available_namespaces': available_namespaces,
+        'selected_namespace': selected_namespace,
+    }
 
 def admin_required(f):
     """Decorator to require admin access"""
@@ -228,6 +503,12 @@ def stat_manager():
     if selected_gender is not None:
         selected_gender = selected_gender.strip()
 
+    if selected_year is None or not selected_gender:
+        default_season = _resolve_default_season(seasons)
+        if default_season:
+            selected_year = default_season['year']
+            selected_gender = default_season['gender']
+
     season_selected = (
         selected_year is not None
         and isinstance(selected_gender, str)
@@ -238,13 +519,12 @@ def stat_manager():
     races = []
     filter_choices = {
         'categories': [],
-        'nation_names': [],
         'classifications': [],
     }
 
     selected_filters = {
+        'race_name': request.args.get('race_name', type=str) or '',
         'category': request.args.get('category', type=str) or '',
-        'nation_name': request.args.get('nation_name', type=str) or '',
         'classification': request.args.get('classification', type=str) or '',
         'start_date_from': request.args.get('start_date_from', type=str) or '',
         'start_date_to': request.args.get('start_date_to', type=str) or '',
@@ -266,23 +546,19 @@ def stat_manager():
             value for (value,) in base_query.with_entities(FirstCyclingRace.category).distinct().order_by(FirstCyclingRace.category).all()
             if value
         ]
-        filter_choices['nation_names'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.nation_name).distinct().order_by(FirstCyclingRace.nation_name).all()
-            if value
-        ]
         filter_choices['classifications'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.classification).distinct().order_by(FirstCyclingRace.classification).all()
+            value for (value,) in base_query.with_entities(FirstCyclingRace.classification_label).distinct().order_by(FirstCyclingRace.classification_label).all()
             if value
         ]
 
         query = base_query.options(selectinload(FirstCyclingRace.race_stages))
 
+        if selected_filters['race_name']:
+            query = query.filter(FirstCyclingRace.name.ilike(f"%{selected_filters['race_name']}%"))
         if selected_filters['category']:
             query = query.filter(FirstCyclingRace.category == selected_filters['category'])
-        if selected_filters['nation_name']:
-            query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation_name'])
         if selected_filters['classification']:
-            query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
+            query = query.filter(FirstCyclingRace.classification_label == selected_filters['classification'])
 
         parsed_start_date_from = None
         parsed_start_date_to = None
@@ -322,6 +598,547 @@ def stat_manager():
         filter_choices=filter_choices,
         selected_filters=selected_filters,
     )
+
+
+@web_bp.route('/release-manager', methods=['GET', 'POST'])
+@login_required
+def release_manager():
+    """Release manager panel with tabbed sections and overview actions."""
+    if not _can_access_panel('release_manager'):
+        abort(403)
+
+    valid_tabs = ('overview', 'stats', 'palmares', 'photos')
+    active_tab = (request.args.get('tab', type=str) or 'overview').strip().lower()
+    if active_tab not in valid_tabs:
+        return redirect(url_for('web.release_manager', tab='overview'))
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+
+    if request.method == 'POST' and active_tab == 'overview':
+        if selected_namespace is None:
+            flash('Select a namespace before creating a release.', 'warning')
+            return redirect(url_for('web.release_manager', tab='overview'))
+
+        version = (request.form.get('version', type=str) or '').strip()
+        release_name = (request.form.get('release_name', type=str) or '').strip() or None
+        release_type = (request.form.get('release_type', type=str) or 'minor').strip().lower()
+        release_notes = (request.form.get('release_notes', type=str) or '').strip() or None
+        sqlite_file_path = (request.form.get('sqlite_file_path', type=str) or '').strip()
+
+        if not version:
+            flash('Release version is required.', 'error')
+            return redirect(url_for('web.release_manager', tab='overview'))
+
+        if release_type not in ('major', 'minor', 'patch', 'beta'):
+            release_type = 'minor'
+
+        if not sqlite_file_path:
+            sqlite_file_path = selected_namespace.sqlite_file_path or ''
+
+        if not sqlite_file_path:
+            flash('SQLite file path is required to create a release.', 'error')
+            return redirect(url_for('web.release_manager', tab='overview'))
+
+        release = Release(
+            namespace_id=selected_namespace.id,
+            version=version,
+            release_name=release_name,
+            release_type=release_type,
+            sqlite_file_path=sqlite_file_path,
+            status='draft',
+            release_notes=release_notes,
+            created_by_id=current_user.id,
+        )
+
+        try:
+            db.session.add(release)
+            db.session.commit()
+            flash(f'Release {version} created as draft.', 'success')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Release version already exists for this namespace.', 'error')
+        except Exception:
+            db.session.rollback()
+            logger.exception('Failed to create release')
+            flash('Failed to create release.', 'error')
+
+        return redirect(url_for('web.release_manager', tab='overview'))
+
+    releases = []
+    summary = {
+        'total': 0,
+        'draft': 0,
+        'published': 0,
+        'archived': 0,
+    }
+
+    if selected_namespace is not None:
+        releases = Release.query.filter_by(
+            namespace_id=selected_namespace.id
+        ).order_by(Release.created_at.desc()).all()
+
+        summary['total'] = len(releases)
+        summary['draft'] = sum(1 for item in releases if item.status == 'draft')
+        summary['published'] = sum(1 for item in releases if item.status == 'published')
+        summary['archived'] = sum(1 for item in releases if item.status == 'archived')
+
+    return render_template(
+        'release_manager.html',
+        active_tab=active_tab,
+        selected_namespace=selected_namespace,
+        releases=releases,
+        summary=summary,
+    )
+
+
+@web_bp.route('/stat-manager/<int:race_id>')
+@web_bp.route('/stat-manager/<int:race_id>/<int:stage_id>')
+@login_required
+def stat_manager_race_detail(race_id, stage_id=None):
+    """Race detail page with optional stage-specific view."""
+    if not _can_access_panel('stat_manager'):
+        abort(403)
+
+    race = FirstCyclingRace.query.options(
+        selectinload(FirstCyclingRace.race_stages),
+        selectinload(FirstCyclingRace.race_results),
+    ).filter_by(id=race_id).first_or_404()
+
+    stage_rows = sorted(
+        race.race_stages,
+        key=lambda stage: (
+            stage.stage_number is None,
+            stage.stage_number if stage.stage_number is not None else 99999,
+        ),
+    )
+    stage_lookup = {stage.id: stage for stage in stage_rows if stage.id is not None}
+    selected_stage = stage_lookup.get(stage_id) if stage_id is not None else None
+
+    result_state = _build_race_result_state(race)
+
+    if selected_stage is not None:
+        result_rows = [result for result in race.race_results if result.stage_id == selected_stage.id]
+        result_title = f"Stage #{selected_stage.stage_number or '?'} Results"
+    else:
+        race_scope_rows = [
+            result
+            for result in race.race_results
+            if result.result_scope == 'race' and result.stage_id is None
+        ]
+        if race_scope_rows:
+            result_rows = race_scope_rows
+        else:
+            final_stage = None
+            if stage_rows:
+                final_stage = max(
+                    stage_rows,
+                    key=lambda stage: stage.stage_number if stage.stage_number is not None else -1,
+                )
+            if final_stage is None:
+                result_rows = []
+            else:
+                result_rows = [result for result in race.race_results if result.stage_id == final_stage.id]
+        result_title = 'Overall Results'
+
+    rider_ids = {result.rider_id for result in result_rows if result.rider_id is not None}
+    rider_map = {}
+    if rider_ids:
+        riders = FirstCyclingRider.query.filter(FirstCyclingRider.rider_id.in_(rider_ids)).all()
+        rider_map = {rider.rider_id: rider for rider in riders}
+
+    team_ids = {
+        result.team_id
+        for result in result_rows
+        if result.team_id is not None
+    }
+    team_ids.update(
+        rider.team_id
+        for rider in rider_map.values()
+        if rider.team_id is not None
+    )
+    team_map = {}
+    if team_ids:
+        teams = FirstCyclingTeam.query.filter(FirstCyclingTeam.team_id.in_(team_ids)).all()
+        team_map = {team.team_id: team for team in teams}
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, rider_ids)
+    stage_scope_id = selected_stage.id if selected_stage is not None else 0
+    rider_delta_map = _load_namespace_race_result_deltas(selected_namespace, race.race_id, stage_scope_id, rider_ids)
+    delta_change_count = sum(len(changes) for changes in rider_delta_map.values())
+
+    display_rows = []
+    for result in result_rows:
+        rider = rider_map.get(result.rider_id)
+        team = team_map.get(result.team_id)
+        if team is None and rider is not None and rider.team_id is not None:
+            team = team_map.get(rider.team_id)
+
+        rider_name = f'Rider #{result.rider_id}'
+        if rider is not None:
+            rider_name = rider.name or ' '.join(
+                part for part in [rider.first_name, rider.last_name] if part
+            ).strip() or rider_name
+
+        base_stats = rider_stats_map.get(result.rider_id) or {}
+        original_stats = dict(base_stats)
+        final_stats = dict(base_stats)
+        for stat_name, delta_info in (rider_delta_map.get(result.rider_id) or {}).items():
+            final_value = delta_info.get('final_value')
+            if final_value is None:
+                continue
+            final_stats[stat_name] = final_value
+
+        display_rows.append({
+            'result': result,
+            'rider_name': rider_name,
+            'team_name': team.team_name if team is not None else (rider.team_name if rider is not None and rider.team_name else '-'),
+            'stats': final_stats,
+            'original_stats': original_stats,
+        })
+
+    if selected_stage is not None:
+        display_rows = sorted(
+            display_rows,
+            key=lambda row: (
+                row['result'].stage_position is None,
+                row['result'].stage_position if row['result'].stage_position is not None else 99999,
+            ),
+        )
+    else:
+        display_rows = sorted(
+            display_rows,
+            key=lambda row: (
+                row['result'].overall_position is None,
+                row['result'].overall_position if row['result'].overall_position is not None else 99999,
+            ),
+        )
+
+    return render_template(
+        'stat_race_detail.html',
+        race=race,
+        stage_rows=stage_rows,
+        selected_stage=selected_stage,
+        result_rows=display_rows,
+        result_title=result_title,
+        result_state=result_state,
+        delta_change_count=delta_change_count,
+        selected_namespace=selected_namespace,
+        back_params={
+            'year': request.args.get('year', type=int),
+            'gender': request.args.get('gender', type=str),
+            'race_name': request.args.get('race_name', type=str) or '',
+            'category': request.args.get('category', type=str) or '',
+            'classification': request.args.get('classification', type=str) or '',
+            'start_date_from': request.args.get('start_date_from', type=str) or '',
+            'start_date_to': request.args.get('start_date_to', type=str) or '',
+            'is_stage_race': request.args.get('is_stage_race', type=str) or '',
+        },
+    )
+
+
+@web_bp.route('/namespace/select', methods=['POST'])
+@login_required
+def select_namespace():
+    """Persist the selected namespace in session for cross-panel usage."""
+    namespace_id = request.form.get('namespace_id', type=int)
+    next_url = request.form.get('next') or request.referrer or url_for('web.dashboard')
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = None
+    if namespace_id is not None:
+        for namespace in available_namespaces:
+            if namespace.id == namespace_id:
+                selected_namespace = namespace
+                break
+
+    if selected_namespace is None:
+        flash('Invalid namespace selection.', 'warning')
+        return redirect(next_url)
+
+    session['selected_namespace_id'] = selected_namespace.id
+    return redirect(next_url)
+
+
+@web_bp.route('/stat-manager/races/<int:race_pk>/get-result', methods=['POST'])
+@login_required
+def stat_manager_get_result(race_pk):
+    """Fetch and persist race results for one race from FirstCycling."""
+    if not _can_access_panel('stat_manager'):
+        abort(403)
+
+    race = FirstCyclingRace.query.get_or_404(race_pk)
+
+    selected_year = request.form.get('year', type=int)
+    selected_gender = request.form.get('gender', type=str)
+    category = request.form.get('category', type=str) or ''
+    race_name = request.form.get('race_name', type=str) or ''
+    classification = request.form.get('classification', type=str) or ''
+    start_date_from = request.form.get('start_date_from', type=str) or ''
+    start_date_to = request.form.get('start_date_to', type=str) or ''
+    is_stage_race_filter = request.form.get('is_stage_race', type=str) or ''
+    stage_id = request.form.get('stage_id', type=int)
+
+    if selected_gender is not None:
+        selected_gender = selected_gender.strip()
+
+    if selected_year is None:
+        selected_year = race.season_year
+    if not selected_gender:
+        selected_gender = race.gender
+
+    if selected_year != race.season_year or selected_gender != race.gender:
+        flash('Race season/gender mismatch for selected filters.', 'error')
+        return redirect(url_for('web.stat_manager_race_detail', race_id=race.id))
+
+    client = FirstCyclingClient()
+    try:
+        summary = client.sync_race_results(race_id=race.race_id, season_year=race.season_year, commit=True)
+        flash(
+            (
+                f"Saved race results for '{race.name or race.race_id}' "
+                f"(overall={summary['overall_results']}, stage={summary['stage_results']})."
+            ),
+            'success',
+        )
+    except FirstCyclingAPIError as exc:
+        flash(f'Could not fetch FirstCycling results: {exc}', 'error')
+    except Exception as exc:
+        flash(f'Unexpected error while saving race results: {exc}', 'error')
+
+    if stage_id is not None:
+        return redirect(url_for(
+            'web.stat_manager_race_detail',
+            race_id=race.id,
+            stage_id=stage_id,
+            year=selected_year,
+            gender=selected_gender,
+            race_name=race_name,
+            category=category,
+            classification=classification,
+            start_date_from=start_date_from,
+            start_date_to=start_date_to,
+            is_stage_race=is_stage_race_filter,
+        ))
+
+    return redirect(url_for(
+        'web.stat_manager_race_detail',
+        race_id=race.id,
+        year=selected_year,
+        gender=selected_gender,
+        race_name=race_name,
+        category=category,
+        classification=classification,
+        start_date_from=start_date_from,
+        start_date_to=start_date_to,
+        is_stage_race=is_stage_race_filter,
+    ))
+
+
+@web_bp.route('/stat-manager/races/<int:race_pk>/save-stat-deltas', methods=['POST'])
+@login_required
+def stat_manager_save_stat_deltas(race_pk):
+    """Persist edited stat deltas for this race into the selected namespace database."""
+    if not _can_access_panel('stat_manager'):
+        abort(403)
+
+    race = FirstCyclingRace.query.get_or_404(race_pk)
+
+    selected_year = request.form.get('year', type=int)
+    selected_gender = request.form.get('gender', type=str)
+    category = request.form.get('category', type=str) or ''
+    race_name = request.form.get('race_name', type=str) or ''
+    classification = request.form.get('classification', type=str) or ''
+    start_date_from = request.form.get('start_date_from', type=str) or ''
+    start_date_to = request.form.get('start_date_to', type=str) or ''
+    is_stage_race_filter = request.form.get('is_stage_race', type=str) or ''
+    stage_id = request.form.get('stage_id', type=int)
+    stage_scope_id = stage_id if stage_id is not None else 0
+
+    if selected_gender is not None:
+        selected_gender = selected_gender.strip()
+    if selected_year is None:
+        selected_year = race.season_year
+    if not selected_gender:
+        selected_gender = race.gender
+
+    redirect_target = {
+        'race_id': race.id,
+        'year': selected_year,
+        'gender': selected_gender,
+        'race_name': race_name,
+        'category': category,
+        'classification': classification,
+        'start_date_from': start_date_from,
+        'start_date_to': start_date_to,
+        'is_stage_race': is_stage_race_filter,
+    }
+    if stage_id is not None:
+        redirect_target['stage_id'] = stage_id
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    if selected_namespace is None:
+        flash('Select a namespace before saving stat changes.', 'warning')
+        return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+    raw_changes = request.form.get('changes_json', type=str) or ''
+    if not raw_changes.strip():
+        flash('No stat changes detected.', 'info')
+        return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+    try:
+        parsed_changes = json.loads(raw_changes)
+    except json.JSONDecodeError:
+        flash('Invalid stat changes payload.', 'error')
+        return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+    if not isinstance(parsed_changes, list):
+        flash('Invalid stat changes format.', 'error')
+        return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+    rider_ids = {
+        _safe_int(item.get('first_cycling_rider_id'))
+        for item in parsed_changes
+        if isinstance(item, dict)
+    }
+    rider_ids.discard(None)
+
+    connection_string = selected_namespace.build_connection_string()
+    engine = create_engine(connection_string)
+
+    try:
+        _ensure_race_result_delta_table(engine)
+
+        rider_to_pcm_id = {}
+        if rider_ids:
+            with engine.connect() as conn:
+                rider_rows = conn.execute(
+                    text(
+                        """
+                        SELECT id, first_cycling_id
+                        FROM cdb_cyclist
+                        WHERE first_cycling_id = ANY(:rider_ids)
+                        """
+                    ),
+                    {'rider_ids': list(rider_ids)},
+                ).mappings().all()
+            rider_to_pcm_id = {
+                row['first_cycling_id']: row['id']
+                for row in rider_rows
+            }
+
+        saved_count = 0
+        skipped_count = 0
+
+        with engine.begin() as conn:
+            for item in parsed_changes:
+                if not isinstance(item, dict):
+                    skipped_count += 1
+                    continue
+
+                rider_id = _safe_int(item.get('first_cycling_rider_id'))
+                stat_name = (item.get('stat_name') or '').strip().lower()
+                original_value = _safe_int(item.get('original_value'))
+                final_value = _safe_int(item.get('final_value'))
+
+                if (
+                    rider_id is None
+                    or stat_name not in STAT_DELTA_FIELDS
+                    or original_value is None
+                    or final_value is None
+                ):
+                    skipped_count += 1
+                    continue
+
+                cyclist_pcm_id = rider_to_pcm_id.get(rider_id)
+                if cyclist_pcm_id is None:
+                    skipped_count += 1
+                    continue
+
+                delta_value = final_value - original_value
+                if delta_value == 0:
+                    conn.execute(
+                        text(
+                            """
+                            DELETE FROM race_result_delta
+                            WHERE first_cycling_race_id = :race_id
+                                                            AND first_cycling_stage_id = :stage_id
+                              AND cyclist_pcm_id = :cyclist_pcm_id
+                              AND first_cycling_rider_id = :rider_id
+                              AND stat_name = :stat_name
+                            """
+                        ),
+                        {
+                            'race_id': race.race_id,
+                            'stage_id': stage_scope_id,
+                            'cyclist_pcm_id': cyclist_pcm_id,
+                            'rider_id': rider_id,
+                            'stat_name': stat_name,
+                        },
+                    )
+                    continue
+
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO race_result_delta (
+                            first_cycling_race_id,
+                            first_cycling_stage_id,
+                            cyclist_pcm_id,
+                            first_cycling_rider_id,
+                            stat_name,
+                            original_value,
+                            final_value,
+                            delta_value
+                        )
+                        VALUES (
+                            :race_id,
+                            :stage_id,
+                            :cyclist_pcm_id,
+                            :rider_id,
+                            :stat_name,
+                            :original_value,
+                            :final_value,
+                            :delta_value
+                        )
+                        ON CONFLICT (first_cycling_race_id, first_cycling_stage_id, cyclist_pcm_id, first_cycling_rider_id, stat_name)
+                        DO UPDATE SET
+                            original_value = EXCLUDED.original_value,
+                            final_value = EXCLUDED.final_value,
+                            delta_value = EXCLUDED.delta_value
+                        """
+                    ),
+                    {
+                        'race_id': race.race_id,
+                        'stage_id': stage_scope_id,
+                        'cyclist_pcm_id': cyclist_pcm_id,
+                        'rider_id': rider_id,
+                        'stat_name': stat_name,
+                        'original_value': original_value,
+                        'final_value': final_value,
+                        'delta_value': delta_value,
+                    },
+                )
+                saved_count += 1
+
+        if saved_count > 0:
+            flash(f'Saved {saved_count} stat delta change(s).', 'success')
+        else:
+            flash('No stat delta changes were saved.', 'info')
+
+        if skipped_count > 0:
+            flash(f'Skipped {skipped_count} invalid or unmatched change(s).', 'warning')
+
+    except Exception:
+        logger.exception('Failed to save stat deltas for race %s', race.race_id)
+        flash('Failed to save stat delta changes.', 'error')
+    finally:
+        engine.dispose()
+
+    return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
 
 
 # ==================== Admin Panel Routes ====================

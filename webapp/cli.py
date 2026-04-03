@@ -43,8 +43,6 @@ def sync_firstcycling_seasons():
         click.echo('   - SEASONS config is empty; skipping FirstCycling season sync check')
         return
 
-    client = FirstCyclingClient()
-
     for season_settings in season_entries:
         if not isinstance(season_settings, dict):
             click.echo(f"   - Skipping invalid season entry '{season_settings}'")
@@ -61,6 +59,8 @@ def sync_firstcycling_seasons():
         if gender not in ('Men', 'Women'):
             click.echo(f"   - Skipping invalid gender '{gender}'")
             continue
+
+        client = FirstCyclingClient()
 
         race_query = FirstCyclingRace.query.filter_by(season_year=season_year, gender=gender)
         team_query = FirstCyclingTeam.query.filter_by(team_year=season_year, gender=gender)
@@ -158,12 +158,19 @@ def initialize_database(log=None):
 
 =======
         click.echo(f'\n4. Creating admin user: {admin_username}...')
+        admin_role = Role.query.filter_by(name='admin').first()
         
 >>>>>>> 2f6e7cf (add first cycling integration for race calendar, teams, riders)
         # Check if user already exists
         existing_user = User.query.filter_by(username=admin_username).first()
         if existing_user:
-            log('   Admin user already exists, skipping')
+            # Idempotent self-heal: ensure role assignment exists on reruns.
+            if admin_role and not existing_user.has_role('admin'):
+                existing_user.roles.append(admin_role)
+                db.session.commit()
+                click.echo('   ✓ Existing admin user found; admin role reattached')
+            else:
+                click.echo('   ⚠ Admin user already exists, skipping')
         else:
             admin_user = User(
                 username=admin_username,
@@ -173,7 +180,6 @@ def initialize_database(log=None):
             admin_user.set_password(admin_password)
 
             # Assign admin role
-            admin_role = Role.query.filter_by(name='admin').first()
             if admin_role:
                 admin_user.roles.append(admin_role)
 
@@ -278,9 +284,9 @@ def _seed_roles(log=None):
         {'name': 'users', 'app_panel': 'admin', 'description': 'User management'},
         {'name': 'roles', 'app_panel': 'admin', 'description': 'Role management'},
         {'name': 'namespaces', 'app_panel': 'admin', 'description': 'Namespace management'},
-        {'name': 'riders', 'app_panel': 'stat_manager', 'description': 'Rider data'},
-        {'name': 'teams', 'app_panel': 'stat_manager', 'description': 'Team data'},
-        {'name': 'races', 'app_panel': 'stat_manager', 'description': 'Race data'},
+        {'name': 'riders', 'app_panel': 'admin', 'description': 'Rider data'},
+        {'name': 'teams', 'app_panel': 'admin', 'description': 'Team data'},
+        {'name': 'races', 'app_panel': 'admin', 'description': 'Race data'},
         {'name': 'stats', 'app_panel': 'stat_manager', 'description': 'Statistics'},
         {'name': 'photos', 'app_panel': 'photo_manager', 'description': 'Photo management'},
         {'name': 'palmares', 'app_panel': 'palmares_manager', 'description': 'Career achievements'},
