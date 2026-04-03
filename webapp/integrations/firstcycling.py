@@ -1,6 +1,7 @@
 """FirstCycling API integration client"""
 import json
 import os
+import re
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -11,6 +12,7 @@ from flask import current_app, has_app_context
 from webapp.extensions import db
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
+    FirstCyclingRaceResult,
     FirstCyclingRaceStage,
     FirstCyclingRider,
     FirstCyclingTeam,
@@ -25,9 +27,8 @@ class FirstCyclingAPIError(Exception):
 class FirstCyclingClient:
     """Abstraction for the FirstCycling API and persistence in main database"""
 
-    def __init__(self, db_session=None, base_url=None, api_path=None, default_year=2025, timeout_seconds=30):
+    def __init__(self, db_session=None, base_url=None, api_path=None, timeout_seconds=30):
         self.db_session = db_session or db.session
-        self.default_year = default_year
         self.timeout_seconds = timeout_seconds
 
         if has_app_context():
@@ -148,6 +149,52 @@ class FirstCyclingClient:
             return payload
         return []
 
+    def _extract_riders_result_rows(self, payload):
+        if not isinstance(payload, dict):
+            return {}
+
+        riders = payload.get('riders')
+        if isinstance(riders, dict):
+            return riders
+
+        info = payload.get('info')
+        if isinstance(info, dict):
+            info_riders = info.get('riders')
+            if isinstance(info_riders, dict):
+                return info_riders
+
+        return {}
+
+    def _parse_int(self, value):
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_is_still_in_race(self, value):
+        if isinstance(value, bool):
+            return value
+
+        marker = str(value or '').strip().upper()
+        if marker in ('Y', 'YES', 'TRUE', '1'):
+            return True
+        if marker in ('N', 'NO', 'FALSE', '0'):
+            return False
+
+        return None
+
+    def _stage_number_from_key(self, stage_key):
+        if not isinstance(stage_key, str):
+            return None
+
+        match = re.match(r'^stage-(\d+)$', stage_key.strip(), flags=re.IGNORECASE)
+        if not match:
+            return None
+
+        return self._parse_int(match.group(1))
+
     def _race_record_from_payload(self, race_id, season_year, payload,synced_at=None):
         if not isinstance(payload, dict):
             payload = {}
@@ -225,12 +272,14 @@ class FirstCyclingClient:
             'team_id': team_id,
             'team_year': description.get('teamYear'),
             'team_name': team_name,
+            'name': team_name,
             'nation_name': description.get('nationName'),
             'division': description.get('division'),
             'gender': description.get('gender'),
             'uci_code': description.get('uciCode'),
             'ranking_title': rankings.get('title') if isinstance(rankings, dict) else None,
             'ranking_rank': rankings.get('rank') if isinstance(rankings, dict) else None,
+            'source_endpoint': source_endpoint,
             'last_synced_at': synced_at,
             'updated_at': synced_at,
         }
@@ -244,6 +293,20 @@ class FirstCyclingClient:
         last_name = description.get('lastName')
         full_name = ' '.join(part for part in [first_name, last_name] if part).strip()
 
+        raw_team_id = team_data.get('teamId') if isinstance(team_data, dict) else None
+        if raw_team_id is None and isinstance(description, dict):
+            raw_team_id = description.get('teamId')
+        team_id = self._parse_int(raw_team_id)
+
+        team_name = None
+        if isinstance(team_data, dict):
+            team_name = team_data.get('teamName') or team_data.get('name')
+        elif isinstance(team_data, str):
+            team_name = team_data
+
+        if not team_name and isinstance(description, dict):
+            team_name = description.get('teamName')
+
         return {
             'rider_id': rider_id,
             'season_year': season_year,
@@ -253,9 +316,10 @@ class FirstCyclingClient:
             'height': description.get('height'),
             'birth_date': self._parse_date(description.get('birthDate')),
             'nation_name': description.get('nationName'),
-            'team_id': team_data.get('teamId') if isinstance(team_data, dict) else None,
-            'team_name': team_data.get('teamName') if isinstance(team_data, dict) else None,
+            'team_id': team_id,
+            'team_name': team_name,
             'name': full_name or self._extract_entity_name(payload),
+            'source_endpoint': source_endpoint,
             'last_synced_at': synced_at,
             'updated_at': synced_at,
         }
@@ -350,23 +414,35 @@ class FirstCyclingClient:
         rider.last_synced_at = normalized['last_synced_at']
         return rider
 
-    def get_race(self, race_id, season_year=None):
-        season_year = season_year or self.default_year
+    def get_race(self, race_id, season_year):
         endpoint = f'{season_year}/{race_id}.json'
         return self._fetch_json(endpoint)
 
-    def get_race_calendar(self, season_year=None):
-        season_year = season_year or self.default_year
+    def get_race_calendar(self, season_year):
         endpoint = f'{season_year}/raceCalendar.json'
         return self._fetch_json(endpoint)
 
-    def get_team_overview(self, season_year=None):
-        season_year = season_year or self.default_year
+    def get_team_overview(self, season_year, gender):
         endpoint = f'{season_year}/teamOverview.json'
-        return self._fetch_json(endpoint)
+        payload, source_endpoint = self._fetch_json(endpoint)
 
-    def get_rider_overview(self, season_year=None):
-        season_year = season_year or self.default_year
+        team_rows = self._extract_team_overview_rows(payload)
+        normalized_gender = str(gender).strip().lower()
+        filtered_rows = [
+            row
+            for row in team_rows
+            if isinstance(row, dict)
+            and str(row.get('gender', '')).strip().lower() == normalized_gender
+        ]
+
+        if isinstance(payload, dict):
+            filtered_payload = dict(payload)
+            filtered_payload['teams'] = filtered_rows
+            return filtered_payload, source_endpoint
+
+        return filtered_rows, source_endpoint
+
+    def get_rider_overview(self, season_year):
         endpoint = f'{season_year}/riderOverview.json'
         return self._fetch_json(endpoint)
 
@@ -433,7 +509,7 @@ class FirstCyclingClient:
         }
 
     def sync_teams(self, year, gender, limit=None, commit=True):
-        payload, source_endpoint = self.get_team_overview(season_year=year)
+        payload, source_endpoint = self.get_team_overview(season_year=year, gender=gender)
 
         team_rows = self._extract_team_overview_rows(payload)
         team_ids = []
@@ -555,7 +631,7 @@ class FirstCyclingClient:
             'failures': failures,
         }
 
-    def sync_latest_results(self, only_today=False, commit=True):
+    def sync_latest_results(self, season_year, only_today=False, commit=True):
         if only_today:
             payload, source_endpoint = self.get_latest_results_today()
             feed_name = 'latestResultsTODAY'
@@ -567,12 +643,177 @@ class FirstCyclingClient:
             feed_name=feed_name,
             payload=payload,
             source_endpoint=source_endpoint,
-            season_year=self.default_year,
+            season_year=season_year,
             commit=False,
         )
         if commit:
             self.db_session.commit()
         return snapshot
+
+    def sync_race_results(self, race_id, season_year, commit=True):
+        race_id = self._parse_int(race_id)
+        if race_id is None:
+            raise ValueError('race_id must be an integer')
+
+        payload, source_endpoint = self.get_race(race_id=race_id, season_year=season_year)
+        race_details = payload.get('info')
+
+        race = None
+        if race_details:
+            race = self._upsert_race(
+                race_id=race_id,
+                season_year=season_year,
+                payload=race_details,
+                source_endpoint=source_endpoint,
+            )
+            
+
+        if race is None:
+            if commit:
+                self.db_session.commit()
+            return {
+                'season_year': season_year,
+                'race_id': race_id,
+                'synced': 0,
+                'deleted_existing': 0,
+                'overall_results': 0,
+                'stage_results': 0,
+                'skipped_riders': 0,
+                'skipped_stage_rows': 0,
+                'skipped_non_road_race': True,
+            }
+
+        self.db_session.flush()
+
+        stage_rows = self.db_session.query(FirstCyclingRaceStage).filter_by(race_id=race.id).all()
+        stage_by_number = {
+            stage.stage_number: stage
+            for stage in stage_rows
+            if stage.stage_number is not None
+        }
+
+        deleted_existing = self.db_session.query(FirstCyclingRaceResult).filter_by(
+            race_id=race.id
+        ).delete(synchronize_session=False)
+
+        rider_rows = self._extract_riders_result_rows(payload)
+        results_to_insert = []
+        overall_results = 0
+        stage_results = 0
+        skipped_riders = 0
+        skipped_stage_rows = 0
+
+        for rider_key, rider_row in rider_rows.items():
+            if not isinstance(rider_row, dict):
+                skipped_riders += 1
+                continue
+
+            rider_id = self._parse_int(rider_row.get('id')) or self._parse_int(rider_key)
+            if rider_id is None:
+                skipped_riders += 1
+                continue
+
+            self._upsert_rider(
+                rider_id=rider_id,
+                payload=rider_row,
+                source_endpoint=source_endpoint,
+                season_year=season_year,
+            )
+
+            team_id = self._parse_int(rider_row.get('teamId'))
+            is_still_in_race = self._parse_is_still_in_race(rider_row.get('stillInTheRace'))
+
+            overall = rider_row.get('overall')
+            overall_position = None
+            overall_time = None
+            overall_time_seconds = None
+            if isinstance(overall, dict):
+                overall_position = self._parse_int(overall.get('position'))
+                overall_time = overall.get('time')
+                overall_time_seconds = self._parse_int(overall.get('timeSeconds'))
+
+            rider_stage_payloads = []
+            for stage_key, stage_payload in rider_row.items():
+                stage_number = self._stage_number_from_key(stage_key)
+                if stage_number is None or not isinstance(stage_payload, dict):
+                    continue
+
+                rider_stage_payloads.append((stage_number, stage_payload))
+
+            if not rider_stage_payloads:
+                results_to_insert.append(FirstCyclingRaceResult(
+                    race_id=race.id,
+                    stage_id=None,
+                    result_scope='race',
+                    rider_id=rider_id,
+                    team_id=team_id,
+                    overall_position=overall_position,
+                    overall_time=overall_time,
+                    overall_time_seconds=overall_time_seconds,
+                    stage_position=None,
+                    stage_time=None,
+                    stage_time_seconds=None,
+                    is_still_in_race=is_still_in_race,
+                ))
+                overall_results += 1
+                continue
+
+            for stage_number, stage_payload in rider_stage_payloads:
+
+                stage = stage_by_number.get(stage_number)
+                if stage is None:
+                    skipped_stage_rows += 1
+                    continue
+
+                stage_position = self._parse_int(stage_payload.get('stagePos'))
+                stage_time = stage_payload.get('stageTime')
+                stage_time_seconds = self._parse_int(stage_payload.get('stageTimeSeconds'))
+
+                row_overall_position = self._parse_int(stage_payload.get('overallPos'))
+                if row_overall_position is None:
+                    row_overall_position = overall_position
+
+                row_overall_time = stage_payload.get('overallTime')
+                if row_overall_time is None:
+                    row_overall_time = overall_time
+
+                row_overall_time_seconds = self._parse_int(stage_payload.get('overallTimeSeconds'))
+                if row_overall_time_seconds is None:
+                    row_overall_time_seconds = overall_time_seconds
+
+                results_to_insert.append(FirstCyclingRaceResult(
+                    race_id=race.id,
+                    stage_id=stage.id,
+                    result_scope='stage',
+                    rider_id=rider_id,
+                    team_id=team_id,
+                    overall_position=row_overall_position,
+                    overall_time=row_overall_time,
+                    overall_time_seconds=row_overall_time_seconds,
+                    stage_position=stage_position,
+                    stage_time=stage_time,
+                    stage_time_seconds=stage_time_seconds,
+                    is_still_in_race=is_still_in_race,
+                ))
+                stage_results += 1
+
+        if results_to_insert:
+            self.db_session.add_all(results_to_insert)
+
+        if commit:
+            self.db_session.commit()
+
+        return {
+            'season_year': season_year,
+            'race_id': race_id,
+            'synced': len(results_to_insert),
+            'deleted_existing': deleted_existing,
+            'overall_results': overall_results,
+            'stage_results': stage_results,
+            'skipped_riders': skipped_riders,
+            'skipped_stage_rows': skipped_stage_rows,
+            'skipped_non_road_race': False,
+        }
 
     def sync_season_roster(self, season_year, gender, commit=True):
         """Sync race calendar, teams, and riders for a season.
