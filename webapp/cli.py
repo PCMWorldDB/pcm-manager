@@ -3,13 +3,10 @@ import os
 import time
 import sqlite3
 import click
-<<<<<<< HEAD
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import OperationalError
-=======
 from flask import current_app
->>>>>>> 2f6e7cf (add first cycling integration for race calendar, teams, riders)
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
 from webapp.models import User, Role, Resource, Action, RolePermission, Namespace
@@ -26,6 +23,11 @@ def sync_firstcycling_seasons():
     """Ensure FirstCycling data exists for configured seasons/genders."""
     from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
     from webapp.models.main.firstcycling import FirstCyclingRace, FirstCyclingTeam, FirstCyclingRider
+
+    api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
+    if not api_path:
+        click.echo('   - FIRST_CYCLING_API_PATH not configured; skipping FirstCycling season sync check')
+        return
 
     seasons_config = current_app.config.get('SEASONS', []) or []
     if not seasons_config:
@@ -60,7 +62,11 @@ def sync_firstcycling_seasons():
             click.echo(f"   - Skipping invalid gender '{gender}'")
             continue
 
-        client = FirstCyclingClient()
+        try:
+            client = FirstCyclingClient(api_path=api_path)
+        except ValueError as exc:
+            click.echo(f'   - FirstCycling integration not configured: {exc}; skipping sync', err=True)
+            return
 
         race_query = FirstCyclingRace.query.filter_by(season_year=season_year, gender=gender)
         team_query = FirstCyclingTeam.query.filter_by(team_year=season_year, gender=gender)
@@ -71,7 +77,7 @@ def sync_firstcycling_seasons():
         if race_count > 0 and team_count > 0:
             click.echo(
                 f'   - FirstCycling data already present for season {season_year} [{gender}] '
-                f'(races={race_count}, teams={team_count}'
+                f'(races={race_count}, teams={team_count})'
             )
             continue
 
@@ -89,7 +95,7 @@ def sync_firstcycling_seasons():
             click.echo(
                 f"     ✓ Sync complete for {season_year} [{gender}] "
                 f"(races={summary['races']['synced']}, teams={summary['teams']['fetched']})"
-                f"riders={summary['riders']['fetched']})"
+                f", riders={summary['riders']['fetched']})"
             )
         except FirstCyclingAPIError as exc:
             click.echo(f'     ✗ FirstCycling sync failed for {season_year} [{gender}]: {exc}', err=True)
@@ -131,36 +137,23 @@ def initialize_database(log=None):
     log('   ✓ Database tables created')
 
     # Step 2: Seed roles
-<<<<<<< HEAD
     log('\n2. Seeding roles, resources, actions, and permissions...')
     _seed_roles(log=log)
     log('   ✓ Roles seeded')
 
-    # Step 3: Create admin user (if credentials provided via env vars)
-=======
-    click.echo('\n2. Seeding roles, resources, actions, and permissions...')
-    _seed_roles()
-    click.echo('   ✓ Roles seeded')
-    
     # Step 3: Ensure external FirstCycling season data exists for configured seasons/genders
-    click.echo('\n3. Syncing FirstCycling seasons...')
+    log('\n3. Syncing FirstCycling seasons...')
     sync_firstcycling_seasons()
-    click.echo('   ✓ FirstCycling season sync completed')
+    log('   ✓ FirstCycling season sync completed')
 
     # Step 4: Create admin user (if credentials provided via env vars)
->>>>>>> 2f6e7cf (add first cycling integration for race calendar, teams, riders)
     admin_username = os.getenv('ADMIN_USERNAME')
     admin_password = os.getenv('ADMIN_PASSWORD')
 
     if admin_username and admin_password:
-<<<<<<< HEAD
-        log(f'\n3. Creating admin user: {admin_username}...')
-
-=======
-        click.echo(f'\n4. Creating admin user: {admin_username}...')
+        log(f'\n4. Creating admin user: {admin_username}...')
         admin_role = Role.query.filter_by(name='admin').first()
-        
->>>>>>> 2f6e7cf (add first cycling integration for race calendar, teams, riders)
+
         # Check if user already exists
         existing_user = User.query.filter_by(username=admin_username).first()
         if existing_user:
@@ -168,9 +161,9 @@ def initialize_database(log=None):
             if admin_role and not existing_user.has_role('admin'):
                 existing_user.roles.append(admin_role)
                 db.session.commit()
-                click.echo('   ✓ Existing admin user found; admin role reattached')
+                log('   ✓ Existing admin user found; admin role reattached')
             else:
-                click.echo('   ⚠ Admin user already exists, skipping')
+                log('   ⚠ Admin user already exists, skipping')
         else:
             admin_user = User(
                 username=admin_username,
@@ -187,17 +180,10 @@ def initialize_database(log=None):
             db.session.commit()
             log(f'   ✓ Admin user created: {admin_username}')
     else:
-<<<<<<< HEAD
-        log('\n3. Skipping admin user creation (no credentials provided)')
+        log('\n4. Skipping admin user creation (no credentials provided)')
         log('   Use "flask create-admin" to create an admin user manually')
 
     log('\n=== Initialization Complete ===\n')
-=======
-        click.echo('\n4. Skipping admin user creation (no credentials provided)')
-        click.echo('   Use "flask create-admin" to create an admin user manually')
-    
-    click.echo('\n=== Initialization Complete ===\n')
->>>>>>> 2f6e7cf (add first cycling integration for race calendar, teams, riders)
 
 
 def _provision_main_database(log=None):

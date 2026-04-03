@@ -8,6 +8,8 @@ x-common-env: &common-env
   DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/main
   PROVISIONER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/postgres
   REDIS_URL: redis://cache:6379/0
+  FIRST_CYCLING_BASE_URL: ${FIRST_CYCLING_BASE_URL:-https://firstcycling.com}
+  FIRST_CYCLING_API_PATH: ${FIRST_CYCLING_API_PATH}
 
 x-common-depends: &common-depends
   database:
