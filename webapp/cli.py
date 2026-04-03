@@ -2,6 +2,7 @@
 import os
 import time
 import sqlite3
+from contextlib import contextmanager
 import click
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine.url import make_url
@@ -17,6 +18,43 @@ from webapp.config import (
     get_cdb_import_path
 )
 from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
+
+
+@contextmanager
+def _startup_init_lock(log=None):
+    """Use a PostgreSQL advisory lock to prevent concurrent startup initialization."""
+    if log is None:
+        log = lambda _: None
+
+    provisioner_url = os.getenv('PROVISIONER_DATABASE_URL')
+    engine = None
+    owns_engine = False
+
+    if provisioner_url:
+        engine = create_engine(provisioner_url)
+        owns_engine = True
+    else:
+        engine = db.engines.get('main') or db.engine
+
+    if engine.dialect.name != 'postgresql':
+        # Non-Postgres environments (e.g. tests) do not support advisory locks.
+        yield
+        return
+
+    lock_key = 792211001
+    conn = engine.connect()
+    try:
+        log('   Waiting for startup initialization lock...')
+        conn.execute(text('SELECT pg_advisory_lock(:lock_key)'), {'lock_key': lock_key})
+        log('   ✓ Startup initialization lock acquired')
+        yield
+    finally:
+        try:
+            conn.execute(text('SELECT pg_advisory_unlock(:lock_key)'), {'lock_key': lock_key})
+        finally:
+            conn.close()
+            if owns_engine:
+                engine.dispose()
 
 
 def sync_firstcycling_seasons():
@@ -117,71 +155,72 @@ def initialize_database(log=None):
 
     log('=== PCM Manager Database Initialization ===')
 
-    # Step 0: Provision database and required extension
-    log('\n0. Ensuring database and extensions are provisioned...')
-    _provision_main_database(log=log)
-    log('   ✓ Database provisioning complete')
+    with _startup_init_lock(log=log):
+        # Step 0: Provision database and required extension
+        log('\n0. Ensuring database and extensions are provisioned...')
+        _provision_main_database(log=log)
+        log('   ✓ Database provisioning complete')
 
-    # Step 1: Create tables
-    log('\n1. Creating database tables...')
-    db.create_all(bind_key='main')
+        # Step 1: Create tables
+        log('\n1. Creating database tables...')
+        db.create_all(bind_key='main')
 
-    # Create association tables using raw SQL (to avoid FK resolution issues)
-    from webapp.models.main.user import create_association_tables
-    create_association_tables()
+        # Create association tables using raw SQL (to avoid FK resolution issues)
+        from webapp.models.main.user import create_association_tables
+        create_association_tables()
 
-    # Configure User relationships AFTER all tables exist
-    from webapp.models.main.user import configure_user_relationships
-    configure_user_relationships()
+        # Configure User relationships AFTER all tables exist
+        from webapp.models.main.user import configure_user_relationships
+        configure_user_relationships()
 
-    log('   ✓ Database tables created')
+        log('   ✓ Database tables created')
 
-    # Step 2: Seed roles
-    log('\n2. Seeding roles, resources, actions, and permissions...')
-    _seed_roles(log=log)
-    log('   ✓ Roles seeded')
+        # Step 2: Seed roles
+        log('\n2. Seeding roles, resources, actions, and permissions...')
+        _seed_roles(log=log)
+        log('   ✓ Roles seeded')
 
-    # Step 3: Ensure external FirstCycling season data exists for configured seasons/genders
-    log('\n3. Syncing FirstCycling seasons...')
-    sync_firstcycling_seasons()
-    log('   ✓ FirstCycling season sync completed')
+        # Step 3: Ensure external FirstCycling season data exists for configured seasons/genders
+        log('\n3. Syncing FirstCycling seasons...')
+        sync_firstcycling_seasons()
+        log('   ✓ FirstCycling season sync completed')
 
-    # Step 4: Create admin user (if credentials provided via env vars)
-    admin_username = os.getenv('ADMIN_USERNAME')
-    admin_password = os.getenv('ADMIN_PASSWORD')
+        # Step 4: Create admin user (if credentials provided via env vars)
+        admin_username = os.getenv('ADMIN_USERNAME')
+        admin_password = os.getenv('ADMIN_PASSWORD')
 
-    if admin_username and admin_password:
-        log(f'\n4. Creating admin user: {admin_username}...')
-        admin_role = Role.query.filter_by(name='admin').first()
+        if admin_username and admin_password:
+            log(f'\n4. Creating admin user: {admin_username}...')
+            admin_role = Role.query.filter_by(name='admin').first()
 
-        # Check if user already exists
-        existing_user = User.query.filter_by(username=admin_username).first()
-        if existing_user:
-            # Idempotent self-heal: ensure role assignment exists on reruns.
-            if admin_role and not existing_user.has_role('admin'):
-                existing_user.roles.append(admin_role)
-                db.session.commit()
-                log('   ✓ Existing admin user found; admin role reattached')
+            # Check if user already exists
+            existing_user = User.query.filter_by(username=admin_username).first()
+            if existing_user:
+                # Idempotent self-heal: ensure role assignment exists on reruns.
+                if admin_role and not existing_user.has_role('admin'):
+                    existing_user.roles.append(admin_role)
+                    db.session.commit()
+                    log('   ✓ Existing admin user found; admin role reattached')
+                else:
+                    log('   ⚠ Admin user already exists, skipping')
             else:
-                log('   ⚠ Admin user already exists, skipping')
+                admin_user = User(
+                    username=admin_username,
+                    is_active=True,
+                    is_superadmin=True
+                )
+                admin_user.set_password(admin_password)
+
+                # Assign admin role
+                if admin_role:
+                    admin_user.roles.append(admin_role)
+
+                db.session.add(admin_user)
+                db.session.commit()
+                log(f'   ✓ Admin user created: {admin_username}')
         else:
-            admin_user = User(
-                username=admin_username,
-                is_active=True,
-                is_superadmin=True
-            )
-            admin_user.set_password(admin_password)
-
-            # Assign admin role
-            if admin_role:
-                admin_user.roles.append(admin_role)
-
-            db.session.add(admin_user)
-            db.session.commit()
-            log(f'   ✓ Admin user created: {admin_username}')
-    else:
-        log('\n4. Skipping admin user creation (no credentials provided)')
-        log('   Use "flask create-admin" to create an admin user manually')
+            log('\n4. Skipping admin user creation (no credentials provided)')
+            log('   Use "flask create-admin" to create an admin user manually')
 
     log('\n=== Initialization Complete ===\n')
 
