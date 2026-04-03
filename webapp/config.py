@@ -148,7 +148,7 @@ class Config:
     ]
 
     SEASONS = [
-        {'year': 2025, 'gender': 'Men'}
+        {'year': 2026, 'gender': 'Men', 'is_default': True}
     ]
 
 

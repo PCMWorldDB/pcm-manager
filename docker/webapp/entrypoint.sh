@@ -23,17 +23,10 @@ until pg_isready -h database -U ${POSTGRES_USER} > /dev/null 2>&1; do
 done
 echo "PostgreSQL server is ready!"
 
-# Check if database tables are initialized
-echo "Checking if database is initialized..."
-TABLE_EXISTS=$(PGPASSWORD=${POSTGRES_PASSWORD} psql -h database -U ${POSTGRES_USER} -d ${POSTGRES_DB} -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');")
-
-if [ "$TABLE_EXISTS" = "f" ]; then
-    echo "Database not initialized. Running init-db..."
-    flask init-db
-    echo "Database initialization complete!"
-else
-    echo "Database already initialized."
-fi
+# Always run init-db at startup. The command is designed to be idempotent.
+echo "Running idempotent database initialization..."
+flask init-db
+echo "Database initialization step complete!"
 
 # Execute the main command (flask run, celery worker, etc.)
 exec "$@"

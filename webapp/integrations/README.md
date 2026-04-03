@@ -16,6 +16,8 @@ This folder contains external integration clients used by the application.
 - Race details by race ID: `/{FIRST_CYCLING_API_PATH}/2025/{race-id}.json`
 - Rider details by rider ID: `/{FIRST_CYCLING_API_PATH}/riderData.php?id={rider-id}`
 - Team details by team ID: `/{FIRST_CYCLING_API_PATH}/teamData.php?id={team-id}`
+
+- THESE ENDPOINTS NOT WORKING
 - Latest results: `/{FIRST_CYCLING_API_PATH}/latestResults.php`
 - Latest results today: `/{FIRST_CYCLING_API_PATH}/latestResultsTODAY.php`
 

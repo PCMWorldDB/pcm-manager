@@ -58,9 +58,35 @@ class CDBCyclist(NamespaceBase):
         return f'<Cyclist {self.first_name} {self.last_name}>'
 
 
+class RaceResultDelta(NamespaceBase):
+    """Stat deltas captured from FirstCycling race result review workflow."""
+
+    __tablename__ = 'race_result_delta'
+
+    id = Column(Integer, primary_key=True)
+    first_cycling_race_id = Column(Integer, nullable=False, index=True)
+    first_cycling_stage_id = Column(Integer, nullable=False, default=0, index=True)
+    cyclist_pcm_id = Column(Integer, nullable=False, index=True)
+    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+    stat_name = Column(String(20), nullable=False, index=True)
+    original_value = Column(Integer, nullable=False)
+    final_value = Column(Integer, nullable=False)
+    delta_value = Column(Integer, nullable=False)
+
+    def __repr__(self):
+        return (
+            '<RaceResultDelta '
+            f'race={self.first_cycling_race_id} '
+            f'rider={self.first_cycling_rider_id} '
+            f'stat={self.stat_name} '
+            f'delta={self.delta_value}>'
+        )
+
+
 # List of all tables to create (in order)
 NAMESPACE_TABLES = [
     CDBCyclist,
+    RaceResultDelta,
 ]
 
 
