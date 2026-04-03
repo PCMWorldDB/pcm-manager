@@ -334,10 +334,13 @@ def _build_race_result_state(race):
 
 @web_bp.app_context_processor
 def inject_namespace_selector_context():
+    site_version = current_app.config.get('SITE_VERSION', 'Version ERROR')
+
     if not current_user.is_authenticated:
         return {
             'available_namespaces': [],
             'selected_namespace': None,
+            'site_version': site_version,
         }
 
     available_namespaces = _get_accessible_namespaces()
@@ -345,6 +348,7 @@ def inject_namespace_selector_context():
     return {
         'available_namespaces': available_namespaces,
         'selected_namespace': selected_namespace,
+        'site_version': site_version,
     }
 
 def admin_required(f):

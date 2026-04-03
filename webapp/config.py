@@ -133,6 +133,9 @@ class Config:
     
     # Security
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))
+
+    # Site metadata
+    SITE_VERSION = 'v0.1.0'
     
     # WTForms
     WTF_CSRF_ENABLED = True

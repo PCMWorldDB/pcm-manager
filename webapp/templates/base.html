@@ -297,6 +297,20 @@
             color: #856404;
             border: 1px solid #ffeaa7;
         }
+        .site-version {
+            position: fixed;
+            right: 16px;
+            bottom: 12px;
+            color: #6c757d;
+            font-size: 0.85rem;
+            line-height: 1;
+            z-index: 1030;
+            opacity: 0.9;
+            pointer-events: none;
+        }
+        body.dark-mode .site-version {
+            color: #9ca3af;
+        }
         {% block styles %}{% endblock %}
     </style>
 </head>
@@ -383,6 +397,10 @@
         {% endwith %}
 
         {% block content %}{% endblock %}
+    </div>
+
+    <div class="site-version">
+        PCM Manager{% if site_version %} | {{ site_version }}{% endif %}
     </div>
     
     <!-- Bootstrap 5 JS Bundle (includes Popper) -->
