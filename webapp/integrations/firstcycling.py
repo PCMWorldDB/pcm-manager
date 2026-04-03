@@ -39,7 +39,8 @@ class FirstCyclingClient:
             configured_api_path = os.getenv('FIRST_CYCLING_API_PATH')
 
         self.base_url = (base_url or configured_base_url).rstrip('/')
-        self.api_path = (api_path or configured_api_path).strip('/')
+        configured_api_path = api_path if api_path is not None else configured_api_path
+        self.api_path = str(configured_api_path or '').strip('/')
         if not self.api_path:
             raise ValueError('FIRST_CYCLING_API_PATH must be set in config or environment variables')
 

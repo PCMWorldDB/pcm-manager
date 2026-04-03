@@ -893,8 +893,8 @@ def stat_manager_get_result(race_pk):
         flash('Race season/gender mismatch for selected filters.', 'error')
         return redirect(url_for('web.stat_manager_race_detail', race_id=race.id))
 
-    client = FirstCyclingClient()
     try:
+        client = FirstCyclingClient()
         summary = client.sync_race_results(race_id=race.race_id, season_year=race.season_year, commit=True)
         flash(
             (
@@ -903,6 +903,8 @@ def stat_manager_get_result(race_pk):
             ),
             'success',
         )
+    except ValueError as exc:
+        flash(f'FirstCycling integration is not configured: {exc}', 'error')
     except FirstCyclingAPIError as exc:
         flash(f'Could not fetch FirstCycling results: {exc}', 'error')
     except Exception as exc:
