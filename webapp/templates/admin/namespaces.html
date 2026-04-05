@@ -5,24 +5,7 @@
 {% block content %}
 <div class="container mt-4">
     <div class="row">
-        <!-- Admin Navigation -->
-        <div class="col-md-3">
-            <div class="card">
-                <div class="card-header bg-dark text-white">
-                    <h5 class="mb-0">⚙️ Admin Panel</h5>
-                </div>
-                <div class="list-group list-group-flush">
-                    <a href="{{ url_for('web.admin_users') }}" 
-                       class="list-group-item list-group-item-action {% if active_section == 'users' %}active{% endif %}">
-                        👥 Users
-                    </a>
-                    <a href="{{ url_for('web.admin_namespaces') }}" 
-                       class="list-group-item list-group-item-action {% if active_section == 'namespaces' %}active{% endif %}">
-                        🗂️ Namespaces
-                    </a>
-                </div>
-            </div>
-        </div>
+        {% include 'admin/_admin_nav.html' %}
 
         <!-- Namespaces Content -->
         <div class="col-md-9">

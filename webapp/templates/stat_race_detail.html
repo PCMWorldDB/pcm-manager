@@ -375,13 +375,18 @@ body.dark-mode .race-title-link {
                         <th>Time</th>
                         <th class="stat-col">MO</th>
                         <th class="stat-col">MM</th>
+                        <th class="stat-col">DH</th>
                         <th class="stat-col">HIL</th>
                         <th class="stat-col">TT</th>
+                        <th class="stat-col">PRL</th>
+                        <th class="stat-col">FLA</th>
                         <th class="stat-col">SPR</th>
                         <th class="stat-col">ACC</th>
                         <th class="stat-col">END</th>
                         <th class="stat-col">RES</th>
                         <th class="stat-col">REC</th>
+                        <th class="stat-col">COB</th>
+                        <th class="stat-col">ATT</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -415,7 +420,7 @@ body.dark-mode .race-title-link {
                                 {{ result.overall_time or '-' }}
                             {% endif %}
                         </td>
-                        {% for stat_key in ['mo', 'mm', 'hil', 'tt', 'spr', 'acc', 'end', 'res', 'rec'] %}
+                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
                         {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                         {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
                         <td class="stat-cell stat-col">

@@ -31,7 +31,7 @@ def _startup_init_lock(log=None):
     owns_engine = False
 
     if provisioner_url:
-        engine = create_engine(provisioner_url)
+        engine = create_engine(provisioner_url, isolation_level='AUTOCOMMIT')
         owns_engine = True
     else:
         engine = db.engines.get('main') or db.engine
@@ -43,14 +43,21 @@ def _startup_init_lock(log=None):
 
     lock_key = 792211001
     conn = engine.connect()
+    lock_acquired = False
     try:
         log('   Waiting for startup initialization lock...')
         conn.execute(text('SELECT pg_advisory_lock(:lock_key)'), {'lock_key': lock_key})
+        lock_acquired = True
         log('   ✓ Startup initialization lock acquired')
         yield
     finally:
         try:
-            conn.execute(text('SELECT pg_advisory_unlock(:lock_key)'), {'lock_key': lock_key})
+            if lock_acquired:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                conn.execute(text('SELECT pg_advisory_unlock(:lock_key)'), {'lock_key': lock_key})
         finally:
             conn.close()
             if owns_engine:
@@ -180,17 +187,12 @@ def initialize_database(log=None):
         _seed_roles(log=log)
         log('   ✓ Roles seeded')
 
-        # Step 3: Ensure external FirstCycling season data exists for configured seasons/genders
-        log('\n3. Syncing FirstCycling seasons...')
-        sync_firstcycling_seasons()
-        log('   ✓ FirstCycling season sync completed')
-
-        # Step 4: Create admin user (if credentials provided via env vars)
+        # Step 3: Create admin user (if credentials provided via env vars)
         admin_username = os.getenv('ADMIN_USERNAME')
         admin_password = os.getenv('ADMIN_PASSWORD')
 
         if admin_username and admin_password:
-            log(f'\n4. Creating admin user: {admin_username}...')
+            log(f'\n3. Creating admin user: {admin_username}...')
             admin_role = Role.query.filter_by(name='admin').first()
 
             # Check if user already exists
@@ -219,7 +221,7 @@ def initialize_database(log=None):
                 db.session.commit()
                 log(f'   ✓ Admin user created: {admin_username}')
         else:
-            log('\n4. Skipping admin user creation (no credentials provided)')
+            log('\n3. Skipping admin user creation (no credentials provided)')
             log('   Use "flask create-admin" to create an admin user manually')
 
     log('\n=== Initialization Complete ===\n')
