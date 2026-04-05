@@ -91,7 +91,7 @@ class FirstCyclingClient:
             request_url,
             headers={
                 'Accept': 'application/json',
-                'User-Agent': 'pcm-manager-firstcycling-client/1.0',
+                'User-Agent': 'worlddb-firstcycling-client/1.0',
             },
         )
 

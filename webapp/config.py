@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 
+SITE_VERSION = 'v0.0.2'  # Update this as needed for new releases
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
@@ -135,7 +136,7 @@ class Config:
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))
 
     # Site metadata
-    SITE_VERSION = 'v0.1.0'
+    SITE_VERSION = SITE_VERSION
     
     # WTForms
     WTF_CSRF_ENABLED = True

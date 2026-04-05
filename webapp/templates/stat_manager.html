@@ -162,11 +162,11 @@ body.dark-mode .stage-row {
                         value="{{ selected_filters.start_date_to }}">
                 </div>
                 <div class="filter-item filter-item-checkbox">
-                    <label class="form-label" for="is_stage_race">Stage Race</label>
+                    <label class="form-label" for="is_stage_race">Race Type</label>
                     <select id="is_stage_race" name="is_stage_race" class="form-select">
                         <option value="" {% if not selected_filters.is_stage_race %}selected{% endif %}>All</option>
-                        <option value="true" {% if selected_filters.is_stage_race == 'true' %}selected{% endif %}>True</option>
-                        <option value="false" {% if selected_filters.is_stage_race == 'false' %}selected{% endif %}>False</option>
+                        <option value="false" {% if selected_filters.is_stage_race == 'false' %}selected{% endif %}>One Day</option>
+                        <option value="true" {% if selected_filters.is_stage_race == 'true' %}selected{% endif %}>Stage</option>
                     </select>
                 </div>
             </div>

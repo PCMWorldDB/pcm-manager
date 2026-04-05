@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from webapp.web import web_bp
 from webapp.web.forms import LoginForm, NamespaceForm, UserCreateForm, PasswordChangeForm, PasswordResetForm
-from webapp.models import User, Resource, Namespace, Role, Release, AuditLog, AuditAction, FirstCyclingRace
+from webapp.models import User, Resource, Namespace, Role, Release, AuditLog, AuditAction, FirstCyclingRace, ExternalSyncLog
 from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.extensions import db
@@ -20,7 +20,86 @@ from functools import wraps
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
-STAT_DELTA_FIELDS = ('mo', 'mm', 'hil', 'tt', 'spr', 'acc', 'end', 'res', 'rec')
+STAT_DELTA_FIELDS = (
+    'mo',
+    'mm',
+    'dh',
+    'hil',
+    'tt',
+    'prl',
+    'fla',
+    'spr',
+    'acc',
+    'end',
+    'res',
+    'rec',
+    'cob',
+    'att',
+)
+
+EXTERNAL_SYNC_VIEW_LABELS = {
+    'all': 'All Syncs',
+    'fc_race_calendar': 'FC Race Calendar',
+    'fc_teams': 'FC Teams',
+    'fc_riders': 'FC Riders',
+}
+
+EXTERNAL_SYNC_RUN_TYPES = ('fc_race_calendar', 'fc_teams')
+
+
+def _external_sync_type_display(sync_type):
+    return EXTERNAL_SYNC_VIEW_LABELS.get(sync_type, sync_type)
+
+
+def _record_external_sync_log(
+    *,
+    provider,
+    sync_type,
+    status,
+    executed_by_id,
+    season_year=None,
+    gender=None,
+    requested_count=None,
+    synced_count=None,
+    failed_count=None,
+    message=None,
+    details=None,
+):
+    details_json = None
+    if details is not None:
+        details_json = json.dumps(details)
+
+    row = ExternalSyncLog(
+        provider=provider,
+        sync_type=sync_type,
+        season_year=season_year,
+        gender=gender,
+        status=status,
+        requested_count=requested_count,
+        synced_count=synced_count,
+        failed_count=failed_count,
+        executed_by_id=executed_by_id,
+        message=message,
+        details_json=details_json,
+    )
+    db.session.add(row)
+    return row
+
+    
+def _resolve_external_sync_season(seasons, year_value, gender_value):
+    """Resolve selected season from params, falling back to configured default."""
+    if not seasons:
+        return None
+
+    selected_year = _safe_int(year_value)
+    selected_gender = (gender_value or '').strip()
+
+    if selected_year is not None and selected_gender:
+        for season in seasons:
+            if season['year'] == selected_year and season['gender'] == selected_gender:
+                return season
+
+    return _resolve_default_season(seasons)
 
 
 def _user_resources():
@@ -101,15 +180,20 @@ def _load_namespace_cyclist_stats(namespace, rider_ids):
                     """
                     SELECT
                         first_cycling_id,
-                        stat_mo,
-                        stat_mm,
-                        stat_hil,
-                        stat_tt,
-                        stat_spr,
-                        stat_acc,
-                        stat_end,
-                        stat_res,
-                        stat_rec
+                        COALESCE(stat_mo, 0) AS stat_mo,
+                        COALESCE(stat_mm, 0) AS stat_mm,
+                        COALESCE(stat_dh, 0) AS stat_dh,
+                        COALESCE(stat_hil, 0) AS stat_hil,
+                        COALESCE(stat_tt, 0) AS stat_tt,
+                        COALESCE(stat_prl, 0) AS stat_prl,
+                        COALESCE(stat_fla, 0) AS stat_fla,
+                        COALESCE(stat_spr, 0) AS stat_spr,
+                        COALESCE(stat_acc, 0) AS stat_acc,
+                        COALESCE(stat_end, 0) AS stat_end,
+                        COALESCE(stat_res, 0) AS stat_res,
+                        COALESCE(stat_rec, 0) AS stat_rec,
+                        COALESCE(stat_cob, 0) AS stat_cob,
+                        COALESCE(stat_att, 0) AS stat_att
                     FROM cdb_cyclist
                     WHERE first_cycling_id = ANY(:rider_ids)
                     """
@@ -127,13 +211,18 @@ def _load_namespace_cyclist_stats(namespace, rider_ids):
         stats_map[row['first_cycling_id']] = {
             'mo': row['stat_mo'],
             'mm': row['stat_mm'],
+            'dh': row['stat_dh'],
             'hil': row['stat_hil'],
             'tt': row['stat_tt'],
+            'prl': row['stat_prl'],
+            'fla': row['stat_fla'],
             'spr': row['stat_spr'],
             'acc': row['stat_acc'],
             'end': row['stat_end'],
             'res': row['stat_res'],
             'rec': row['stat_rec'],
+            'cob': row['stat_cob'],
+            'att': row['stat_att'],
         }
 
     return stats_map
@@ -500,6 +589,9 @@ def stat_manager():
     if not _can_access_panel('stat_manager'):
         abort(403)
 
+    default_category = 'ME'
+    default_classification = 'WorldTour'
+
     seasons = _load_config_seasons()
     selected_year = request.args.get('year', type=int)
     selected_gender = request.args.get('gender', type=str)
@@ -526,10 +618,13 @@ def stat_manager():
         'classifications': [],
     }
 
+    category_in_query = 'category' in request.args
+    classification_in_query = 'classification' in request.args
+
     selected_filters = {
         'race_name': request.args.get('race_name', type=str) or '',
-        'category': request.args.get('category', type=str) or '',
-        'classification': request.args.get('classification', type=str) or '',
+        'category': request.args.get('category', type=str) if category_in_query else default_category,
+        'classification': request.args.get('classification', type=str) if classification_in_query else default_classification,
         'start_date_from': request.args.get('start_date_from', type=str) or '',
         'start_date_to': request.args.get('start_date_to', type=str) or '',
         'is_stage_race': request.args.get('is_stage_race', type=str) or '',
@@ -554,6 +649,31 @@ def stat_manager():
             value for (value,) in base_query.with_entities(FirstCyclingRace.classification_label).distinct().order_by(FirstCyclingRace.classification_label).all()
             if value
         ]
+
+        # Apply configured defaults only when filters are missing from URL params,
+        # and map to existing option values for stable UI selection.
+        if not category_in_query and selected_filters['category']:
+            default_category_match = next(
+                (
+                    value
+                    for value in filter_choices['categories']
+                    if value.strip().lower() == selected_filters['category'].strip().lower()
+                ),
+                None,
+            )
+            selected_filters['category'] = default_category_match or ''
+
+        if not classification_in_query and selected_filters['classification']:
+            wanted = selected_filters['classification'].replace(' ', '').strip().lower()
+            default_classification_match = next(
+                (
+                    value
+                    for value in filter_choices['classifications']
+                    if value.replace(' ', '').strip().lower() == wanted
+                ),
+                None,
+            )
+            selected_filters['classification'] = default_classification_match or ''
 
         query = base_query.options(selectinload(FirstCyclingRace.race_stages))
 
@@ -794,6 +914,13 @@ def stat_manager_race_detail(race_id, stage_id=None):
             if final_value is None:
                 continue
             final_stats[stat_name] = final_value
+
+        # Keep a complete stat set for rendering/editing so every column shows a value.
+        for stat_name in STAT_DELTA_FIELDS:
+            if original_stats.get(stat_name) is None:
+                original_stats[stat_name] = 0
+            if final_stats.get(stat_name) is None:
+                final_stats[stat_name] = 0
 
         display_rows.append({
             'result': result,
@@ -1173,6 +1300,205 @@ def admin_namespaces():
     """Admin panel - Namespaces management"""
     namespaces = Namespace.query.order_by(Namespace.created_at.desc()).all()
     return render_template('admin/namespaces.html', namespaces=namespaces, active_section='namespaces')
+
+
+@web_bp.route('/admin/external-sync')
+@web_bp.route('/admin/external-sync/<sync_view>')
+@login_required
+@admin_required
+def admin_external_sync(sync_view='all'):
+    """Admin panel - External sync controls and history."""
+    if sync_view not in EXTERNAL_SYNC_VIEW_LABELS:
+        abort(404)
+
+    configured_seasons = _load_config_seasons()
+    selected_season = _resolve_external_sync_season(
+        configured_seasons,
+        request.args.get('year'),
+        request.args.get('gender'),
+    )
+
+    history_query = ExternalSyncLog.query
+    if selected_season is not None:
+        history_query = history_query.filter_by(
+            season_year=selected_season['year'],
+            gender=selected_season['gender'],
+        )
+    if sync_view != 'all':
+        history_query = history_query.filter_by(sync_type=sync_view)
+
+    sync_history = history_query.order_by(ExternalSyncLog.timestamp.desc()).limit(200).all()
+
+    latest_sync_by_type = {}
+    for sync_type in EXTERNAL_SYNC_VIEW_LABELS:
+        if sync_type == 'all':
+            continue
+        latest_query = ExternalSyncLog.query.filter_by(sync_type=sync_type)
+        if selected_season is not None:
+            latest_query = latest_query.filter_by(
+                season_year=selected_season['year'],
+                gender=selected_season['gender'],
+            )
+        latest_sync_by_type[sync_type] = latest_query.order_by(ExternalSyncLog.timestamp.desc()).first()
+
+    return render_template(
+        'admin/external_sync.html',
+        active_section='external_sync',
+        active_sync_view=sync_view,
+        sync_views=EXTERNAL_SYNC_VIEW_LABELS,
+        sync_history=sync_history,
+        latest_sync_by_type=latest_sync_by_type,
+        run_sync_types=EXTERNAL_SYNC_RUN_TYPES,
+        configured_seasons=configured_seasons,
+        selected_season=selected_season,
+        sync_type_display=_external_sync_type_display,
+    )
+
+
+@web_bp.route('/admin/external-sync/run', methods=['POST'])
+@login_required
+@admin_required
+def admin_external_sync_run():
+    """Run selected external sync jobs and write execution history."""
+    sync_type = (request.form.get('sync_type') or '').strip()
+    if sync_type not in EXTERNAL_SYNC_RUN_TYPES:
+        flash('Invalid sync type selected.', 'error')
+        return redirect(url_for('web.admin_external_sync', sync_view='all'))
+
+    seasons = _load_config_seasons()
+    if not seasons:
+        _record_external_sync_log(
+            provider='firstcycling',
+            sync_type=sync_type,
+            status='failed',
+            executed_by_id=current_user.id,
+            message='No valid seasons configured in SEASONS',
+        )
+        db.session.commit()
+        flash('No valid SEASONS entries are configured; sync was not started.', 'error')
+        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+
+    selected_season = _resolve_external_sync_season(
+        seasons,
+        request.form.get('year'),
+        request.form.get('gender'),
+    )
+    if selected_season is None:
+        flash('No season selected for sync execution.', 'error')
+        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+
+    selected_year = selected_season['year']
+    selected_gender = selected_season['gender']
+
+    api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
+    if not api_path:
+        _record_external_sync_log(
+            provider='firstcycling',
+            sync_type=sync_type,
+            status='failed',
+            executed_by_id=current_user.id,
+            message='FIRST_CYCLING_API_PATH is not configured',
+        )
+        db.session.commit()
+        flash('FIRST_CYCLING_API_PATH is not configured.', 'error')
+        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+
+    try:
+        client = FirstCyclingClient(api_path=api_path)
+    except ValueError as exc:
+        _record_external_sync_log(
+            provider='firstcycling',
+            sync_type=sync_type,
+            status='failed',
+            executed_by_id=current_user.id,
+            message=str(exc),
+        )
+        db.session.commit()
+        flash(f'Unable to start sync: {exc}', 'error')
+        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+
+    try:
+        if sync_type == 'fc_race_calendar':
+            summary = client.sync_race_calendar(year=selected_year, gender=selected_gender, commit=True)
+            requested_count = summary.get('requested')
+            synced_count = summary.get('synced')
+            failed_count = summary.get('skipped', 0)
+            status = 'success'
+            message = (
+                f"Race calendar synced for {selected_year} [{selected_gender}] "
+                f"({synced_count}/{requested_count})"
+            )
+        else:
+            summary = client.sync_teams(year=selected_year, gender=selected_gender, commit=True)
+            requested_count = summary.get('requested')
+            synced_count = summary.get('fetched')
+            failed_count = summary.get('failed', 0)
+            status = 'partial' if failed_count else 'success'
+            message = (
+                f"Teams synced for {selected_year} [{selected_gender}] "
+                f"({synced_count}/{requested_count}, failed={failed_count})"
+            )
+
+        _record_external_sync_log(
+            provider='firstcycling',
+            sync_type=sync_type,
+            status=status,
+            executed_by_id=current_user.id,
+            season_year=selected_year,
+            gender=selected_gender,
+            requested_count=requested_count,
+            synced_count=synced_count,
+            failed_count=failed_count,
+            message=message,
+            details=summary,
+        )
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception(
+            'External sync failed for type=%s season=%s gender=%s',
+            sync_type,
+            selected_year,
+            selected_gender,
+        )
+
+        _record_external_sync_log(
+            provider='firstcycling',
+            sync_type=sync_type,
+            status='failed',
+            executed_by_id=current_user.id,
+            season_year=selected_year,
+            gender=selected_gender,
+            message=str(exc),
+        )
+        db.session.commit()
+        flash(
+            f"{_external_sync_type_display(sync_type)} failed for {selected_year} [{selected_gender}].",
+            'error',
+        )
+        return redirect(
+            url_for(
+                'web.admin_external_sync',
+                sync_view=sync_type,
+                year=selected_year,
+                gender=selected_gender,
+            )
+        )
+
+    db.session.commit()
+
+    flash(
+        f"{_external_sync_type_display(sync_type)} run complete for {selected_year} [{selected_gender}] "
+        f"(status: {status}).",
+        'success' if status == 'success' else 'warning',
+    )
+    return redirect(
+        url_for(
+            'web.admin_external_sync',
+            sync_view=sync_type,
+            year=selected_year,
+            gender=selected_gender,
+        )
+    )
 
 
 @web_bp.route('/admin/namespaces/<int:namespace_id>')
