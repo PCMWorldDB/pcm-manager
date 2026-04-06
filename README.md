@@ -1,4 +1,4 @@
-# PCM Manager
+# WorldDB Online
 
 A Flask-based web application for managing Pro Cycling Manager (PCM) mod databases with multi-namespace architecture.
 

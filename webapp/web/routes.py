@@ -5,7 +5,7 @@ from datetime import datetime
 
 from flask import render_template, redirect, url_for, flash, request, abort, current_app, session
 from flask_login import login_user, logout_user, login_required, current_user
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, cast, Integer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -15,6 +15,7 @@ from webapp.models import User, Resource, Namespace, Role, Release, AuditLog, Au
 from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.extensions import db
+from webapp.tasks import run_external_sync_task
 from functools import wraps
 
 # Get logger for this module
@@ -37,18 +38,21 @@ STAT_DELTA_FIELDS = (
     'att',
 )
 
-EXTERNAL_SYNC_VIEW_LABELS = {
+STAT_MIN_VALUE = 50
+STAT_MAX_VALUE = 85
+
+EXTERNAL_SYNC_TYPE_LABELS = {
     'all': 'All Syncs',
-    'fc_race_calendar': 'FC Race Calendar',
+    'fc_race_calendar': 'Race Calendar',
     'fc_teams': 'FC Teams',
     'fc_riders': 'FC Riders',
 }
 
-EXTERNAL_SYNC_RUN_TYPES = ('fc_race_calendar', 'fc_teams')
+EXTERNAL_SYNC_RUN_TYPES = ('fc_race_calendar', 'fc_teams', 'fc_riders')
 
 
 def _external_sync_type_display(sync_type):
-    return EXTERNAL_SYNC_VIEW_LABELS.get(sync_type, sync_type)
+    return EXTERNAL_SYNC_TYPE_LABELS.get(sync_type, sync_type)
 
 
 def _record_external_sync_log(
@@ -128,6 +132,7 @@ def _get_panel_url(app_panel):
     panel_routes = {
         'stat_manager': 'web.stat_manager',
         'release_manager': 'web.release_manager',
+        'team_manager': 'web.team_manager',
     }
 
     endpoint = panel_routes.get(app_panel)
@@ -282,6 +287,147 @@ def _load_namespace_race_result_deltas(namespace, first_cycling_race_id, first_c
     return delta_map
 
 
+def _load_namespace_race_delta_status(namespace, first_cycling_race_ids):
+    """Load race-level delta/approval aggregates keyed by FirstCycling race_id."""
+    if namespace is None or not first_cycling_race_ids:
+        return {}
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        _ensure_race_result_delta_table(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        first_cycling_race_id,
+                        COUNT(*) AS total_changes,
+                        SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
+                    FROM race_result_delta
+                    WHERE first_cycling_race_id = ANY(:race_ids)
+                    GROUP BY first_cycling_race_id
+                    """
+                ),
+                {'race_ids': list(first_cycling_race_ids)},
+            ).mappings().all()
+    except Exception:
+        logger.exception('Failed to load race delta status from namespace %s', namespace.slug)
+        return {}
+    finally:
+        engine.dispose()
+
+    status_map = {}
+    for row in rows:
+        race_id = row['first_cycling_race_id']
+        total_changes = row['total_changes'] or 0
+        approved_changes = row['approved_changes'] or 0
+        status_map[race_id] = {
+            'total_changes': int(total_changes),
+            'approved_changes': int(approved_changes),
+        }
+
+    return status_map
+
+
+def _load_namespace_stage_delta_status(namespace, first_cycling_race_ids):
+    """Load stage-level delta/approval aggregates keyed by FirstCycling stage_id."""
+    if namespace is None or not first_cycling_race_ids:
+        return {}
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        _ensure_race_result_delta_table(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        first_cycling_stage_id,
+                        COUNT(*) AS total_changes,
+                        SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
+                    FROM race_result_delta
+                    WHERE first_cycling_race_id = ANY(:race_ids)
+                      AND first_cycling_stage_id > 0
+                    GROUP BY first_cycling_stage_id
+                    """
+                ),
+                {'race_ids': list(first_cycling_race_ids)},
+            ).mappings().all()
+    except Exception:
+        logger.exception('Failed to load stage delta status from namespace %s', namespace.slug)
+        return {}
+    finally:
+        engine.dispose()
+
+    status_map = {}
+    for row in rows:
+        stage_id = row['first_cycling_stage_id']
+        if stage_id is None:
+            continue
+
+        total_changes = row['total_changes'] or 0
+        approved_changes = row['approved_changes'] or 0
+        status_map[int(stage_id)] = {
+            'total_changes': int(total_changes),
+            'approved_changes': int(approved_changes),
+        }
+
+    return status_map
+
+
+def _load_namespace_scope_delta_status(namespace, first_cycling_race_id, first_cycling_stage_id):
+    """Load aggregate delta status for one race/stage scope."""
+    if namespace is None or first_cycling_race_id is None or first_cycling_stage_id is None:
+        return {
+            'total_changes': 0,
+            'approved_changes': 0,
+            'unapproved_changes': 0,
+        }
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        _ensure_race_result_delta_table(engine)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) AS total_changes,
+                        SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
+                    FROM race_result_delta
+                    WHERE first_cycling_race_id = :race_id
+                      AND first_cycling_stage_id = :stage_id
+                    """
+                ),
+                {
+                    'race_id': first_cycling_race_id,
+                    'stage_id': first_cycling_stage_id,
+                },
+            ).mappings().first()
+    except Exception:
+        logger.exception('Failed to load scope delta status from namespace %s', namespace.slug)
+        return {
+            'total_changes': 0,
+            'approved_changes': 0,
+            'unapproved_changes': 0,
+        }
+    finally:
+        engine.dispose()
+
+    total_changes = int((row or {}).get('total_changes') or 0)
+    approved_changes = int((row or {}).get('approved_changes') or 0)
+    unapproved_changes = max(total_changes - approved_changes, 0)
+
+    return {
+        'total_changes': total_changes,
+        'approved_changes': approved_changes,
+        'unapproved_changes': unapproved_changes,
+    }
+
+
 def _safe_int(value):
     try:
         return int(value)
@@ -304,6 +450,7 @@ def _ensure_race_result_delta_table(engine):
                 original_value INTEGER NOT NULL,
                 final_value INTEGER NOT NULL,
                 delta_value INTEGER NOT NULL,
+                is_approved BOOLEAN NOT NULL DEFAULT FALSE,
                 UNIQUE (first_cycling_race_id, first_cycling_stage_id, cyclist_pcm_id, first_cycling_rider_id, stat_name)
             )
             """
@@ -312,6 +459,12 @@ def _ensure_race_result_delta_table(engine):
             """
             ALTER TABLE race_result_delta
             ADD COLUMN IF NOT EXISTS first_cycling_stage_id INTEGER NOT NULL DEFAULT 0
+            """
+        ))
+        conn.execute(text(
+            """
+            ALTER TABLE race_result_delta
+            ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT FALSE
             """
         ))
         conn.execute(text(
@@ -552,16 +705,22 @@ def dashboard():
         # Skip admin panel - it's now in settings dropdown
         if panel == 'admin':
             continue
+
+        resource_description = (resource.description or '').strip()
+        fallback_description = f'Manage and view {panel.replace("_", " ")}'
             
         if panel not in app_panels:
             app_panels[panel] = {
                 'name': panel,
                 'display_name': panel.replace('_', ' ').title(),
-                'description': f'Manage and view {panel.replace("_", " ")}',
+                'description': resource_description or fallback_description,
                 'icon': get_app_icon(panel),
                 'url': _get_panel_url(panel),
                 'resources': []
             }
+        elif resource_description and app_panels[panel]['description'] == fallback_description:
+            # Prefer seeded resource descriptions over generated fallback text.
+            app_panels[panel]['description'] = resource_description
         app_panels[panel]['resources'].append(resource.name)
     
     # Convert to list for template
@@ -575,11 +734,115 @@ def get_app_icon(app_panel):
     icons = {
         'admin': '⚙️',
         'stat_manager': '📊',
+        'team_manager': '👥',
         'photo_manager': '📷',
         'palmares_manager': '🏆',
         'release_manager': '📦',
     }
     return icons.get(app_panel, '📁')
+
+
+@web_bp.route('/team-manager')
+@login_required
+def team_manager():
+    """Team manager panel."""
+    if not _can_access_panel('team_manager'):
+        abort(403)
+
+    seasons = _load_config_seasons()
+    selected_year = request.args.get('year', type=int)
+    selected_gender = request.args.get('gender', type=str)
+    if selected_gender is not None:
+        selected_gender = selected_gender.strip()
+
+    if selected_year is None or not selected_gender:
+        default_season = _resolve_default_season(seasons)
+        if default_season:
+            selected_year = default_season['year']
+            selected_gender = default_season['gender']
+
+    season_selected = (
+        selected_year is not None
+        and isinstance(selected_gender, str)
+        and selected_gender != ''
+        and any(item['year'] == selected_year and item['gender'] == selected_gender for item in seasons)
+    )
+
+    division_options = []
+    teams = []
+
+    division_in_query = 'division' in request.args
+    selected_division = request.args.get('division', type=str) if division_in_query else ''
+    if selected_division is None:
+        selected_division = ''
+    selected_division = selected_division.strip()
+
+    if season_selected:
+        base_query = FirstCyclingTeam.query.filter_by(
+            team_year=selected_year,
+            gender=selected_gender,
+        )
+
+        division_options = [
+            value
+            for (value,) in base_query.with_entities(FirstCyclingTeam.division)
+            .filter(FirstCyclingTeam.division.isnot(None))
+            .distinct()
+            .order_by(FirstCyclingTeam.division.asc())
+            .all()
+            if value
+        ]
+
+        if selected_division and selected_division not in division_options:
+            selected_division = ''
+
+        teams_query = base_query
+        if selected_division:
+            teams_query = teams_query.filter(FirstCyclingTeam.division == selected_division)
+
+        teams = teams_query.order_by(
+            cast(FirstCyclingTeam.ranking_rank, Integer).asc().nullslast(),
+            FirstCyclingTeam.team_name.asc().nullslast(),
+            FirstCyclingTeam.team_id.asc(),
+        ).all()
+
+    return render_template(
+        'team_manager.html',
+        seasons=seasons,
+        selected_year=selected_year,
+        selected_gender=selected_gender,
+        season_selected=season_selected,
+        teams=teams,
+        division_options=division_options,
+        selected_division=selected_division,
+    )
+
+
+@web_bp.route('/team-manager/<int:team_id>')
+@login_required
+def team_manager_team_detail(team_id):
+    """Team manager detail page by FirstCycling team_id."""
+    if not _can_access_panel('team_manager'):
+        abort(403)
+
+    team = FirstCyclingTeam.query.filter_by(team_id=team_id).first_or_404()
+    riders = FirstCyclingRider.query.filter_by(team_id=team_id).order_by(
+        FirstCyclingRider.last_name.asc().nullslast(),
+        FirstCyclingRider.first_name.asc().nullslast(),
+        FirstCyclingRider.name.asc().nullslast(),
+        FirstCyclingRider.rider_id.asc(),
+    ).all()
+
+    return render_template(
+        'team_manager_detail.html',
+        team=team,
+        riders=riders,
+        back_params={
+            'year': request.args.get('year', type=int),
+            'gender': request.args.get('gender', type=str) or '',
+            'division': request.args.get('division', type=str) or '',
+        },
+    )
 
 
 @web_bp.route('/stat-manager')
@@ -613,6 +876,8 @@ def stat_manager():
     )
 
     races = []
+    race_status_map = {}
+    stage_status_map = {}
     filter_choices = {
         'categories': [],
         'classifications': [],
@@ -712,6 +977,55 @@ def stat_manager():
             FirstCyclingRace.name.asc(),
         ).all()
 
+        available_namespaces = _get_accessible_namespaces()
+        selected_namespace = _get_selected_namespace(available_namespaces)
+
+        race_ids = {
+            race.race_id
+            for race in races
+            if race.race_id is not None
+        }
+        race_delta_status = _load_namespace_race_delta_status(selected_namespace, race_ids)
+        stage_delta_status = _load_namespace_stage_delta_status(selected_namespace, race_ids)
+
+        for race in races:
+            result_state = _build_race_result_state(race)
+            delta_state = race_delta_status.get(race.race_id) or {
+                'total_changes': 0,
+                'approved_changes': 0,
+            }
+
+            has_changes = delta_state['total_changes'] > 0
+            all_approved = has_changes and delta_state['approved_changes'] == delta_state['total_changes']
+
+            race_status_map[race.id] = {
+                'is_result_downloaded': result_state['is_result_saved'],
+                'has_stat_changes': has_changes,
+                'is_approved': all_approved,
+                'has_namespace': selected_namespace is not None,
+            }
+
+            for stage in race.race_stages:
+                stage_lookup_id = _safe_int(stage.id)
+                if stage_lookup_id is None:
+                    continue
+
+                stage_delta_state = stage_delta_status.get(stage_lookup_id) or {
+                    'total_changes': 0,
+                    'approved_changes': 0,
+                }
+                stage_has_changes = stage_delta_state['total_changes'] > 0
+                stage_all_approved = (
+                    stage_has_changes
+                    and stage_delta_state['approved_changes'] == stage_delta_state['total_changes']
+                )
+
+                stage_status_map[stage.id] = {
+                    'has_stat_changes': stage_has_changes,
+                    'is_approved': stage_all_approved,
+                    'has_namespace': selected_namespace is not None,
+                }
+
     return render_template(
         'stat_manager.html',
         seasons=seasons,
@@ -719,6 +1033,8 @@ def stat_manager():
         selected_gender=selected_gender,
         season_selected=season_selected,
         races=races,
+        race_status_map=race_status_map,
+        stage_status_map=stage_status_map,
         filter_choices=filter_choices,
         selected_filters=selected_filters,
     )
@@ -888,8 +1204,26 @@ def stat_manager_race_detail(race_id, stage_id=None):
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
+    stage_status_map = {}
+    if selected_namespace is not None and race.race_id is not None:
+        raw_stage_status = _load_namespace_stage_delta_status(selected_namespace, {race.race_id})
+        for stage in stage_rows:
+            if stage.id is None:
+                continue
+            delta_state = raw_stage_status.get(stage.id) or {
+                'total_changes': 0,
+                'approved_changes': 0,
+            }
+            has_changes = delta_state['total_changes'] > 0
+            is_approved = has_changes and delta_state['approved_changes'] == delta_state['total_changes']
+            stage_status_map[stage.id] = {
+                'has_stat_changes': has_changes,
+                'is_approved': is_approved,
+            }
+
     rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, rider_ids)
     stage_scope_id = selected_stage.id if selected_stage is not None else 0
+    scope_delta_status = _load_namespace_scope_delta_status(selected_namespace, race.race_id, stage_scope_id)
     rider_delta_map = _load_namespace_race_result_deltas(selected_namespace, race.race_id, stage_scope_id, rider_ids)
     delta_change_count = sum(len(changes) for changes in rider_delta_map.values())
 
@@ -906,25 +1240,31 @@ def stat_manager_race_detail(race_id, stage_id=None):
                 part for part in [rider.first_name, rider.last_name] if part
             ).strip() or rider_name
 
-        base_stats = rider_stats_map.get(result.rider_id) or {}
-        original_stats = dict(base_stats)
-        final_stats = dict(base_stats)
-        for stat_name, delta_info in (rider_delta_map.get(result.rider_id) or {}).items():
-            final_value = delta_info.get('final_value')
-            if final_value is None:
-                continue
-            final_stats[stat_name] = final_value
+        rider_in_namespace = result.rider_id in rider_stats_map
+        if rider_in_namespace:
+            base_stats = rider_stats_map.get(result.rider_id) or {}
+            original_stats = dict(base_stats)
+            final_stats = dict(base_stats)
+            for stat_name, delta_info in (rider_delta_map.get(result.rider_id) or {}).items():
+                final_value = delta_info.get('final_value')
+                if final_value is None:
+                    continue
+                final_stats[stat_name] = final_value
 
-        # Keep a complete stat set for rendering/editing so every column shows a value.
-        for stat_name in STAT_DELTA_FIELDS:
-            if original_stats.get(stat_name) is None:
-                original_stats[stat_name] = 0
-            if final_stats.get(stat_name) is None:
-                final_stats[stat_name] = 0
+            # Keep a complete stat set for rendering/editing so every column shows a value.
+            for stat_name in STAT_DELTA_FIELDS:
+                if original_stats.get(stat_name) is None:
+                    original_stats[stat_name] = 0
+                if final_stats.get(stat_name) is None:
+                    final_stats[stat_name] = 0
+        else:
+            original_stats = {}
+            final_stats = {}
 
         display_rows.append({
             'result': result,
             'rider_name': rider_name,
+            'rider_in_namespace': rider_in_namespace,
             'team_name': team.team_name if team is not None else (rider.team_name if rider is not None and rider.team_name else '-'),
             'stats': final_stats,
             'original_stats': original_stats,
@@ -956,6 +1296,8 @@ def stat_manager_race_detail(race_id, stage_id=None):
         result_title=result_title,
         result_state=result_state,
         delta_change_count=delta_change_count,
+        scope_delta_status=scope_delta_status,
+        stage_status_map=stage_status_map,
         selected_namespace=selected_namespace,
         back_params={
             'year': request.args.get('year', type=int),
@@ -1182,6 +1524,8 @@ def stat_manager_save_stat_deltas(race_pk):
                     or stat_name not in STAT_DELTA_FIELDS
                     or original_value is None
                     or final_value is None
+                    or final_value < STAT_MIN_VALUE
+                    or final_value > STAT_MAX_VALUE
                 ):
                     skipped_count += 1
                     continue
@@ -1241,7 +1585,8 @@ def stat_manager_save_stat_deltas(race_pk):
                         DO UPDATE SET
                             original_value = EXCLUDED.original_value,
                             final_value = EXCLUDED.final_value,
-                            delta_value = EXCLUDED.delta_value
+                            delta_value = EXCLUDED.delta_value,
+                            is_approved = FALSE
                         """
                     ),
                     {
@@ -1270,6 +1615,88 @@ def stat_manager_save_stat_deltas(race_pk):
         flash('Failed to save stat delta changes.', 'error')
     finally:
         engine.dispose()
+
+    return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+
+@web_bp.route('/stat-manager/races/<int:race_pk>/approve-stat-deltas', methods=['POST'])
+@login_required
+def stat_manager_approve_stat_deltas(race_pk):
+    """Mark saved stat deltas as approved for this race or selected stage scope."""
+    if not _can_access_panel('stat_manager'):
+        abort(403)
+
+    race = FirstCyclingRace.query.get_or_404(race_pk)
+
+    selected_year = request.form.get('year', type=int)
+    selected_gender = request.form.get('gender', type=str)
+    category = request.form.get('category', type=str) or ''
+    race_name = request.form.get('race_name', type=str) or ''
+    classification = request.form.get('classification', type=str) or ''
+    start_date_from = request.form.get('start_date_from', type=str) or ''
+    start_date_to = request.form.get('start_date_to', type=str) or ''
+    is_stage_race_filter = request.form.get('is_stage_race', type=str) or ''
+    stage_id = request.form.get('stage_id', type=int)
+    stage_scope_id = stage_id if stage_id is not None else 0
+
+    if selected_gender is not None:
+        selected_gender = selected_gender.strip()
+    if selected_year is None:
+        selected_year = race.season_year
+    if not selected_gender:
+        selected_gender = race.gender
+
+    redirect_target = {
+        'race_id': race.id,
+        'year': selected_year,
+        'gender': selected_gender,
+        'race_name': race_name,
+        'category': category,
+        'classification': classification,
+        'start_date_from': start_date_from,
+        'start_date_to': start_date_to,
+        'is_stage_race': is_stage_race_filter,
+    }
+    if stage_id is not None:
+        redirect_target['stage_id'] = stage_id
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    if selected_namespace is None:
+        flash('Select a namespace before approving stat changes.', 'warning')
+        return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
+
+    connection_string = selected_namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        _ensure_race_result_delta_table(engine)
+        with engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    """
+                    UPDATE race_result_delta
+                    SET is_approved = TRUE
+                    WHERE first_cycling_race_id = :race_id
+                      AND first_cycling_stage_id = :stage_id
+                      AND is_approved = FALSE
+                    """
+                ),
+                {
+                    'race_id': race.race_id,
+                    'stage_id': stage_scope_id,
+                },
+            )
+        approved_count = result.rowcount or 0
+    except Exception:
+        logger.exception('Failed to approve stat deltas for race %s (stage=%s)', race.race_id, stage_scope_id)
+        flash('Failed to approve stat changes.', 'error')
+    finally:
+        engine.dispose()
+
+    if approved_count > 0:
+        flash(f'Approved {approved_count} stat delta change(s).', 'success')
+    else:
+        flash('No pending stat delta changes to approve.', 'info')
 
     return redirect(url_for('web.stat_manager_race_detail', **redirect_target))
 
@@ -1308,7 +1735,7 @@ def admin_namespaces():
 @admin_required
 def admin_external_sync(sync_view='all'):
     """Admin panel - External sync controls and history."""
-    if sync_view not in EXTERNAL_SYNC_VIEW_LABELS:
+    if sync_view not in EXTERNAL_SYNC_TYPE_LABELS:
         abort(404)
 
     configured_seasons = _load_config_seasons()
@@ -1328,30 +1755,19 @@ def admin_external_sync(sync_view='all'):
         history_query = history_query.filter_by(sync_type=sync_view)
 
     sync_history = history_query.order_by(ExternalSyncLog.timestamp.desc()).limit(200).all()
-
-    latest_sync_by_type = {}
-    for sync_type in EXTERNAL_SYNC_VIEW_LABELS:
-        if sync_type == 'all':
-            continue
-        latest_query = ExternalSyncLog.query.filter_by(sync_type=sync_type)
-        if selected_season is not None:
-            latest_query = latest_query.filter_by(
-                season_year=selected_season['year'],
-                gender=selected_season['gender'],
-            )
-        latest_sync_by_type[sync_type] = latest_query.order_by(ExternalSyncLog.timestamp.desc()).first()
+    has_running_sync = any(log.status in ('queued', 'running') for log in sync_history)
 
     return render_template(
         'admin/external_sync.html',
         active_section='external_sync',
         active_sync_view=sync_view,
-        sync_views=EXTERNAL_SYNC_VIEW_LABELS,
-        sync_history=sync_history,
-        latest_sync_by_type=latest_sync_by_type,
+        sync_views=EXTERNAL_SYNC_TYPE_LABELS,
         run_sync_types=EXTERNAL_SYNC_RUN_TYPES,
+        sync_history=sync_history,
         configured_seasons=configured_seasons,
         selected_season=selected_season,
         sync_type_display=_external_sync_type_display,
+        has_running_sync=has_running_sync,
     )
 
 
@@ -1359,11 +1775,13 @@ def admin_external_sync(sync_view='all'):
 @login_required
 @admin_required
 def admin_external_sync_run():
-    """Run selected external sync jobs and write execution history."""
+    """Queue one external sync type job and write execution history."""
     sync_type = (request.form.get('sync_type') or '').strip()
     if sync_type not in EXTERNAL_SYNC_RUN_TYPES:
         flash('Invalid sync type selected.', 'error')
         return redirect(url_for('web.admin_external_sync', sync_view='all'))
+    sync_log = None
+    sync_log_id = None
 
     seasons = _load_config_seasons()
     if not seasons:
@@ -1403,54 +1821,25 @@ def admin_external_sync_run():
         flash('FIRST_CYCLING_API_PATH is not configured.', 'error')
         return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
 
-    try:
-        client = FirstCyclingClient(api_path=api_path)
-    except ValueError as exc:
-        _record_external_sync_log(
-            provider='firstcycling',
-            sync_type=sync_type,
-            status='failed',
-            executed_by_id=current_user.id,
-            message=str(exc),
-        )
-        db.session.commit()
-        flash(f'Unable to start sync: {exc}', 'error')
-        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+    sync_log = _record_external_sync_log(
+        provider='firstcycling',
+        sync_type=sync_type,
+        status='queued',
+        executed_by_id=current_user.id,
+        season_year=selected_year,
+        gender=selected_gender,
+        message=f'Queued {_external_sync_type_display(sync_type)} for {selected_year} [{selected_gender}]',
+    )
+    db.session.commit()
+    sync_log_id = sync_log.id
 
     try:
-        if sync_type == 'fc_race_calendar':
-            summary = client.sync_race_calendar(year=selected_year, gender=selected_gender, commit=True)
-            requested_count = summary.get('requested')
-            synced_count = summary.get('synced')
-            failed_count = summary.get('skipped', 0)
-            status = 'success'
-            message = (
-                f"Race calendar synced for {selected_year} [{selected_gender}] "
-                f"({synced_count}/{requested_count})"
-            )
-        else:
-            summary = client.sync_teams(year=selected_year, gender=selected_gender, commit=True)
-            requested_count = summary.get('requested')
-            synced_count = summary.get('fetched')
-            failed_count = summary.get('failed', 0)
-            status = 'partial' if failed_count else 'success'
-            message = (
-                f"Teams synced for {selected_year} [{selected_gender}] "
-                f"({synced_count}/{requested_count}, failed={failed_count})"
-            )
-
-        _record_external_sync_log(
-            provider='firstcycling',
+        run_external_sync_task.delay(
+            log_id=sync_log_id,
             sync_type=sync_type,
-            status=status,
-            executed_by_id=current_user.id,
             season_year=selected_year,
             gender=selected_gender,
-            requested_count=requested_count,
-            synced_count=synced_count,
-            failed_count=failed_count,
-            message=message,
-            details=summary,
+            api_path=api_path,
         )
     except Exception as exc:
         db.session.rollback()
@@ -1461,15 +1850,22 @@ def admin_external_sync_run():
             selected_gender,
         )
 
-        _record_external_sync_log(
-            provider='firstcycling',
-            sync_type=sync_type,
-            status='failed',
-            executed_by_id=current_user.id,
-            season_year=selected_year,
-            gender=selected_gender,
-            message=str(exc),
-        )
+        if sync_log_id is not None:
+            failed_log = ExternalSyncLog.query.get(sync_log_id)
+            if failed_log is not None:
+                failed_log.status = 'failed'
+                failed_log.message = str(exc)
+                failed_log.failed_count = 1
+        else:
+            _record_external_sync_log(
+                provider='firstcycling',
+                sync_type=sync_type,
+                status='failed',
+                executed_by_id=current_user.id,
+                season_year=selected_year,
+                gender=selected_gender,
+                message=str(exc),
+            )
         db.session.commit()
         flash(
             f"{_external_sync_type_display(sync_type)} failed for {selected_year} [{selected_gender}].",
@@ -1487,9 +1883,9 @@ def admin_external_sync_run():
     db.session.commit()
 
     flash(
-        f"{_external_sync_type_display(sync_type)} run complete for {selected_year} [{selected_gender}] "
-        f"(status: {status}).",
-        'success' if status == 'success' else 'warning',
+        f"{_external_sync_type_display(sync_type)} queued for {selected_year} [{selected_gender}]. "
+        'Progress will appear in sync history.',
+        'info',
     )
     return redirect(
         url_for(

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Stats Manager - PCM Manager{% endblock %}
+{% block title %}Stats Manager - WorldDB Online{% endblock %}
 
 {% block styles %}
 body > .container {
@@ -191,6 +191,7 @@ body.dark-mode .stage-row {
                 <thead>
                     <tr>
                         <th style="width: 110px;">Stages</th>
+                        <th style="width: 140px;">Status</th>
                         <th>Name</th>
                         <th>Category</th>
                         <th>Classification</th>
@@ -201,6 +202,7 @@ body.dark-mode .stage-row {
                     {% for race in races %}
                     {% set stage_rows = race.race_stages | sort(attribute='stage_number') %}
                     {% set has_stages = stage_rows|length > 0 %}
+                                                {% set race_status = (race_status_map | default({})).get(race.id, {}) %}
                     <tr>
                         <td>
                             {% if has_stages %}
@@ -215,6 +217,19 @@ body.dark-mode .stage-row {
                             -
                             {% endif %}
                         </td>
+                        <td class="text-nowrap">
+                            {% if race_status.get('is_result_downloaded') %}
+                            <span title="Race result downloaded">⬇️</span>
+                            {% endif %}
+                            {% if race_status.get('has_namespace') and race_status.get('has_stat_changes') %}
+                            <span class="ms-1" title="Changes applied">✏️</span>
+                            {% endif %}
+                            {% if race_status.get('has_namespace') and race_status.get('is_approved') %}
+                            <span class="ms-1 text-success" title="Approved">☑</span>
+                            {% elif race_status.get('has_namespace') and race_status.get('has_stat_changes') %}
+                            <span class="ms-1" title="Approval pending">⏳</span>
+                            {% endif %}
+                        </td>
                         <td>
                             <a href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, year=selected_year, gender=selected_gender, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race) }}">
                                 {{ race.name or '-' }}
@@ -227,10 +242,21 @@ body.dark-mode .stage-row {
 
                     {% if has_stages %}
                         {% for stage in stage_rows %}
+                        {% set stage_status = (stage_status_map | default({})).get(stage.id, {}) %}
                         <tr
                             class="stage-row stage-row-{{ race.id }}"
                             style="display: none;">
                             <td class="text-end">↳ Stage</td>
+                            <td class="text-nowrap">
+                                {% if stage_status.get('has_namespace') and stage_status.get('has_stat_changes') %}
+                                <span class="ms-1" title="Changes applied">✏️</span>
+                                {% endif %}
+                                {% if stage_status.get('has_namespace') and stage_status.get('is_approved') %}
+                                <span class="ms-1 text-success" title="Approved">☑</span>
+                                {% elif stage_status.get('has_namespace') and stage_status.get('has_stat_changes') %}
+                                <span class="ms-1" title="Approval pending">⏳</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 <a
                                     href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, stage_id=stage.id, year=selected_year, gender=selected_gender, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race) }}"
