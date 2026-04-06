@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Race Details - PCM Manager{% endblock %}
+{% block title %}Race Details - WorldDB Online{% endblock %}
 
 {% block styles %}
 body > .container {
@@ -15,58 +15,22 @@ body > .container {
 .panel-card .card-body {
     padding: 20px;
 }
-.detail-list {
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    background: #fafafa;
-}
-.detail-layout {
+.detail-grid {
     display: grid;
-    grid-template-columns: 1.6fr 0.9fr;
-    gap: 16px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px 24px;
 }
-.detail-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 10px 12px;
-    border-bottom: 1px dashed #d1d5db;
-}
-.detail-row:last-child {
-    border-bottom: none;
+.detail-item {
+    padding: 0;
 }
 .detail-label {
     font-size: 0.9rem;
     font-weight: 600;
     color: #6b7280;
-    white-space: nowrap;
+    margin-bottom: 4px;
 }
 .detail-value {
     color: #111827;
-    text-align: right;
-}
-.status-panel {
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    background: #fafafa;
-    padding: 12px;
-}
-.status-item {
-    margin-bottom: 10px;
-}
-.status-item:last-child {
-    margin-bottom: 0;
-}
-.status-label {
-    font-size: 0.85rem;
-    color: #6b7280;
-    margin-bottom: 4px;
-}
-.status-value {
-    font-weight: 600;
-}
-.result-status-saved {
-    color: #15803d;
     font-weight: 600;
 }
 .result-status-future {
@@ -168,24 +132,10 @@ body.dark-mode .panel-card {
     box-shadow: none;
     border: 1px solid #4a5568;
 }
-body.dark-mode .detail-list {
-    background: #1f2937;
-    border-color: #4b5563;
-}
-body.dark-mode .status-panel {
-    background: #1f2937;
-    border-color: #4b5563;
-}
 body.dark-mode .detail-label {
     color: #9ca3af;
 }
 body.dark-mode .detail-value {
-    color: #f3f4f6;
-}
-body.dark-mode .status-label {
-    color: #9ca3af;
-}
-body.dark-mode .status-value {
     color: #f3f4f6;
 }
 body.dark-mode .results-table thead th {
@@ -197,7 +147,12 @@ body.dark-mode .race-title-link {
     color: #f3f4f6;
 }
 @media (max-width: 992px) {
-    .detail-layout {
+    .detail-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (max-width: 576px) {
+    .detail-grid {
         grid-template-columns: 1fr;
     }
 }
@@ -231,119 +186,160 @@ body.dark-mode .race-title-link {
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Race Details</h5>
-        <div class="detail-layout">
-            <div class="detail-list">
-                <div class="detail-row"><span class="detail-label">Category</span><span class="detail-value">{{ race.category or '-' }}</span></div>
-                <div class="detail-row">
-                    <span class="detail-label">Classification</span>
-                    <span class="detail-value">
-                        {% if race.classification_label and race.classification %}
-                        {{ race.classification_label }} [{{ race.classification }}]
-                        {% elif race.classification_label %}
-                        {{ race.classification_label }}
-                        {% elif race.classification %}
-                        {{ race.classification }}
-                        {% else %}
-                        -
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="detail-row"><span class="detail-label">Description</span><span class="detail-value">{{ race.description or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">Nation</span><span class="detail-value">{{ race.nation_name or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">Profile</span><span class="detail-value">{{ race.profile or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">Distance (km)</span><span class="detail-value">{{ race.distance_km if race.distance_km is not none else '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">Start Date</span><span class="detail-value">{{ race.start_date or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">End Date</span><span class="detail-value">{{ race.end_date or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">From</span><span class="detail-value">{{ race.start_location or '-' }}</span></div>
-                <div class="detail-row"><span class="detail-label">To</span><span class="detail-value">{{ race.end_location or '-' }}</span></div>
+        <div class="mb-3">
+            <form method="post" action="{{ url_for('web.stat_manager_get_result', race_pk=race.id) }}" class="d-inline-block get-result-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
+                <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
+                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
+                <input type="hidden" name="category" value="{{ back_params.category }}">
+                <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
+                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
+                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                {% if selected_stage %}
+                <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
+                {% endif %}
+                <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if result_state.is_future_race %}disabled{% endif %}>Get Result</button>
+            </form>
+            {% if result_state.is_future_race %}
+            <div class="result-status-future mt-2">Available on race start date</div>
+            {% endif %}
+        </div>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <div class="detail-label">Category</div>
+                <div class="detail-value">{{ race.category or '-' }}</div>
             </div>
-
-            <div class="status-panel">
-                <div class="status-item">
-                    <div class="status-label">Result Processing</div>
-                    <div class="status-value">
-                        {% if result_state.is_result_saved %}
-                        <span class="result-status-saved">✅ Result Downloaded</span>
-                        {% else %}
-                        <form method="post" action="{{ url_for('web.stat_manager_get_result', race_pk=race.id) }}" class="d-inline-block get-result-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
-                            <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
-                            <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                            <input type="hidden" name="category" value="{{ back_params.category }}">
-                            <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                            <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                            <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                            <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                            {% if selected_stage %}
-                            <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
-                            {% endif %}
-                            <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if result_state.is_future_race %}disabled{% endif %}>Get Result</button>
-                        </form>
-                        {% if result_state.is_future_race %}
-                        <div class="result-status-future mt-2">Available on race start date</div>
-                        {% endif %}
-                        {% endif %}
-                    </div>
+            <div class="detail-item">
+                <div class="detail-label">Classification</div>
+                <div class="detail-value">
+                    {% if race.classification_label and race.classification %}
+                    {{ race.classification_label }} [{{ race.classification }}]
+                    {% elif race.classification_label %}
+                    {{ race.classification_label }}
+                    {% elif race.classification %}
+                    {{ race.classification }}
+                    {% else %}
+                    -
+                    {% endif %}
                 </div>
-                <div class="status-item">
-                    <div class="status-label">Saved Stat Changes</div>
-                    <div class="status-value">
-                        {% if delta_change_count and delta_change_count > 0 %}
-                        ✅ {{ delta_change_count }} change(s) saved
-                        {% else %}
-                        No saved changes
-                        {% endif %}
-                    </div>
-                </div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Description</div>
+                <div class="detail-value">{{ race.description or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Nation</div>
+                <div class="detail-value">{{ race.nation_name or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Profile</div>
+                <div class="detail-value">{{ race.profile or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Distance (km)</div>
+                <div class="detail-value">{{ race.distance_km if race.distance_km is not none else '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Start Date</div>
+                <div class="detail-value">{{ race.start_date or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">End Date</div>
+                <div class="detail-value">{{ race.end_date or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">From</div>
+                <div class="detail-value">{{ race.start_location or '-' }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">To</div>
+                <div class="detail-value">{{ race.end_location or '-' }}</div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="panel-card card">
+{% if stage_rows %}
+<div class="panel-card card" id="stage-selection">
     <div class="card-body">
         <h5 class="mb-3">Stages ({{ stage_rows|length }})</h5>
-        {% if stage_rows %}
         <div class="table-wrapper">
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>#</th>
-                        <th>Name</th>
-                        <th>Route</th>
+                        <th>Status</th>
                         <th>Date</th>
-                        <th>Open</th>
+                        <th>Stage Name</th>
+                        <th>Distance (km)</th>
+                        <th>Profile</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for stage in stage_rows %}
+                    {% set stage_status = (stage_status_map | default({})).get(stage.id, {}) %}
                     <tr {% if selected_stage and selected_stage.id == stage.id %}class="table-primary"{% endif %}>
-                        <td>{{ stage.stage_number or '?' }}</td>
-                        <td>{{ stage.stage_name or '-' }}</td>
-                        <td>{{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}</td>
+                        <td class="text-nowrap">
+                            {% if stage_status.get('has_stat_changes') %}
+                            <span title="Changes applied">✏️</span>
+                            {% endif %}
+                            {% if stage_status.get('is_approved') %}
+                            <span class="ms-1 text-success" title="Approved">☑</span>
+                            {% elif stage_status.get('has_stat_changes') %}
+                            <span class="ms-1" title="Approval pending">⏳</span>
+                            {% endif %}
+                        </td>
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>
                             <a
-                                href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, stage_id=stage.id, year=back_params.year, gender=back_params.gender, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race) }}"
-                                class="btn btn-sm btn-outline-secondary">
-                                Open Stage
+                                href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, stage_id=stage.id, year=back_params.year, gender=back_params.gender, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race) }}#stage-selection"
+                                class="text-decoration-none">
+                                Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
                         </td>
+                        <td>{{ stage.stage_distance_km if stage.stage_distance_km is not none else '-' }}</td>
+                        <td>{{ stage.stage_profile or '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-        {% else %}
-        <p class="text-muted mb-0">No stages available for this race.</p>
-        {% endif %}
     </div>
 </div>
+{% endif %}
 
-<div class="panel-card card">
+<div class="panel-card card" id="stage-results">
     <div class="card-body">
-        <h5 class="mb-3">{{ result_title }}</h5>
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <h5 class="mb-0">
+                {% if selected_stage %}
+                Stage {{ selected_stage.stage_number or '?' }} - {{ (selected_stage.stage_start_location or '-') ~ ' to ' ~ (selected_stage.stage_end_location or '-') }}
+                {% else %}
+                {{ result_title }}
+                {% endif %}
+            </h5>
+            <form method="post" action="{{ url_for('web.stat_manager_approve_stat_deltas', race_pk=race.id) }}" class="d-inline-block ms-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
+                <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
+                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
+                <input type="hidden" name="category" value="{{ back_params.category }}">
+                <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
+                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
+                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                {% if selected_stage %}
+                <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
+                {% endif %}
+                <button
+                    type="submit"
+                    class="btn btn-success"
+                    {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>
+                    Approve
+                </button>
+            </form>
+        </div>
         {% if selected_namespace %}
         <p class="text-muted mb-2">Selected Namespace: <strong>{{ selected_namespace.name }}</strong></p>
         {% endif %}
@@ -396,21 +392,35 @@ body.dark-mode .race-title-link {
                     {% set original_stat_values = row.original_stats if row.original_stats else {} %}
                     <tr>
                         <td>
+                            {% set finish_code = result.stage_position if selected_stage else result.overall_position %}
                             {% if selected_stage %}
-                                {{ result.stage_position if result.stage_position is not none else '-' }}
-                            {% else %}
-                                {{ result.overall_position if result.overall_position is not none else '-' }}
-                            {% endif %}
-                        </td>
-                        <td>
-                            {{ row.rider_name }}
-                            {% if result.is_still_in_race is sameas false %}
-                                {% if selected_stage %}
-                                    (DNS)
+                                {% if finish_code == 999 %}
+                                    DNF
+                                {% elif finish_code == 998 %}
+                                    DNS
+                                {% elif finish_code == 997 %}
+                                    OTL
+                                {% elif finish_code == 996 %}
+                                    DSQ
                                 {% else %}
-                                    (DNF)
+                                    {{ finish_code if finish_code is not none else '-' }}
+                                {% endif %}
+                            {% else %}
+                                {% if finish_code == 999 %}
+                                    DNF
+                                {% elif finish_code == 998 %}
+                                    DNS
+                                {% elif finish_code == 997 %}
+                                    OTL
+                                {% elif finish_code == 996 %}
+                                    DSQ
+                                {% else %}
+                                    {{ finish_code if finish_code is not none else '-' }}
                                 {% endif %}
                             {% endif %}
+                        </td>
+                        <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
+                            {{ row.rider_name }}
                         </td>
                         <td>{{ row.team_name }}</td>
                         <td>
@@ -435,8 +445,8 @@ body.dark-mode .race-title-link {
                                     data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}"
                                     data-saved-value="{{ stat_value }}"
                                     value="{{ stat_value }}"
-                                    min="0"
-                                    max="99"
+                                    min="50"
+                                    max="85"
                                     step="1">
                             </div>
                             {% else %}

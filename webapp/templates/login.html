@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Login - PCM Manager{% endblock %}
+{% block title %}Login - WorldDB Online{% endblock %}
 
 {% block styles %}
 .login-container {
@@ -106,7 +106,7 @@ body.dark-mode .password-toggle-button:hover {
 
 {% block content %}
 <div class="login-container">
-    <h2>Login to PCM Manager</h2>
+    <h2>Login to WorldDB Online</h2>
     <form method="POST" action="{{ url_for('web.login') }}">
         {{ form.hidden_tag() }}
         

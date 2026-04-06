@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/wdbo_favicon.png') }}">
-    <title>{% block title %}PCM Manager{% endblock %}</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/wdbo_favicon.png', v=config.get('STATIC_ASSET_VERSION')) }}">
+    <title>{% block title %}WorldDB Online{% endblock %}</title>
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -30,7 +30,11 @@
         }
         
         body.dark-mode .header {
-            background: linear-gradient(90deg, #01123a 0%, #01123a 50%, #000a25 50%, #000a25 100%);
+            background-color: #01123a;
+            background-image: url('{{ url_for('static', filename='images/Background_blue-gradient-02.png', v=config.get('STATIC_ASSET_VERSION')) }}');
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: cover;
         }
         
         body.dark-mode .card {
@@ -131,7 +135,11 @@
             padding: 20px;
         }
         .header {
-            background: linear-gradient(90deg, #01123a 0%, #01123a 50%, #000a25 50%, #000a25 100%);
+            background-color: #01123a;
+            background-image: url('{{ url_for('static', filename='images/Background_blue-gradient-02.png', v=config.get('STATIC_ASSET_VERSION')) }}');
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: cover;
             color: white;
             padding: 8px 0;
             margin-bottom: 20px;
@@ -326,9 +334,9 @@
         <div class="container">
             <h1>
                 <a class="header-title-link" href="{{ url_for('web.dashboard') }}">
-                    <img src="{{ url_for('static', filename='images/wdbo_title.png') }}" 
-                         alt="PCM Manager" 
-                        style="height: 92px; vertical-align: middle;">
+                    <img src="{{ url_for('static', filename='images/wdbo_title.png', v=config.get('STATIC_ASSET_VERSION')) }}" 
+                         alt="WorldDB Online" 
+                        style="height: 180px; vertical-align: middle;">
                 </a>
             </h1>
             <nav>

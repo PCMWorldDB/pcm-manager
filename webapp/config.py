@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-SITE_VERSION = 'v0.0.2'  # Update this as needed for new releases
+SITE_VERSION = 'v0.0.3'  # Update this as needed for new releases
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
@@ -114,7 +114,7 @@ class Config:
     PROVISIONER_DATABASE_URL = os.getenv('PROVISIONER_DATABASE_URL')
     
     # Redis & Celery
-    REDIS_URL = os.getenv('REDIS_URL', 'cache://localhost:6379/0')
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     CELERY_BROKER_URL = REDIS_URL
     CELERY_RESULT_BACKEND = REDIS_URL
     
@@ -131,12 +131,15 @@ class Config:
     # External API
     FIRST_CYCLING_BASE_URL = os.getenv('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
     FIRST_CYCLING_API_PATH = os.getenv('FIRST_CYCLING_API_PATH')
+    FIRST_CYCLING_SYNC_VERBOSE = _env_bool('FIRST_CYCLING_SYNC_VERBOSE', False)
+    FIRST_CYCLING_SYNC_LOG_INTERVAL = int(os.getenv('FIRST_CYCLING_SYNC_LOG_INTERVAL', '50'))
     
     # Security
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))
 
     # Site metadata
     SITE_VERSION = SITE_VERSION
+    STATIC_ASSET_VERSION = os.getenv('STATIC_ASSET_VERSION', SITE_VERSION)
     
     # WTForms
     WTF_CSRF_ENABLED = True

@@ -64,90 +64,6 @@ def _startup_init_lock(log=None):
                 engine.dispose()
 
 
-def sync_firstcycling_seasons():
-    """Ensure FirstCycling data exists for configured seasons/genders."""
-    from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
-    from webapp.models.main.firstcycling import FirstCyclingRace, FirstCyclingTeam, FirstCyclingRider
-
-    api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
-    if not api_path:
-        click.echo('   - FIRST_CYCLING_API_PATH not configured; skipping FirstCycling season sync check')
-        return
-
-    seasons_config = current_app.config.get('SEASONS', []) or []
-    if not seasons_config:
-        click.echo('   - No SEASONS config found; skipping FirstCycling season sync check')
-        return
-
-    season_entries = []
-    if isinstance(seasons_config, list):
-        season_entries = list(seasons_config)
-    else:
-        click.echo('   - Invalid SEASONS config format; expected list of dicts', err=True)
-        return
-
-    if not season_entries:
-        click.echo('   - SEASONS config is empty; skipping FirstCycling season sync check')
-        return
-
-    for season_settings in season_entries:
-        if not isinstance(season_settings, dict):
-            click.echo(f"   - Skipping invalid season entry '{season_settings}'")
-            continue
-
-        season_key = season_settings.get('year')
-        try:
-            season_year = int(season_key)
-        except (TypeError, ValueError):
-            click.echo(f"   - Skipping invalid season key '{season_key}'")
-            continue
-
-        gender = season_settings.get('gender')
-        if gender not in ('Men', 'Women'):
-            click.echo(f"   - Skipping invalid gender '{gender}'")
-            continue
-
-        try:
-            client = FirstCyclingClient(api_path=api_path)
-        except ValueError as exc:
-            click.echo(f'   - FirstCycling integration not configured: {exc}; skipping sync', err=True)
-            return
-
-        race_query = FirstCyclingRace.query.filter_by(season_year=season_year, gender=gender)
-        team_query = FirstCyclingTeam.query.filter_by(team_year=season_year, gender=gender)
-
-        race_count = race_query.count()
-        team_count = team_query.count()
-
-        if race_count > 0 and team_count > 0:
-            click.echo(
-                f'   - FirstCycling data already present for season {season_year} [{gender}] '
-                f'(races={race_count}, teams={team_count})'
-            )
-            continue
-
-        click.echo(
-            f'   - Missing FirstCycling data for season {season_year} [{gender}] '
-            f'(races={race_count}, teams={team_count}); syncing...'
-        )
-
-        try:
-            summary = client.sync_season_roster(
-                season_year=season_year,
-                gender=gender,
-                commit=True,
-            )
-            click.echo(
-                f"     ✓ Sync complete for {season_year} [{gender}] "
-                f"(races={summary['races']['synced']}, teams={summary['teams']['fetched']})"
-                f", riders={summary['riders']['fetched']})"
-            )
-        except FirstCyclingAPIError as exc:
-            click.echo(f'     ✗ FirstCycling sync failed for {season_year} [{gender}]: {exc}', err=True)
-        except Exception as exc:
-            click.echo(f'     ✗ Unexpected sync error for {season_year} [{gender}]: {exc}', err=True)
-
-
 @click.command('init-db')
 @with_appcontext
 def init_db_command():
@@ -160,7 +76,7 @@ def initialize_database(log=None):
     if log is None:
         log = lambda _: None
 
-    log('=== PCM Manager Database Initialization ===')
+    log('=== WorldDB Database Initialization ===')
 
     with _startup_init_lock(log=log):
         # Step 0: Provision database and required extension
@@ -304,6 +220,16 @@ def _seed_roles(log=None):
             role = Role(**role_data)
             db.session.add(role)
             log(f'  Created role: {role.name}')
+        else:
+            updated_fields = []
+            for field_name in ('display_name', 'description', 'is_system_role'):
+                new_value = role_data[field_name]
+                if getattr(role, field_name) != new_value:
+                    setattr(role, field_name, new_value)
+                    updated_fields.append(field_name)
+
+            if updated_fields:
+                log(f"  Updated role: {role.name} ({', '.join(updated_fields)})")
         roles[role.name] = role
     
     # Create resources
@@ -312,12 +238,12 @@ def _seed_roles(log=None):
         {'name': 'roles', 'app_panel': 'admin', 'description': 'Role management'},
         {'name': 'namespaces', 'app_panel': 'admin', 'description': 'Namespace management'},
         {'name': 'riders', 'app_panel': 'admin', 'description': 'Rider data'},
-        {'name': 'teams', 'app_panel': 'admin', 'description': 'Team data'},
+        {'name': 'teams', 'app_panel': 'team_manager', 'description': 'Manage teams and rosters'},
         {'name': 'races', 'app_panel': 'admin', 'description': 'Race data'},
-        {'name': 'stats', 'app_panel': 'stat_manager', 'description': 'Statistics'},
-        {'name': 'photos', 'app_panel': 'photo_manager', 'description': 'Photo management'},
-        {'name': 'palmares', 'app_panel': 'palmares_manager', 'description': 'Career achievements'},
-        {'name': 'releases', 'app_panel': 'release_manager', 'description': 'Release management'},
+        {'name': 'stats', 'app_panel': 'stat_manager', 'description': 'Maintain rider stats from race results'},
+        {'name': 'photos', 'app_panel': 'photo_manager', 'description': 'Maintain rider photos'},
+        {'name': 'palmares', 'app_panel': 'palmares_manager', 'description': 'Maintain rider historical race results'},
+        {'name': 'releases', 'app_panel': 'release_manager', 'description': 'Manage database releases'},
     ]
     
     resources = {}
@@ -327,6 +253,16 @@ def _seed_roles(log=None):
             resource = Resource(**resource_data)
             db.session.add(resource)
             log(f'  Created resource: {resource.name}')
+        else:
+            updated_fields = []
+            for field_name in ('app_panel', 'description'):
+                new_value = resource_data[field_name]
+                if getattr(resource, field_name) != new_value:
+                    setattr(resource, field_name, new_value)
+                    updated_fields.append(field_name)
+
+            if updated_fields:
+                log(f"  Updated resource: {resource.name} ({', '.join(updated_fields)})")
         resources[resource.name] = resource
     
     # Create actions
@@ -348,6 +284,10 @@ def _seed_roles(log=None):
             action = Action(**action_data)
             db.session.add(action)
             log(f'  Created action: {action.name}')
+        else:
+            if action.description != action_data['description']:
+                action.description = action_data['description']
+                log(f'  Updated action: {action.name} (description)')
         actions[action.name] = action
     
     db.session.commit()
