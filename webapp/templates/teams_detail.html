@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}Team Detail - WDB{% endblock %}
+
+{% block styles %}
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        .meta-label {
+            font-size: 0.8rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .meta-value {
+            font-weight: 600;
+        }
+        body.dark-mode .meta-label {
+            color: #9ca3af;
+        }
+    /* Stat value background color classes (copied from stat_race_detail.html) */
+    .stat-value.range-low {
+        background-color: #6c757d !important;
+        color: #ffffff !important;
+    }
+    .stat-value.range-decent {
+        background-color: #0d6efd !important;
+        color: #ffffff !important;
+    }
+    .stat-value.range-good {
+        background-color: #90ee90 !important;
+        color: #000000 !important;
+    }
+    .stat-value.range-very-good {
+        background-color: #ffd700 !important;
+        color: #000000 !important;
+    }
+    .stat-value.range-excellent {
+        background-color: #ff8c00 !important;
+        color: #000000 !important;
+    }
+    .stat-value.range-elite {
+        background-color: #dc3545 !important;
+        color: #ffffff !important;
+    }
+    /* Center stat values and reduce stat column width */
+    .stat-col {
+        width: 48px;
+        max-width: 48px;
+        min-width: 36px;
+        text-align: center;
+    }
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const rangeClasses = [
+        'range-low',
+        'range-decent',
+        'range-good',
+        'range-very-good',
+        'range-excellent',
+        'range-elite',
+    ];
+
+    function getStatValueClass(value) {
+        if (value <= 65) return 'range-low';
+        if (value >= 66 && value <= 69) return 'range-decent';
+        if (value >= 70 && value <= 73) return 'range-good';
+        if (value >= 74 && value <= 77) return 'range-very-good';
+        if (value >= 78 && value <= 81) return 'range-excellent';
+        if (value >= 82) return 'range-elite';
+        return '';
+    }
+
+    function applyStatValueColor(inputElement, value) {
+        rangeClasses.forEach(function (className) {
+            inputElement.classList.remove(className);
+        });
+
+        const className = getStatValueClass(value);
+        if (className) {
+            inputElement.classList.add(className);
+        }
+    }
+
+    function parseIntValue(rawValue) {
+        if (rawValue === null || rawValue === '') {
+            return null;
+        }
+
+        const parsedValue = Number.parseInt(rawValue, 10);
+        return Number.isNaN(parsedValue) ? null : parsedValue;
+    }
+
+    function clampStatValue(value) {
+        if (value < 0) {
+            return 0;
+        }
+        if (value > 99) {
+            return 99;
+        }
+        return value;
+    }
+
+    document.querySelectorAll('td.stat-value').forEach(function (cell) {
+        var raw = cell.textContent.trim();
+        var value = parseInt(raw, 10);
+        if (!isNaN(value)) {
+            var cls = getStatValueClass(value);
+            if (cls) {
+                cell.classList.add(cls);
+            }
+        }
+    });
+
+    const resultsTable = document.querySelector('.results-table');
+    if (resultsTable && resultsTable.tBodies.length > 0) {
+        const sortableHeaders = Array.from(resultsTable.querySelectorAll('thead th.sortable-col'));
+        const tableBody = resultsTable.tBodies[0];
+        const sortState = {
+            columnIndex: null,
+            direction: 'asc',
+        };
+
+        function getSortValue(rowElement, columnIndex, sortType) {
+            const cell = rowElement.cells[columnIndex];
+            if (!cell) {
+                return sortType === 'number' ? Number.POSITIVE_INFINITY : '';
+            }
+
+            const rawValue = (cell.getAttribute('data-sort-value') || cell.textContent || '').trim();
+
+            if (sortType === 'number') {
+                const numericValue = Number.parseFloat(rawValue);
+                return Number.isFinite(numericValue) ? numericValue : Number.POSITIVE_INFINITY;
+            }
+
+            return String(rawValue).trim().toLowerCase();
+        }
+
+        function clearSortIndicators() {
+            sortableHeaders.forEach(function (header) {
+                header.classList.remove('sort-asc', 'sort-desc');
+            });
+        }
+
+        function sortByColumn(header) {
+            const sortType = (header.getAttribute('data-sort-type') || 'text').toLowerCase();
+            const columnIndex = header.cellIndex;
+            const nextDirection = (
+                sortState.columnIndex === columnIndex && sortState.direction === 'asc'
+            ) ? 'desc' : 'asc';
+
+            const rows = Array.from(tableBody.rows);
+            rows.sort(function (rowA, rowB) {
+                const valueA = getSortValue(rowA, columnIndex, sortType);
+                const valueB = getSortValue(rowB, columnIndex, sortType);
+
+                if (valueA < valueB) {
+                    return nextDirection === 'asc' ? -1 : 1;
+                }
+                if (valueA > valueB) {
+                    return nextDirection === 'asc' ? 1 : -1;
+                }
+                return 0;
+            });
+
+            rows.forEach(function (row) {
+                tableBody.appendChild(row);
+            });
+
+            clearSortIndicators();
+            header.classList.add(nextDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+
+            sortState.columnIndex = columnIndex;
+            sortState.direction = nextDirection;
+        }
+
+        sortableHeaders.forEach(function (header) {
+            header.addEventListener('click', function () {
+                sortByColumn(header);
+            });
+        });
+    }
+});
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-1">
+            {{ team.team_name or ('Team #' ~ team.team_id) }}
+        </h2>
+        <p class="text-muted mb-0">Team detail and rider roster.</p>
+    </div>
+    <div>
+        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams', division=back_params.division) }}">Back to Team</a>
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Team Attributes</h5>
+        <div class="meta-grid">
+            <div>
+                <div class="meta-label">Team ID</div>
+                <div class="meta-value">{{ team.team_id }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Nation</div>
+                <div class="meta-value">{{ team.nation_name or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Division</div>
+                <div class="meta-value">{{ team.division or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">UCI Code</div>
+                <div class="meta-value">{{ team.uci_code or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Ranking</div>
+                <div class="meta-value">
+                    {% if team.ranking_rank %}
+                        #{{ team.ranking_rank }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Riders ({{ riders|length }})</h5>
+        {% if riders %}
+        <div class="table-wrapper results-table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0 results-table">
+                <thead>
+                    <tr>
+                        <th class="sortable-col" data-sort-type="text">Rider</th>
+                        <th class="sortable-col" data-sort-type="text">Nation</th>
+                        {% for stat_key in stat_fields %}
+                        <th class="stat-col text-center sortable-col" data-sort-type="number">{{ stat_key|upper }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rider in riders %}
+                    {% set rider_stats = (rider_stats_map | default({})).get(rider.rider_id, {}) %}
+                    <tr>
+                        <td>
+                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id, team_id=team.team_id, division=back_params.division) }}">
+                                {{ rider.name or ((rider.first_name or '') ~ ' ' ~ (rider.last_name or ''))|trim or ('Rider #' ~ rider.rider_id) }}
+                            </a>
+                        </td>
+                        <td>{{ rider.nation_name or '-' }}</td>
+                        {% for stat_key in stat_fields %}
+                        {% set stat_value = rider_stats.get(stat_key) %}
+                        <td class="stat-value">{{ stat_value if stat_value is not none else '-' }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No riders found for this team.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - WorldDB Online{% endblock %}
+{% block title %}Dashboard - WDB{% endblock %}
 
 {% block styles %}
 .welcome {
@@ -13,68 +13,29 @@
 .welcome p {
     color: #7f8c8d;
 }
-.apps-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 20px;
-    margin-top: 30px;
+.dashboard-note {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 22px;
+    max-width: 760px;
+    color: #4b5563;
 }
-.app-tile {
-    background: white;
-    padding: 30px;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    text-decoration: none;
-    color: inherit;
-    transition: transform 0.2s, box-shadow 0.2s;
-    cursor: pointer;
-}
-.app-tile:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-}
-.app-tile h3 {
-    color: #2c3e50;
-    margin-bottom: 10px;
-    font-size: 20px;
-}
-.app-tile p {
-    color: #7f8c8d;
-    font-size: 14px;
-    line-height: 1.5;
-}
-.app-tile .icon {
-    font-size: 36px;
-    margin-bottom: 15px;
-}
-.no-apps {
-    text-align: center;
-    padding: 60px 20px;
-    color: #7f8c8d;
+body.dark-mode .dashboard-note {
+    background: #2d3748;
+    border-color: #4a5568;
+    color: #d1d5db;
 }
 {% endblock %}
 
 {% block content %}
 <div class="welcome">
     <h2>Welcome, {{ current_user.username }}!</h2>
-    <p>Select an application to get started</p>
+    <p>Use the menu button in the top-left corner to open your panels.</p>
 </div>
 
-{% if apps %}
-<div class="apps-grid">
-    {% for app in apps %}
-    <a href="{{ app.url or '#' }}"
-       class="app-tile"
-       {% if not app.url %}onclick="alert('{{ app.display_name }} coming soon!'); return false;"{% endif %}>
-        <div class="icon">{{ app.icon }}</div>
-        <h3>{{ app.display_name }}</h3>
-        <p>{{ app.description }}</p>
-    </a>
-    {% endfor %}
+<div class="dashboard-note">
+    Panel navigation has moved to the left sidebar.
+    The list shows all panels; unavailable panels are disabled based on your permissions.
 </div>
-{% else %}
-<div class="no-apps">
-    <p>No applications available. Contact your administrator for access.</p>
-</div>
-{% endif %}
 {% endblock %}

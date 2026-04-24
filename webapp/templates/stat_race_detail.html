@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Race Details - WorldDB Online{% endblock %}
+{% block title %}Race Details - WDB{% endblock %}
 
 {% block styles %}
 body > .container {
@@ -51,6 +51,23 @@ body > .container {
 .race-title-link:hover {
     color: inherit;
 }
+.page-header-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.page-header-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 1rem;
+}
+.page-header-actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
 .results-table-wrapper {
     overflow: visible;
 }
@@ -58,8 +75,24 @@ body > .container {
     position: sticky;
     top: 0;
     z-index: 2;
-    background-color: #f8f9fa;
-    color: #212529;
+}
+.results-table thead th.sortable-col {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.results-table thead th.sortable-col::after {
+    content: ' ⇅';
+    color: #6b7280;
+    font-size: 0.8rem;
+}
+.results-table thead th.sortable-col.sort-asc::after {
+    content: ' ↑';
+    color: #0d6efd;
+}
+.results-table thead th.sortable-col.sort-desc::after {
+    content: ' ↓';
+    color: #0d6efd;
 }
 .stat-input-row {
     display: flex;
@@ -139,12 +172,24 @@ body.dark-mode .detail-value {
     color: #f3f4f6;
 }
 body.dark-mode .results-table thead th {
-    background-color: #1f2937;
-    color: #f3f4f6;
     border-color: #4b5563;
+}
+body.dark-mode #stage-selection .table,
+body.dark-mode #stage-selection .table td,
+body.dark-mode #stage-selection .table a,
+body.dark-mode .results-table thead th.sortable-col::after {
+    color: #9ca3af;
+}
+body.dark-mode .results-table thead th.sortable-col.sort-asc::after,
+body.dark-mode .results-table thead th.sortable-col.sort-desc::after {
+    color: #93c5fd;
 }
 body.dark-mode .race-title-link {
     color: #f3f4f6;
+}
+body.dark-mode .stat-input-row {
+    background-color: #111827;
+    border-color: #4b5563;
 }
 @media (max-width: 992px) {
     .detail-grid {
@@ -161,24 +206,69 @@ body.dark-mode .race-title-link {
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">
+        <h2 class="mb-1 page-header-title">
             {% if selected_stage %}
             <a
                 class="race-title-link"
-                href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, year=back_params.year, gender=back_params.gender, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race) }}">
+                href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}">
                 {{ race.name or 'Race Detail' }}
             </a>
             {% else %}
             {{ race.name or 'Race Detail' }}
             {% endif %}
+
+            {% if selected_stage %}
+            <span class="text-muted">|</span>
+            <span>
+                Stage {{ selected_stage.stage_number or '?' }} - {{ (selected_stage.stage_start_location or '-') ~ ' to ' ~ (selected_stage.stage_end_location or '-') }}
+            </span>
+            {% endif %}
+
+            <span class="page-header-status" aria-label="Result status">
+                {% if result_state.is_result_saved %}
+                <span title="Race result downloaded">⬇️</span>
+                {% elif result_state.has_partial_stage_results %}
+                <span title="Stage results partially downloaded">🔄</span>
+                {% endif %}
+                {% if delta_change_count > 0 %}
+                <span title="Edits Saved">✏️</span>
+                {% endif %}
+                {% if scope_delta_status.approved_changes > 0 and scope_delta_status.unapproved_changes == 0 %}
+                <span class="text-success" title="Approved">☑</span>
+                {% elif scope_delta_status.unapproved_changes > 0 %}
+                <span title="Approval pending">⏳</span>
+                {% endif %}
+            </span>
         </h2>
-        <p class="text-muted mb-0">Season: {{ race.season_year }} | Gender: {{ race.gender or '-' }} | FC Race ID: {{ race.race_id }}</p>
+        <p class="text-muted mb-0">FC Race ID: {{ race.race_id }}</p>
     </div>
-    <div>
+    <div class="page-header-actions">
+        <div>
+            <form method="post" action="{{ url_for('web.stats_editor_get_result', race_pk=race.id) }}" class="d-inline-block get-result-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
+                <input type="hidden" name="category" value="{{ back_params.category }}">
+                <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                <input type="hidden" name="nation" value="{{ back_params.nation }}">
+                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
+                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
+                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                {% for edit_status_value in back_params.edit_statuses %}
+                <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
+                {% endfor %}
+                {% if selected_stage %}
+                <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
+                {% endif %}
+                <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if result_state.is_future_race %}disabled{% endif %}>Get Result</button>
+            </form>
+            {% if result_state.is_future_race %}
+            <div class="result-status-future mt-2 text-end">Available on race start date</div>
+            {% endif %}
+        </div>
         <a
-            href="{{ url_for('web.stat_manager', year=back_params.year, gender=back_params.gender, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race) }}"
+            href="{{ url_for('web.stats_editor', race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}"
             class="btn btn-outline-secondary">
-            Back To Stats Manager
+            Back To Stats Editor
         </a>
     </div>
 </div>
@@ -186,26 +276,6 @@ body.dark-mode .race-title-link {
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Race Details</h5>
-        <div class="mb-3">
-            <form method="post" action="{{ url_for('web.stat_manager_get_result', race_pk=race.id) }}" class="d-inline-block get-result-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
-                <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
-                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                <input type="hidden" name="category" value="{{ back_params.category }}">
-                <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                {% if selected_stage %}
-                <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
-                {% endif %}
-                <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if result_state.is_future_race %}disabled{% endif %}>Get Result</button>
-            </form>
-            {% if result_state.is_future_race %}
-            <div class="result-status-future mt-2">Available on race start date</div>
-            {% endif %}
-        </div>
         <div class="detail-grid">
             <div class="detail-item">
                 <div class="detail-label">Category</div>
@@ -281,8 +351,11 @@ body.dark-mode .race-title-link {
                     {% set stage_status = (stage_status_map | default({})).get(stage.id, {}) %}
                     <tr {% if selected_stage and selected_stage.id == stage.id %}class="table-primary"{% endif %}>
                         <td class="text-nowrap">
+                            {% if stage_status.get('is_result_downloaded') %}
+                            <span title="Stage result downloaded">⬇️</span>
+                            {% endif %}
                             {% if stage_status.get('has_stat_changes') %}
-                            <span title="Changes applied">✏️</span>
+                            <span title="Edits Saved">✏️</span>
                             {% endif %}
                             {% if stage_status.get('is_approved') %}
                             <span class="ms-1 text-success" title="Approved">☑</span>
@@ -293,7 +366,7 @@ body.dark-mode .race-title-link {
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>
                             <a
-                                href="{{ url_for('web.stat_manager_race_detail', race_id=race.id, stage_id=stage.id, year=back_params.year, gender=back_params.gender, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race) }}#stage-selection"
+                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, stage_id=stage.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}#stage-selection"
                                 class="text-decoration-none">
                                 Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
@@ -319,16 +392,18 @@ body.dark-mode .race-title-link {
                 {{ result_title }}
                 {% endif %}
             </h5>
-            <form method="post" action="{{ url_for('web.stat_manager_approve_stat_deltas', race_pk=race.id) }}" class="d-inline-block ms-3">
+            <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_pk=race.id) }}" class="d-inline-block ms-3">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
-                <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
                 <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
                 <input type="hidden" name="category" value="{{ back_params.category }}">
                 <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                <input type="hidden" name="nation" value="{{ back_params.nation }}">
                 <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
                 <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
                 <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                {% for edit_status_value in back_params.edit_statuses %}
+                <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
+                {% endfor %}
                 {% if selected_stage %}
                 <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                 {% endif %}
@@ -340,19 +415,18 @@ body.dark-mode .race-title-link {
                 </button>
             </form>
         </div>
-        {% if selected_namespace %}
-        <p class="text-muted mb-2">Selected Namespace: <strong>{{ selected_namespace.name }}</strong></p>
-        {% endif %}
-        <form method="post" action="{{ url_for('web.stat_manager_save_stat_deltas', race_pk=race.id) }}" id="stat-delta-form" class="mb-3">
+        <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_pk=race.id) }}" id="stat-delta-form" class="mb-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="year" value="{{ back_params.year or race.season_year }}">
-            <input type="hidden" name="gender" value="{{ back_params.gender or race.gender }}">
             <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
             <input type="hidden" name="category" value="{{ back_params.category }}">
             <input type="hidden" name="classification" value="{{ back_params.classification }}">
+            <input type="hidden" name="nation" value="{{ back_params.nation }}">
             <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
             <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
             <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+            {% for edit_status_value in back_params.edit_statuses %}
+            <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
+            {% endfor %}
             {% if selected_stage %}
             <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
             {% endif %}
@@ -365,24 +439,24 @@ body.dark-mode .race-title-link {
             <table class="table table-sm table-striped align-middle mb-0 results-table">
                 <thead>
                     <tr>
-                        <th style="width: 60px;">Pos.</th>
-                        <th>Rider</th>
-                        <th>Team</th>
+                        <th style="width: 60px;" class="sortable-col" data-sort-type="number">Pos.</th>
+                        <th class="sortable-col" data-sort-type="text">Rider</th>
+                        <th class="sortable-col" data-sort-type="text">Team</th>
                         <th>Time</th>
-                        <th class="stat-col">MO</th>
-                        <th class="stat-col">MM</th>
-                        <th class="stat-col">DH</th>
-                        <th class="stat-col">HIL</th>
-                        <th class="stat-col">TT</th>
-                        <th class="stat-col">PRL</th>
-                        <th class="stat-col">FLA</th>
-                        <th class="stat-col">SPR</th>
-                        <th class="stat-col">ACC</th>
-                        <th class="stat-col">END</th>
-                        <th class="stat-col">RES</th>
-                        <th class="stat-col">REC</th>
-                        <th class="stat-col">COB</th>
-                        <th class="stat-col">ATT</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">MO</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">MM</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">DH</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">HIL</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">TT</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">PRL</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">FLA</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">SPR</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">ACC</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">END</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">RES</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">REC</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">COB</th>
+                        <th class="stat-col sortable-col" data-sort-type="number">ATT</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -391,7 +465,8 @@ body.dark-mode .race-title-link {
                     {% set stat_values = row.stats if row.stats else {} %}
                     {% set original_stat_values = row.original_stats if row.original_stats else {} %}
                     <tr>
-                        <td>
+                        {% set finish_code = result.stage_position if selected_stage else result.overall_position %}
+                        <td data-sort-value="{{ finish_code if finish_code is not none else 999999 }}">
                             {% set finish_code = result.stage_position if selected_stage else result.overall_position %}
                             {% if selected_stage %}
                                 {% if finish_code == 999 %}
@@ -652,6 +727,79 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     refreshSaveState();
+
+    const resultsTable = document.querySelector('.results-table');
+    if (resultsTable && resultsTable.tBodies.length > 0) {
+        const sortableHeaders = Array.from(resultsTable.querySelectorAll('thead th.sortable-col'));
+        const tableBody = resultsTable.tBodies[0];
+        const sortState = {
+            columnIndex: null,
+            direction: 'asc',
+        };
+
+        function getSortValue(rowElement, columnIndex, sortType) {
+            const cell = rowElement.cells[columnIndex];
+            if (!cell) {
+                return sortType === 'number' ? Number.POSITIVE_INFINITY : '';
+            }
+
+            const input = cell.querySelector('input.stat-input');
+            const rawValue = input
+                ? input.value
+                : (cell.getAttribute('data-sort-value') || cell.textContent || '').trim();
+
+            if (sortType === 'number') {
+                const numericValue = Number.parseFloat(rawValue);
+                return Number.isFinite(numericValue) ? numericValue : Number.POSITIVE_INFINITY;
+            }
+
+            return String(rawValue).trim().toLowerCase();
+        }
+
+        function clearSortIndicators() {
+            sortableHeaders.forEach(function (header) {
+                header.classList.remove('sort-asc', 'sort-desc');
+            });
+        }
+
+        function sortByColumn(header) {
+            const sortType = (header.getAttribute('data-sort-type') || 'text').toLowerCase();
+            const columnIndex = header.cellIndex;
+            const nextDirection = (
+                sortState.columnIndex === columnIndex && sortState.direction === 'asc'
+            ) ? 'desc' : 'asc';
+
+            const rows = Array.from(tableBody.rows);
+            rows.sort(function (rowA, rowB) {
+                const valueA = getSortValue(rowA, columnIndex, sortType);
+                const valueB = getSortValue(rowB, columnIndex, sortType);
+
+                if (valueA < valueB) {
+                    return nextDirection === 'asc' ? -1 : 1;
+                }
+                if (valueA > valueB) {
+                    return nextDirection === 'asc' ? 1 : -1;
+                }
+                return 0;
+            });
+
+            rows.forEach(function (row) {
+                tableBody.appendChild(row);
+            });
+
+            clearSortIndicators();
+            header.classList.add(nextDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+
+            sortState.columnIndex = columnIndex;
+            sortState.direction = nextDirection;
+        }
+
+        sortableHeaders.forEach(function (header) {
+            header.addEventListener('click', function () {
+                sortByColumn(header);
+            });
+        });
+    }
 
     document.querySelectorAll('.get-result-form').forEach(function (form) {
         form.addEventListener('submit', function () {

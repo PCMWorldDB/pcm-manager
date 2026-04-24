@@ -135,6 +135,7 @@ class FirstCyclingTeam(MainDBModel):
     uci_code = db.Column(db.String(20), nullable=True, index=True)
     ranking_title = db.Column(db.String(100), nullable=True)
     ranking_rank = db.Column(db.Integer, nullable=True)
+    rider_ids = db.Column(db.JSON, nullable=True)
     last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self):

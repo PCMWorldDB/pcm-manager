@@ -10,6 +10,99 @@
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+                /* Global table color and background styles */
+                /* Sticky table header row for all tables */
+                .data-table thead th, .table thead th {
+                    position: sticky;
+                    top: 0;
+                    z-index: 2;
+                }
+                /* Optional: add a subtle box-shadow for header separation */
+                .data-table thead th, .table thead th {
+                    box-shadow: 0 2px 2px -2px rgba(0,0,0,0.08);
+                }
+                .data-table, .table {
+                    background: #fff;
+                    color: #212529;
+                }
+                .data-table thead th, .table thead th {
+                    background: #f8f9fa;
+                    color: #212529;
+                }
+                .data-table tbody tr, .table tbody tr {
+                    background: #fff;
+                }
+                .data-table tbody tr:nth-child(even), .table tbody tr:nth-child(even) {
+                    background: #f3f4f6;
+                }
+                .data-table tbody tr:hover, .table tbody tr:hover {
+                    background: #e9ecef;
+                }
+                .data-table td, .table td {
+                    border-color: #dee2e6;
+                }
+                /* Dark mode for tables */
+                                body.dark-mode .data-table, body.dark-mode .table {
+                                    --bs-table-bg: #232a36 !important;
+                                    --bs-table-striped-bg: #232a36 !important;
+                                    --bs-table-hover-bg: #232a36 !important;
+                                    --bs-table-border-color: #4b5563 !important;
+                                    background: #232a36 !important;
+                                    color: #fff !important;
+                                }
+                                body.dark-mode .data-table thead th, body.dark-mode .table thead th {
+                                    background: #1a202c !important;
+                                    color: #fff !important;
+                                }
+                                body.dark-mode .data-table tbody tr, body.dark-mode .table tbody tr {
+                                    background: #232a36 !important;
+                                }
+                                body.dark-mode .data-table tbody tr:nth-child(even), body.dark-mode .table tbody tr:nth-child(even) {
+                                    background: #232a36 !important;
+                                }
+                                body.dark-mode .data-table tbody tr:hover, body.dark-mode .table tbody tr:hover {
+                                    background: #374151 !important;
+                                }
+                                body.dark-mode .data-table td, body.dark-mode .table td {
+                                    border-color: #4b5563 !important;
+                                    color: #fff !important;
+                                }
+                                /* Sortable column indicators (light & dark mode) */
+                                th.sortable-col {
+                                    cursor: pointer;
+                                    user-select: none;
+                                    white-space: nowrap;
+                                    position: relative;
+                                }
+                                th.sortable-col::after {
+                                    content: ' ⇅';
+                                    color: #6b7280;
+                                    font-size: 0.8rem;
+                                    margin-left: 4px;
+                                }
+                                th.sortable-col.sort-asc::after {
+                                    content: ' ↑';
+                                    color: #0d6efd;
+                                }
+                                th.sortable-col.sort-desc::after {
+                                    content: ' ↓';
+                                    color: #0d6efd;
+                                }
+                                body.dark-mode th.sortable-col::after {
+                                    color: #9ca3af;
+                                }
+                                body.dark-mode th.sortable-col.sort-asc::after,
+                                body.dark-mode th.sortable-col.sort-desc::after {
+                                    color: #93c5fd;
+                                }
+                                /* Section/card border/margin for separation */
+                                .panel-card {
+                                    margin-bottom: 28px;
+                                    border: 1px solid #e5e7eb;
+                                }
+                                body.dark-mode .panel-card {
+                                    border: 1px solid #374151;
+                                }
         * {
             margin: 0;
             padding: 0;
@@ -151,6 +244,38 @@
             justify-content: flex-end;
             align-items: center;
             position: relative;
+            max-width: 100%;
+            width: 100%;
+            padding-left: 20px;
+            padding-right: 20px;
+        }
+        .hamburger-btn {
+            position: absolute;
+            left: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 42px;
+            height: 42px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            display: inline-flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 5px;
+            padding: 0 9px;
+            cursor: pointer;
+            z-index: 2;
+        }
+        .hamburger-btn span {
+            display: block;
+            height: 2px;
+            width: 100%;
+            border-radius: 2px;
+            background: #ffffff;
+        }
+        .hamburger-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
         }
         .header h1 {
             font-size: 24px;
@@ -174,14 +299,8 @@
             display: flex;
             align-items: center;
             gap: 20px;
-        }
-        .namespace-selector {
-            min-width: 240px;
-        }
-        .namespace-selector .form-select {
-            font-size: 0.9rem;
-            padding: 4px 30px 4px 10px;
-            min-height: 34px;
+            margin-left: auto;
+            margin-right: 0;
         }
         .header nav a {
             color: white;
@@ -204,6 +323,19 @@
             transition: background 0.2s;
         }
         .settings-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .user-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .user-btn:hover {
             background: rgba(255, 255, 255, 0.1);
         }
         .dropdown-menu {
@@ -327,6 +459,142 @@
         body.dark-mode .site-version {
             color: #9ca3af;
         }
+
+        .sidebar-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.35);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            z-index: 1040;
+        }
+        .side-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: min(280px, 78vw);
+            height: 100vh;
+            background: #f2f4f7;
+            border-right: 1px solid #d1d5db;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            z-index: 1050;
+            display: flex;
+            flex-direction: column;
+        }
+        body.dark-mode .side-panel {
+            background: #1f2937;
+            border-right-color: #4b5563;
+        }
+        .side-panel.open {
+            transform: translateX(0);
+        }
+        .sidebar-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .side-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 16px;
+            border-bottom: 1px solid #d1d5db;
+        }
+        body.dark-mode .side-panel-header {
+            border-bottom-color: #4b5563;
+        }
+        .side-panel-title {
+            font-size: 1rem;
+            font-weight: 700;
+            margin: 0;
+        }
+        .side-panel-close {
+            border: none;
+            background: transparent;
+            font-size: 1.4rem;
+            line-height: 1;
+            color: #6b7280;
+            cursor: pointer;
+        }
+        body.dark-mode .side-panel-close {
+            color: #9ca3af;
+        }
+        .side-panel-content {
+            padding: 14px 16px;
+            overflow-y: auto;
+        }
+        .side-panel-section {
+            margin-bottom: 18px;
+        }
+        .side-panel-section-label {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+        body.dark-mode .side-panel-section-label {
+            color: #9ca3af;
+        }
+        .side-panel .namespace-selector .form-select {
+            font-size: 0.92rem;
+        }
+        .panel-menu-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .panel-menu-link,
+        .panel-menu-disabled {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-radius: 8px;
+            padding: 10px 12px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .panel-menu-link {
+            color: #1f2937;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+        }
+        .panel-menu-link:hover {
+            background: #eef2ff;
+            border-color: #c7d2fe;
+            color: #1f2937;
+        }
+        .panel-menu-disabled {
+            color: #6b7280;
+            background: #e5e7eb;
+            border: 1px solid #d1d5db;
+            opacity: 0.65;
+            cursor: not-allowed;
+        }
+        body.dark-mode .panel-menu-link {
+            color: #e5e7eb;
+            background: #374151;
+            border-color: #4b5563;
+        }
+        body.dark-mode .panel-menu-link:hover {
+            background: #4b5563;
+            border-color: #6b7280;
+            color: #f3f4f6;
+        }
+        body.dark-mode .panel-menu-disabled {
+            color: #9ca3af;
+            background: #2b3443;
+            border-color: #4b5563;
+        }
+        .panel-lock {
+            margin-left: auto;
+            font-size: 0.8rem;
+        }
         {% block styles %}{% endblock %}
     </style>
 </head>
@@ -334,6 +602,11 @@
     {% if current_user.is_authenticated %}
     <div class="header">
         <div class="container">
+            <button class="hamburger-btn" type="button" id="menuToggleBtn" aria-label="Open menu" aria-controls="sidePanel" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
             <h1>
                 <a class="header-title-link" href="{{ url_for('web.dashboard') }}">
                     <img src="{{ url_for('static', filename='images/wdbo_title.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" 
@@ -342,29 +615,12 @@
                 </a>
             </h1>
             <nav>
-                {% if available_namespaces %}
-                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
-                    <select name="namespace_id" class="form-select form-select-sm" onchange="this.form.submit()">
-                        {% for namespace in available_namespaces %}
-                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
-                            Namespace: {{ namespace.name }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </form>
-                {% endif %}
-                
                 <!-- Settings Dropdown -->
                 <div class="dropdown settings-dropdown">
                     <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                         ⚙️
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="settingsDropdown">
-                        <li><span class="dropdown-item username">{{ current_user.username }}</span></li>
-                        <li><hr class="dropdown-divider"></li>
-                        
                         <!-- Dark Mode Toggle -->
                         <li>
                             <div class="dark-mode-toggle" id="darkModeToggle">
@@ -382,7 +638,16 @@
                         </li>
                         <li><hr class="dropdown-divider"></li>
                         {% endif %}
-                        
+                    </ul>
+                </div>
+
+                <div class="dropdown settings-dropdown">
+                    <button class="user-btn" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        👤
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
+                        <li><span class="dropdown-item username">{{ current_user.username }}</span></li>
+                        <li><hr class="dropdown-divider"></li>
                         <li>
                             <a class="dropdown-item" href="{{ url_for('web.change_password') }}" style="color: inherit !important;">
                                 🔑 Change Password
@@ -398,6 +663,56 @@
             </nav>
         </div>
     </div>
+
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    <aside class="side-panel" id="sidePanel" aria-hidden="true">
+        <div class="side-panel-header">
+            <h2 class="side-panel-title">Navigation</h2>
+            <button type="button" class="side-panel-close" id="menuCloseBtn" aria-label="Close menu">&times;</button>
+        </div>
+        <div class="side-panel-content">
+            <div class="side-panel-section">
+                <div class="side-panel-section-label">Database</div>
+                {% if available_namespaces %}
+                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+                    <select name="namespace_id" class="form-select" onchange="this.form.submit()">
+                        {% for namespace in available_namespaces %}
+                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
+                            {{ namespace.name }} - {{ namespace.database_year or '-' }} - {{ namespace.gender or 'Men' }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% else %}
+                <div class="panel-menu-disabled">No namespace available</div>
+                {% endif %}
+            </div>
+
+            <div class="side-panel-section">
+                <div class="side-panel-section-label">Panels</div>
+                <ul class="panel-menu-list">
+                    {% for panel in panel_menu_items %}
+                    <li>
+                        {% if panel.is_clickable %}
+                        <a class="panel-menu-link" href="{{ panel.url }}">
+                            <span>{{ panel.icon }}</span>
+                            <span>{{ panel.display_name }}</span>
+                        </a>
+                        {% else %}
+                        <span class="panel-menu-disabled" aria-disabled="true">
+                            <span>{{ panel.icon }}</span>
+                            <span>{{ panel.display_name }}</span>
+                            <span class="panel-lock">🔒</span>
+                        </span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </aside>
     {% endif %}
 
     <div class="container">
@@ -447,6 +762,46 @@
                     }
                 });
             }
+
+            const menuToggleBtn = document.getElementById('menuToggleBtn');
+            const menuCloseBtn = document.getElementById('menuCloseBtn');
+            const sidePanel = document.getElementById('sidePanel');
+            const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+            function openMenu() {
+                if (!sidePanel || !sidebarOverlay || !menuToggleBtn) {
+                    return;
+                }
+                sidePanel.classList.add('open');
+                sidebarOverlay.classList.add('open');
+                sidePanel.setAttribute('aria-hidden', 'false');
+                menuToggleBtn.setAttribute('aria-expanded', 'true');
+            }
+
+            function closeMenu() {
+                if (!sidePanel || !sidebarOverlay || !menuToggleBtn) {
+                    return;
+                }
+                sidePanel.classList.remove('open');
+                sidebarOverlay.classList.remove('open');
+                sidePanel.setAttribute('aria-hidden', 'true');
+                menuToggleBtn.setAttribute('aria-expanded', 'false');
+            }
+
+            if (menuToggleBtn) {
+                menuToggleBtn.addEventListener('click', openMenu);
+            }
+            if (menuCloseBtn) {
+                menuCloseBtn.addEventListener('click', closeMenu);
+            }
+            if (sidebarOverlay) {
+                sidebarOverlay.addEventListener('click', closeMenu);
+            }
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    closeMenu();
+                }
+            });
         });
     </script>
     {% block scripts %}{% endblock %}
