@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Rider Detail - WDB{% endblock %}
+
+{% block styles %}
+body > .container {
+    max-width: 1400px;
+}
+.panel-card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    margin-bottom: 20px;
+}
+.panel-card .card-body {
+    padding: 20px;
+}
+body.dark-mode .panel-card {
+    background: #2d3748;
+    box-shadow: none;
+    border: 1px solid #4a5568;
+}
+.meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+.meta-label {
+    font-size: 0.8rem;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.meta-value {
+    font-weight: 600;
+}
+body.dark-mode .meta-label {
+    color: #9ca3af;
+}
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-1">
+            {{ rider.name or ((rider.first_name or '') ~ ' ' ~ (rider.last_name or ''))|trim or ('Rider #' ~ rider.rider_id) }}
+        </h2>
+        <p class="text-muted mb-0">Rider profile and attributes.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams', division=back_params.division) }}">Back to Teams</a>
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Rider Attributes</h5>
+        <div class="meta-grid">
+            <div>
+                <div class="meta-label">Rider ID</div>
+                <div class="meta-value">{{ rider.rider_id }}</div>
+            </div>
+            <div>
+                <div class="meta-label">First Name</div>
+                <div class="meta-value">{{ rider.first_name or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Last Name</div>
+                <div class="meta-value">{{ rider.last_name or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Gender</div>
+                <div class="meta-value">{{ rider.gender or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Birth Date</div>
+                <div class="meta-value">{{ rider.birth_date.strftime('%Y-%m-%d') if rider.birth_date else '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Height</div>
+                <div class="meta-value">{{ rider.height if rider.height else '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Nation</div>
+                <div class="meta-value">{{ rider.nation_name or '-' }}</div>
+            </div>
+            <div>
+                <div class="meta-label">Team</div>
+                <div class="meta-value">
+                    {% if rider.team_id %}
+                        {% if team %}
+                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id, division=back_params.division) }}">
+                                {{ team.team_name or rider.team_name or ('Team #' ~ rider.team_id) }}
+                            </a>
+                        {% else %}
+                            {{ rider.team_name or ('Team #' ~ rider.team_id) }}
+                        {% endif %}
+                    {% else %}
+                        {{ rider.team_name or '-' }}
+                    {% endif %}
+                </div>
+            </div>
+            <div>
+                <div class="meta-label">Last Synced</div>
+                <div class="meta-value">{{ rider.last_synced_at.strftime('%Y-%m-%d %H:%M:%S') if rider.last_synced_at else '-' }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

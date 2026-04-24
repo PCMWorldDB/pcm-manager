@@ -9,6 +9,7 @@ from webapp.models import ExternalSyncLog
 SYNC_TYPE_RACE = 'fc_race_calendar'
 SYNC_TYPE_TEAMS = 'fc_teams'
 SYNC_TYPE_RIDERS = 'fc_riders'
+SYNC_TYPE_RACE_RESULTS = 'fc_race_results'
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +26,7 @@ def _update_sync_log(log_id, **updates):
 
 
 @celery.task(name='webapp.tasks.run_external_sync')
-def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None):
+def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None, start_date=None, end_date=None):
     """Run one external sync type in the background and update status log."""
     try:
         logger.info(
@@ -71,9 +72,11 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             synced_count = summary['fetched']
             failed_count = summary['failed']
             status = 'partial' if failed_count else 'success'
+            applied = bool(summary.get('applied'))
             message = (
-                f"Team sync complete for {season_year} [{gender}] "
-                f"({synced_count}/{requested_count}, failed={failed_count})"
+                f"Teams sync complete for {season_year} [{gender}] "
+                f"({synced_count}/{requested_count}, failed={failed_count}; "
+                f"applied={'yes' if applied else 'no'})"
             )
         elif sync_type == SYNC_TYPE_RIDERS:
             _update_sync_log(
@@ -90,9 +93,40 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             synced_count = summary['fetched']
             failed_count = summary['failed']
             status = 'partial' if failed_count else 'success'
+            applied = bool(summary.get('applied'))
             message = (
-                f"Rider sync complete for {season_year} [{gender}] "
-                f"({synced_count}/{requested_count}, failed={failed_count})"
+                f"Riders sync complete for {season_year} [{gender}] "
+                f"({synced_count}/{requested_count}, failed={failed_count}; "
+                f"applied={'yes' if applied else 'no'})"
+            )
+        elif sync_type == SYNC_TYPE_RACE_RESULTS:
+            if not start_date or not end_date:
+                raise ValueError('start_date and end_date are required for race results sync')
+
+            _update_sync_log(
+                log_id,
+                status='running',
+                message=(
+                    f'Syncing race results for {season_year} [{gender}] '
+                    f'({start_date} to {end_date})'
+                ),
+            )
+            summary = client.sync_race_results_window(
+                year=season_year,
+                gender=gender,
+                start_date=start_date,
+                end_date=end_date,
+                commit=True,
+            )
+            requested_count = summary['requested']
+            synced_count = summary['synced']
+            failed_count = summary['failed']
+            skipped_count = summary.get('skipped', 0)
+            status = 'partial' if failed_count or skipped_count else 'success'
+            message = (
+                f"Race results sync complete for {season_year} [{gender}] "
+                f"({start_date} to {end_date}; "
+                f"synced={synced_count}/{requested_count}, skipped={skipped_count}, failed={failed_count})"
             )
         else:
             raise ValueError(f'Unsupported sync type: {sync_type}')

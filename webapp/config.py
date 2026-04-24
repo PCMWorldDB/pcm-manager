@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-SITE_VERSION = 'v0.0.3'  # Update this as needed for new releases
+SITE_VERSION = 'v0.0.4'  # Update this as needed for new releases
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
@@ -133,6 +133,11 @@ class Config:
     FIRST_CYCLING_API_PATH = os.getenv('FIRST_CYCLING_API_PATH')
     FIRST_CYCLING_SYNC_VERBOSE = _env_bool('FIRST_CYCLING_SYNC_VERBOSE', False)
     FIRST_CYCLING_SYNC_LOG_INTERVAL = int(os.getenv('FIRST_CYCLING_SYNC_LOG_INTERVAL', '50'))
+    FIRST_CYCLING_SYNC_METHOD = os.getenv('FIRST_CYCLING_SYNC_METHOD', 'bulk_refresh')
+    FIRST_CYCLING_FETCH_ONLY_MISSING = _env_bool('FIRST_CYCLING_FETCH_ONLY_MISSING', False)
+    FIRST_CYCLING_REQUEST_DELAY_SECONDS = float(os.getenv('FIRST_CYCLING_REQUEST_DELAY_SECONDS', '1'))
+    FIRST_CYCLING_RETRY_ATTEMPTS = int(os.getenv('FIRST_CYCLING_RETRY_ATTEMPTS', '4'))
+    FIRST_CYCLING_RETRY_BACKOFF_SECONDS = float(os.getenv('FIRST_CYCLING_RETRY_BACKOFF_SECONDS', '3'))
     
     # Security
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))

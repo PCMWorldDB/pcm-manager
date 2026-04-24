@@ -30,16 +30,12 @@ class NamespaceProvisioner:
         """Create a new namespace database
         
         Args:
-            database_name: Name for the database (will be prefixed with ns_)
+            database_name: Name for the database
             
         Returns:
-            Full database name (with ns_ prefix)
+            Created database name
         """
-        # Add ns_ prefix if not already present
-        if not database_name.startswith('ns_'):
-            full_db_name = f'ns_{database_name}'
-        else:
-            full_db_name = database_name
+        full_db_name = database_name
         
         # Connect to admin database to create new database
         admin_engine = create_engine(self.admin_db_url)
@@ -56,7 +52,8 @@ class NamespaceProvisioner:
                 return full_db_name
             
             # Create the database
-            conn.execute(text(f'CREATE DATABASE {full_db_name}'))
+            safe_db_name = full_db_name.replace('"', '""')
+            conn.execute(text(f'CREATE DATABASE "{safe_db_name}"'))
             logger.info(f"Created database: {full_db_name}")
         
         admin_engine.dispose()
@@ -102,7 +99,7 @@ class NamespaceProvisioner:
         """Full provisioning: create database and schema
         
         Args:
-            database_name: Base name for the database (ns_ prefix added automatically)
+            database_name: Name for the namespace database
             
         Returns:
             dict with database_name and connection_string
@@ -127,11 +124,7 @@ class NamespaceProvisioner:
         Args:
             database_name: Name of database to drop
         """
-        # Add ns_ prefix if not already present
-        if not database_name.startswith('ns_'):
-            full_db_name = f'ns_{database_name}'
-        else:
-            full_db_name = database_name
+        full_db_name = database_name
         
         admin_engine = create_engine(self.admin_db_url)
         
@@ -146,7 +139,8 @@ class NamespaceProvisioner:
             """), {"dbname": full_db_name})
             
             # Drop the database
-            conn.execute(text(f'DROP DATABASE IF EXISTS {full_db_name}'))
+            safe_db_name = full_db_name.replace('"', '""')
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{safe_db_name}"'))
             logger.info(f"Dropped database: {full_db_name}")
         
         admin_engine.dispose()

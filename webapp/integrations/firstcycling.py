@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -20,7 +21,7 @@ from webapp.models.main.firstcycling import (
 )
 
 RACE_TYPES_WHITELIST = ['ROAD']
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('firstcycling')
 
 
 def _as_bool(value, default=False):
@@ -29,6 +30,31 @@ def _as_bool(value, default=False):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _normalize_gender_token(value):
+    token = str(value or '').strip().lower()
+    if token in ('m', 'men', 'male', 'man'):
+        return 'men'
+    if token in ('w', 'f', 'women', 'woman', 'female', 'ladies'):
+        return 'women'
+    return token
+
+
+def _gender_matches(row_gender, selected_gender):
+    """Return True when row gender aligns with selected gender.
+
+    Missing row gender is treated as compatible so we do not drop valid rows
+    from providers that omit gender in overview payloads.
+    """
+    normalized_selected = _normalize_gender_token(selected_gender)
+    normalized_row = _normalize_gender_token(row_gender)
+
+    if not normalized_selected:
+        return True
+    if not normalized_row:
+        return True
+    return normalized_row == normalized_selected
 
 class FirstCyclingAPIError(Exception):
     """Raised when the FirstCycling API request fails"""
@@ -46,11 +72,21 @@ class FirstCyclingClient:
             configured_api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
             configured_verbose_sync = current_app.config.get('FIRST_CYCLING_SYNC_VERBOSE', False)
             configured_log_interval = current_app.config.get('FIRST_CYCLING_SYNC_LOG_INTERVAL', 50)
+            configured_sync_method = current_app.config.get('FIRST_CYCLING_SYNC_METHOD', 'bulk_refresh')
+            configured_fetch_only_missing = current_app.config.get('FIRST_CYCLING_FETCH_ONLY_MISSING', False)
+            configured_request_delay = current_app.config.get('FIRST_CYCLING_REQUEST_DELAY_SECONDS', 0.35)
+            configured_retry_attempts = current_app.config.get('FIRST_CYCLING_RETRY_ATTEMPTS', 4)
+            configured_retry_backoff = current_app.config.get('FIRST_CYCLING_RETRY_BACKOFF_SECONDS', 1.0)
         else:
             configured_base_url = os.getenv('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
             configured_api_path = os.getenv('FIRST_CYCLING_API_PATH')
             configured_verbose_sync = os.getenv('FIRST_CYCLING_SYNC_VERBOSE')
             configured_log_interval = os.getenv('FIRST_CYCLING_SYNC_LOG_INTERVAL', 50)
+            configured_sync_method = os.getenv('FIRST_CYCLING_SYNC_METHOD', 'bulk_refresh')
+            configured_fetch_only_missing = os.getenv('FIRST_CYCLING_FETCH_ONLY_MISSING')
+            configured_request_delay = os.getenv('FIRST_CYCLING_REQUEST_DELAY_SECONDS', 0.35)
+            configured_retry_attempts = os.getenv('FIRST_CYCLING_RETRY_ATTEMPTS', 4)
+            configured_retry_backoff = os.getenv('FIRST_CYCLING_RETRY_BACKOFF_SECONDS', 1.0)
 
         self.base_url = (base_url or configured_base_url).rstrip('/')
         configured_api_path = api_path if api_path is not None else configured_api_path
@@ -59,10 +95,65 @@ class FirstCyclingClient:
             raise ValueError('FIRST_CYCLING_API_PATH must be set in config or environment variables')
 
         self.verbose_sync = _as_bool(configured_verbose_sync, default=False)
+        sync_method_value = str(configured_sync_method or 'bulk_refresh').strip().lower()
+        if sync_method_value not in ('bulk_refresh', 'incremental_upsert'):
+            logger.warning(
+                'Unsupported FIRST_CYCLING_SYNC_METHOD=%s; falling back to bulk_refresh',
+                sync_method_value,
+            )
+            sync_method_value = 'bulk_refresh'
+        self.sync_method = sync_method_value
+        self.fetch_only_missing = _as_bool(configured_fetch_only_missing, default=False)
+
         try:
             self.sync_log_interval = max(int(configured_log_interval), 1)
         except (TypeError, ValueError):
             self.sync_log_interval = 50
+
+        try:
+            self.request_delay_seconds = max(float(configured_request_delay), 0.0)
+        except (TypeError, ValueError):
+            self.request_delay_seconds = 0.35
+
+        try:
+            self.retry_attempts = max(int(configured_retry_attempts), 0)
+        except (TypeError, ValueError):
+            self.retry_attempts = 4
+
+        try:
+            self.retry_backoff_seconds = max(float(configured_retry_backoff), 0.1)
+        except (TypeError, ValueError):
+            self.retry_backoff_seconds = 1.0
+
+        self._last_request_timestamp = 0.0
+
+    def _throttle_request(self):
+        """Apply a minimum delay between outbound FirstCycling requests."""
+        if self.request_delay_seconds <= 0:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._last_request_timestamp
+        if elapsed < self.request_delay_seconds:
+            time.sleep(self.request_delay_seconds - elapsed)
+
+        self._last_request_timestamp = time.monotonic()
+
+    def _parse_retry_after(self, exc):
+        headers = getattr(exc, 'headers', None)
+        if headers is None:
+            return None
+
+        retry_after_value = headers.get('Retry-After')
+        if retry_after_value is None:
+            return None
+
+        try:
+            retry_after = float(retry_after_value)
+        except (TypeError, ValueError):
+            return None
+
+        return max(retry_after, 0.0)
 
     def _parse_date(self, date_value):
         if not date_value:
@@ -107,33 +198,85 @@ class FirstCyclingClient:
 
     def _fetch_json(self, endpoint_path, params=None):
         request_url = self._build_api_url(endpoint_path, params=params)
-        logger.info('FirstCycling request started: %s', self._redact_url(request_url))
-        request = Request(
-            request_url,
-            headers={
-                'Accept': 'application/json',
-                'User-Agent': 'worlddb-firstcycling-client/1.0',
-            },
-        )
+        total_attempts = self.retry_attempts + 1
 
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = response.read().decode('utf-8')
-            parsed = json.loads(payload)
-            logger.info('FirstCycling request succeeded: %s', self._redact_url(request_url))
-            return parsed, request_url
-        except HTTPError as exc:
-            raise FirstCyclingAPIError(
-                f'FirstCycling API HTTP {exc.code} for {self._redact_url(request_url)}'
-            ) from exc
-        except URLError as exc:
-            raise FirstCyclingAPIError(
-                f'FirstCycling API connection failure for {self._redact_url(request_url)}'
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise FirstCyclingAPIError(
-                f'FirstCycling API returned invalid JSON for {self._redact_url(request_url)}'
-            ) from exc
+        for attempt in range(1, total_attempts + 1):
+            request = Request(
+                request_url,
+                headers={
+                    'Accept': 'application/json',
+                    'User-Agent': 'worlddb-firstcycling-client/1.0',
+                },
+            )
+
+            self._throttle_request()
+
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    response_status = getattr(response, 'status', None) or response.getcode()
+                    payload = response.read().decode('utf-8')
+                parsed = json.loads(payload)
+                logger.info('✅ FirstCycling response HTTP %s: %s', response_status, self._redact_url(request_url))
+                return parsed, request_url
+            except HTTPError as exc:
+                is_retryable = exc.code == 429 or 500 <= exc.code < 600
+                if is_retryable and attempt < total_attempts:
+                    retry_after = self._parse_retry_after(exc)
+                    wait_seconds = retry_after if retry_after is not None else self.retry_backoff_seconds * (2 ** (attempt - 1))
+                    logger.warning(
+                        '❌ FirstCycling response HTTP %s, retrying with backoff in %.2fs (attempt %s/%s): %s',
+                        exc.code,
+                        wait_seconds,
+                        attempt,
+                        total_attempts,
+                        self._redact_url(request_url),
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+
+                logger.error(
+                    '❌ FirstCycling response HTTP %s (attempt %s/%s): %s',
+                    exc.code,
+                    attempt,
+                    total_attempts,
+                    self._redact_url(request_url),
+                )
+
+                raise FirstCyclingAPIError(
+                    f'FirstCycling API HTTP {exc.code} for {self._redact_url(request_url)}'
+                ) from exc
+            except URLError as exc:
+                if attempt < total_attempts:
+                    wait_seconds = self.retry_backoff_seconds * (2 ** (attempt - 1))
+                    logger.warning(
+                        '❌ FirstCycling connection failure, retrying in %.2fs (attempt %s/%s): %s',
+                        wait_seconds,
+                        attempt,
+                        total_attempts,
+                        self._redact_url(request_url),
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+
+                logger.error(
+                    '❌ FirstCycling connection failure (attempt %s/%s): %s',
+                    attempt,
+                    total_attempts,
+                    self._redact_url(request_url),
+                )
+
+                raise FirstCyclingAPIError(
+                    f'FirstCycling API connection failure for {self._redact_url(request_url)}'
+                ) from exc
+            except json.JSONDecodeError as exc:
+                logger.error('❌ FirstCycling invalid JSON response: %s', self._redact_url(request_url))
+                raise FirstCyclingAPIError(
+                    f'FirstCycling API returned invalid JSON for {self._redact_url(request_url)}'
+                ) from exc
+
+        raise FirstCyclingAPIError(
+            f'FirstCycling API request failed after retries for {self._redact_url(request_url)}'
+        )
 
     def _extract_entity_name(self, payload):
         if isinstance(payload, dict):
@@ -196,6 +339,26 @@ class FirstCyclingClient:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _parse_input_date(self, value, field_name):
+        if value is None:
+            raise ValueError(f'{field_name} is required')
+        if isinstance(value, datetime):
+            return value.date()
+        if hasattr(value, 'year') and hasattr(value, 'month') and hasattr(value, 'day') and not isinstance(value, str):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                raise ValueError(f'{field_name} is required')
+            try:
+                return datetime.strptime(raw, '%Y-%m-%d').date()
+            except ValueError as exc:
+                raise ValueError(f'{field_name} must be YYYY-MM-DD') from exc
+        raise ValueError(f'{field_name} must be a date or YYYY-MM-DD string')
+
+    def _date_windows_overlap(self, range_start, range_end, window_start, window_end):
+        return range_start <= window_end and range_end >= window_start
 
     def _parse_is_still_in_race(self, value):
         if isinstance(value, bool):
@@ -303,10 +466,30 @@ class FirstCyclingClient:
             'uci_code': description.get('uciCode'),
             'ranking_title': rankings.get('title') if isinstance(rankings, dict) else None,
             'ranking_rank': rankings.get('rank') if isinstance(rankings, dict) else None,
+            'rider_ids': self._extract_rider_ids_from_team_payload(payload),
             'source_endpoint': source_endpoint,
             'last_synced_at': synced_at,
             'updated_at': synced_at,
         }
+
+    def _extract_rider_ids_from_team_payload(self, payload):
+        if not isinstance(payload, dict):
+            return []
+
+        raw_riders = payload.get('riders')
+        if not isinstance(raw_riders, list):
+            return []
+
+        rider_ids = []
+        seen = set()
+        for rider_id in raw_riders:
+            parsed = self._parse_int(rider_id)
+            if parsed is None or parsed in seen:
+                continue
+            seen.add(parsed)
+            rider_ids.append(parsed)
+
+        return rider_ids
 
     def _rider_record_from_payload(self, rider_id, payload, source_endpoint, synced_at=None, season_year=None):
         description = payload.get('description', payload) if isinstance(payload, dict) else {}
@@ -407,6 +590,7 @@ class FirstCyclingClient:
         team.uci_code = normalized['uci_code']
         team.ranking_title = normalized['ranking_title']
         team.ranking_rank = normalized['ranking_rank']
+        team.rider_ids = normalized['rider_ids']
         team.name = normalized['name']
         team.source_endpoint = normalized['source_endpoint']
         team.last_synced_at = normalized['last_synced_at']
@@ -418,6 +602,11 @@ class FirstCyclingClient:
                 team.team_name,
             )
         return team
+
+    def _to_model_kwargs(self, model_cls, payload):
+        """Return payload keys that map to actual SQLAlchemy model columns."""
+        allowed = {column.name for column in model_cls.__table__.columns}
+        return {key: value for key, value in payload.items() if key in allowed}
 
     def _upsert_rider(self, rider_id, payload, source_endpoint, season_year=None):
         rider = self.db_session.query(FirstCyclingRider).filter_by(rider_id=rider_id).first()
@@ -455,6 +644,64 @@ class FirstCyclingClient:
             )
         return rider
 
+    def _filter_missing_team_ids(self, team_ids):
+        if not team_ids:
+            return [], 0
+
+        existing_ids = {
+            row[0]
+            for row in self.db_session.query(FirstCyclingTeam.team_id)
+            .filter(FirstCyclingTeam.team_id.in_(team_ids))
+            .all()
+            if row and row[0] is not None
+        }
+        missing_ids = [team_id for team_id in team_ids if team_id not in existing_ids]
+        return missing_ids, len(existing_ids)
+
+    def _filter_missing_rider_ids(self, rider_ids):
+        if not rider_ids:
+            return [], 0
+
+        existing_ids = {
+            row[0]
+            for row in self.db_session.query(FirstCyclingRider.rider_id)
+            .filter(FirstCyclingRider.rider_id.in_(rider_ids))
+            .all()
+            if row and row[0] is not None
+        }
+        missing_ids = [rider_id for rider_id in rider_ids if rider_id not in existing_ids]
+        return missing_ids, len(existing_ids)
+
+    def _collect_rider_ids_from_teams(self, year, gender):
+        """Collect unique rider IDs from stored team rider lists for the selected season."""
+        query = self.db_session.query(FirstCyclingTeam.gender, FirstCyclingTeam.rider_ids).filter(
+            FirstCyclingTeam.team_year == year
+        )
+
+        rider_ids = []
+        seen = set()
+        skipped_rows = 0
+
+        for row in query.all():
+            team_gender = row[0] if row else None
+            team_rider_ids = row[1] if row else None
+
+            if not _gender_matches(team_gender, gender):
+                continue
+
+            if not isinstance(team_rider_ids, list):
+                skipped_rows += 1
+                continue
+
+            for raw_rider_id in team_rider_ids:
+                parsed_rider_id = self._parse_int(raw_rider_id)
+                if parsed_rider_id is None or parsed_rider_id in seen:
+                    continue
+                seen.add(parsed_rider_id)
+                rider_ids.append(parsed_rider_id)
+
+        return sorted(rider_ids), skipped_rows
+
     def get_race(self, race_id, season_year):
         endpoint = f'{season_year}/{race_id}.json'
         return self._fetch_json(endpoint)
@@ -468,12 +715,11 @@ class FirstCyclingClient:
         payload, source_endpoint = self._fetch_json(endpoint)
 
         team_rows = self._extract_team_overview_rows(payload)
-        normalized_gender = str(gender).strip().lower()
         filtered_rows = [
             row
             for row in team_rows
             if isinstance(row, dict)
-            and str(row.get('gender', '')).strip().lower() == normalized_gender
+            and _gender_matches(row.get('gender'), gender)
         ]
 
         if isinstance(payload, dict):
@@ -488,10 +734,12 @@ class FirstCyclingClient:
         return self._fetch_json(endpoint)
 
     def get_rider(self, rider_id):
-        return self._fetch_json('riderData.php', params={'id': rider_id})
+        endpoint = f'rider/{rider_id}.json'
+        return self._fetch_json(endpoint)
 
     def get_team(self, team_id):
-        return self._fetch_json('teamData.php', params={'id': team_id})
+        endpoint = f'team/{team_id}.json'
+        return self._fetch_json(endpoint)
 
     def get_latest_results(self):
         return self._fetch_json('latestResults.php')
@@ -514,7 +762,7 @@ class FirstCyclingClient:
                 skipped += 1
                 continue
 
-            if row.get('gender') != gender:
+            if not _gender_matches(row.get('gender'), gender):
                 filtered_out += 1
                 continue
 
@@ -573,7 +821,14 @@ class FirstCyclingClient:
         }
 
     def sync_teams(self, year, gender, limit=None, commit=True):
-        logger.info('Team sync started: year=%s gender=%s limit=%s', year, gender, limit)
+        logger.info(
+            'Team sync started: year=%s gender=%s limit=%s method=%s fetch_only_missing=%s',
+            year,
+            gender,
+            limit,
+            self.sync_method,
+            self.fetch_only_missing,
+        )
         payload, source_endpoint = self.get_team_overview(season_year=year, gender=gender)
 
         team_rows = self._extract_team_overview_rows(payload)
@@ -586,7 +841,7 @@ class FirstCyclingClient:
                 skipped += 1
                 continue
 
-            if row.get('gender') != gender:
+            if not _gender_matches(row.get('gender'), gender):
                 filtered_out += 1
                 continue
 
@@ -618,14 +873,43 @@ class FirstCyclingClient:
                 raise ValueError('limit must be an integer >= 0')
             team_ids = team_ids[:limit]
 
-        synced = 0
+        skipped_existing = 0
+        if self.fetch_only_missing:
+            original_count = len(team_ids)
+            team_ids, existing_count = self._filter_missing_team_ids(team_ids)
+            skipped_existing = existing_count
+            logger.info(
+                'Team sync missing filter applied: year=%s gender=%s existing=%s remaining=%s',
+                year,
+                gender,
+                existing_count,
+                len(team_ids),
+            )
+
+        fetched = 0
+        upserted = 0
         failures = []
+        normalized_rows = []
 
         for idx, team_id in enumerate(team_ids, start=1):
             try:
                 team_payload, team_source_endpoint = self.get_team(team_id)
-                self._upsert_team(team_id=team_id, payload=team_payload, source_endpoint=team_source_endpoint)
-                synced += 1
+                if self.sync_method == 'incremental_upsert':
+                    self._upsert_team(
+                        team_id=team_id,
+                        payload=team_payload,
+                        source_endpoint=team_source_endpoint,
+                    )
+                    upserted += 1
+                else:
+                    normalized_rows.append(
+                        self._team_record_from_payload(
+                            team_id=team_id,
+                            payload=team_payload,
+                            source_endpoint=team_source_endpoint,
+                        )
+                    )
+                fetched += 1
             except Exception as exc:
                 failures.append((team_id, str(exc)))
                 logger.warning('Team sync failure: team_id=%s error=%s', team_id, exc)
@@ -637,7 +921,58 @@ class FirstCyclingClient:
                     gender,
                     idx,
                     len(team_ids),
-                    synced,
+                    fetched,
+                    len(failures),
+                )
+
+        applied = False
+        if self.sync_method == 'incremental_upsert':
+            applied = upserted > 0
+            logger.info(
+                'Team incremental upsert finished: year=%s gender=%s upserted=%s failed=%s',
+                year,
+                gender,
+                upserted,
+                len(failures),
+            )
+        else:
+            if not failures:
+                # Refresh collected teams only after complete successful collection.
+                db_load_started = time.perf_counter()
+                delete_query = self.db_session.query(FirstCyclingTeam)
+                if team_ids:
+                    delete_query = delete_query.filter(FirstCyclingTeam.team_id.in_(team_ids))
+                delete_count = delete_query.delete(synchronize_session=False)
+
+                if self.verbose_sync:
+                    logger.info(
+                        'Team refresh delete: year=%s gender=%s deleted=%s',
+                        year,
+                        gender,
+                        delete_count,
+                    )
+
+                team_mappings = [
+                    self._to_model_kwargs(FirstCyclingTeam, row)
+                    for row in normalized_rows
+                ]
+                if team_mappings:
+                    self.db_session.execute(FirstCyclingTeam.__table__.insert(), team_mappings)
+                applied = True
+
+                logger.info(
+                    'Team DB load finished: year=%s gender=%s rows=%s deleted=%s duration_ms=%s',
+                    year,
+                    gender,
+                    len(team_mappings),
+                    delete_count,
+                    int((time.perf_counter() - db_load_started) * 1000),
+                )
+            else:
+                logger.warning(
+                    'Team refresh skipped due to collection failures: year=%s gender=%s failures=%s',
+                    year,
+                    gender,
                     len(failures),
                 )
 
@@ -645,60 +980,48 @@ class FirstCyclingClient:
             self.db_session.commit()
 
         logger.info(
-            'Team sync finished: year=%s gender=%s requested=%s fetched=%s failed=%s skipped=%s filtered_out=%s',
+            'Team sync finished: year=%s gender=%s requested=%s fetched=%s failed=%s skipped=%s filtered_out=%s skipped_existing=%s method=%s',
             year,
             gender,
             len(team_ids),
-            synced,
+            fetched,
             len(failures),
             skipped,
             filtered_out,
+            skipped_existing,
+            self.sync_method,
         )
 
         return {
             'requested': len(team_ids),
-            'fetched': synced,
+            'fetched': fetched,
             'failed': len(failures),
             'filtered_out': filtered_out,
             'skipped': skipped,
+            'skipped_existing': skipped_existing,
             'failures': failures,
+            'applied': applied,
+            'method': self.sync_method,
         }
 
     def sync_riders(self, year, gender, limit=None, commit=True):
-        logger.info('Rider sync started: year=%s gender=%s limit=%s', year, gender, limit)
-        payload, source_endpoint = self.get_rider_overview(season_year=year)
-
-        rider_rows = self._extract_rider_overview_rows(payload)
-        rider_ids = []
+        logger.info(
+            'Rider sync started: year=%s gender=%s limit=%s method=%s fetch_only_missing=%s',
+            year,
+            gender,
+            limit,
+            self.sync_method,
+            self.fetch_only_missing,
+        )
+        rider_ids, skipped = self._collect_rider_ids_from_teams(year=year, gender=gender)
         filtered_out = 0
-        skipped = 0
-
-        for row in rider_rows:
-            if not isinstance(row, dict):
-                skipped += 1
-                continue
-
-            # if row.get('gender') != gender:
-            #     filtered_out += 1
-            #     continue
-
-            rider_id = row.get('id') or row.get('riderId')
-            if rider_id is None:
-                skipped += 1
-                continue
-
-            try:
-                rider_ids.append(int(rider_id))
-            except (TypeError, ValueError):
-                skipped += 1
 
         logger.info(
-            'Rider overview parsed: year=%s gender=%s candidates=%s skipped=%s filtered_out=%s',
+            'Rider IDs loaded from teams table: year=%s gender=%s candidates=%s skipped=%s',
             year,
             gender,
             len(rider_ids),
             skipped,
-            filtered_out,
         )
 
         if limit is not None:
@@ -710,19 +1033,46 @@ class FirstCyclingClient:
                 raise ValueError('limit must be an integer >= 0')
             rider_ids = rider_ids[:limit]
 
-        synced = 0
+        skipped_existing = 0
+        if self.fetch_only_missing:
+            rider_ids, existing_count = self._filter_missing_rider_ids(rider_ids)
+            skipped_existing = existing_count
+            logger.info(
+                'Rider sync missing filter applied: year=%s gender=%s existing=%s remaining=%s',
+                year,
+                gender,
+                existing_count,
+                len(rider_ids),
+            )
+
+        fetched = 0
+        upserted = 0
         failures = []
+        normalized_rows = []
+        collected_rider_ids = []
 
         for idx, rider_id in enumerate(rider_ids, start=1):
             try:
                 rider_payload, rider_source_endpoint = self.get_rider(rider_id)
-                self._upsert_rider(
-                    rider_id=rider_id,
-                    payload=rider_payload,
-                    source_endpoint=rider_source_endpoint,
-                    season_year=year,
-                )
-                synced += 1
+                if self.sync_method == 'incremental_upsert':
+                    self._upsert_rider(
+                        rider_id=rider_id,
+                        payload=rider_payload,
+                        source_endpoint=rider_source_endpoint,
+                        season_year=year,
+                    )
+                    upserted += 1
+                else:
+                    normalized_rows.append(
+                        self._rider_record_from_payload(
+                            rider_id=rider_id,
+                            payload=rider_payload,
+                            source_endpoint=rider_source_endpoint,
+                            season_year=year,
+                        )
+                    )
+                    collected_rider_ids.append(rider_id)
+                fetched += 1
             except Exception as exc:
                 failures.append((rider_id, str(exc)))
                 logger.warning('Rider sync failure: rider_id=%s error=%s', rider_id, exc)
@@ -734,7 +1084,58 @@ class FirstCyclingClient:
                     gender,
                     idx,
                     len(rider_ids),
-                    synced,
+                    fetched,
+                    len(failures),
+                )
+
+        applied = False
+        if self.sync_method == 'incremental_upsert':
+            applied = upserted > 0
+            logger.info(
+                'Rider incremental upsert finished: year=%s gender=%s upserted=%s failed=%s',
+                year,
+                gender,
+                upserted,
+                len(failures),
+            )
+        else:
+            if not failures:
+                # Refresh collected rider IDs only after complete successful collection.
+                db_load_started = time.perf_counter()
+                delete_query = self.db_session.query(FirstCyclingRider)
+                if collected_rider_ids:
+                    delete_query = delete_query.filter(FirstCyclingRider.rider_id.in_(collected_rider_ids))
+
+                delete_count = delete_query.delete(synchronize_session=False)
+                if self.verbose_sync:
+                    logger.info(
+                        'Rider refresh delete: year=%s gender=%s deleted=%s',
+                        year,
+                        gender,
+                        delete_count,
+                    )
+
+                rider_mappings = [
+                    self._to_model_kwargs(FirstCyclingRider, row)
+                    for row in normalized_rows
+                ]
+                if rider_mappings:
+                    self.db_session.execute(FirstCyclingRider.__table__.insert(), rider_mappings)
+                applied = True
+
+                logger.info(
+                    'Rider DB load finished: year=%s gender=%s rows=%s deleted=%s duration_ms=%s',
+                    year,
+                    gender,
+                    len(rider_mappings),
+                    delete_count,
+                    int((time.perf_counter() - db_load_started) * 1000),
+                )
+            else:
+                logger.warning(
+                    'Rider refresh skipped due to collection failures: year=%s gender=%s failures=%s',
+                    year,
+                    gender,
                     len(failures),
                 )
 
@@ -742,23 +1143,140 @@ class FirstCyclingClient:
             self.db_session.commit()
 
         logger.info(
-            'Rider sync finished: year=%s gender=%s requested=%s fetched=%s failed=%s skipped=%s filtered_out=%s',
+            'Rider sync finished: year=%s gender=%s requested=%s fetched=%s failed=%s skipped=%s filtered_out=%s skipped_existing=%s method=%s',
             year,
             gender,
             len(rider_ids),
-            synced,
+            fetched,
             len(failures),
             skipped,
             filtered_out,
+            skipped_existing,
+            self.sync_method,
         )
 
         return {
             'requested': len(rider_ids),
-            'fetched': synced,
+            'fetched': fetched,
             'failed': len(failures),
             'filtered_out': filtered_out,
             'skipped': skipped,
+            'skipped_existing': skipped_existing,
             'failures': failures,
+            'applied': applied,
+            'method': self.sync_method,
+        }
+
+    def sync_race_results_window(self, year, gender, start_date, end_date, commit=True):
+        start = self._parse_input_date(start_date, 'start_date')
+        end = self._parse_input_date(end_date, 'end_date')
+        if start > end:
+            raise ValueError('start_date must be on or before end_date')
+
+        logger.info(
+            'Race results window sync started: year=%s gender=%s start=%s end=%s',
+            year,
+            gender,
+            start,
+            end,
+        )
+
+        candidate_races = self.db_session.query(FirstCyclingRace).filter(
+            FirstCyclingRace.season_year == year,
+            FirstCyclingRace.start_date.isnot(None),
+        ).all()
+
+        races_in_scope = []
+        skipped_no_dates = 0
+        skipped_gender = 0
+
+        for race in candidate_races:
+            if not _gender_matches(race.gender, gender):
+                skipped_gender += 1
+                continue
+
+            race_start = race.start_date
+            race_end = race.end_date or race.start_date
+            if race_start is None:
+                skipped_no_dates += 1
+                continue
+
+            if self._date_windows_overlap(race_start, race_end, start, end):
+                races_in_scope.append(race)
+
+        logger.info(
+            'Race results scope resolved: year=%s gender=%s candidates=%s in_scope=%s skipped_gender=%s skipped_no_dates=%s',
+            year,
+            gender,
+            len(candidate_races),
+            len(races_in_scope),
+            skipped_gender,
+            skipped_no_dates,
+        )
+
+        synced = 0
+        skipped = 0
+        failed = 0
+        total_rows_synced = 0
+        failures = []
+
+        for idx, race in enumerate(races_in_scope, start=1):
+            try:
+                result_summary = self.sync_race_results(
+                    race_id=race.race_id,
+                    season_year=year,
+                    commit=False,
+                )
+                if result_summary.get('skipped_non_road_race'):
+                    skipped += 1
+                else:
+                    synced += 1
+                    total_rows_synced += int(result_summary.get('synced') or 0)
+            except Exception as exc:
+                failed += 1
+                failures.append((race.race_id, str(exc)))
+                logger.warning('Race results sync failure: race_id=%s error=%s', race.race_id, exc)
+
+            if idx % self.sync_log_interval == 0:
+                logger.info(
+                    'Race results window progress: year=%s gender=%s processed=%s/%s synced=%s skipped=%s failed=%s',
+                    year,
+                    gender,
+                    idx,
+                    len(races_in_scope),
+                    synced,
+                    skipped,
+                    failed,
+                )
+
+        if commit:
+            self.db_session.commit()
+
+        logger.info(
+            'Race results window sync finished: year=%s gender=%s start=%s end=%s requested=%s synced=%s skipped=%s failed=%s rows_synced=%s',
+            year,
+            gender,
+            start,
+            end,
+            len(races_in_scope),
+            synced,
+            skipped,
+            failed,
+            total_rows_synced,
+        )
+
+        return {
+            'requested': len(races_in_scope),
+            'synced': synced,
+            'skipped': skipped,
+            'failed': failed,
+            'rows_synced': total_rows_synced,
+            'failures': failures,
+            'start_date': str(start),
+            'end_date': str(end),
+            'candidates': len(candidate_races),
+            'skipped_no_dates': skipped_no_dates,
+            'skipped_gender': skipped_gender,
         }
 
     def sync_latest_results(self, season_year, only_today=False, commit=True):

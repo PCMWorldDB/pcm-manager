@@ -12,16 +12,14 @@ This folder contains external integration clients used by the application.
 
 - Race calendar (2025): `/{FIRST_CYCLING_API_PATH}/2025/raceCalendar.json`
 - Team overview (2025): `/{FIRST_CYCLING_API_PATH}/2025/teamOverview.json`
-- Rider overview (2025): `/{FIRST_CYCLING_API_PATH}/2025/riderOverview.json`
 - Race details by race ID: `/{FIRST_CYCLING_API_PATH}/2025/{race-id}.json`
-- Rider details by rider ID: `/{FIRST_CYCLING_API_PATH}/riderData.php?id={rider-id}`
-- Team details by team ID: `/{FIRST_CYCLING_API_PATH}/teamData.php?id={team-id}`
+- Rider details by rider ID: `/{FIRST_CYCLING_API_PATH}/rider/{rider-id}.json`
+- Team details by team ID: `/{FIRST_CYCLING_API_PATH}/team/{team-id}.json`
 
 - THESE ENDPOINTS NOT WORKING
 - Latest results: `/{FIRST_CYCLING_API_PATH}/latestResults.php`
 - Latest results today: `/{FIRST_CYCLING_API_PATH}/latestResultsTODAY.php`
 
-The integration defaults to **2025** for year-based endpoints.
 
 #### Configuration
 
@@ -45,7 +43,8 @@ Use sync methods to fetch and persist in one step:
 - `sync_race(race_id, season_year=2025)`
 - `sync_race_calendar(season_year=2025, gender='Men')`
 - `sync_teams(season_year=2025, gender='Men')`
-- `sync_riders(season_year=2025, gender='Men')`
+- `sync_riders(season_year=2025, gender='Men')` (loads rider IDs from `firstcycling_teams.rider_ids` and fetches rider details)
+- `sync_race_results_window(season_year=2025, gender='Men', start_date='2025-03-01', end_date='2025-03-31')`
 - `sync_latest_results(only_today=False)`
 
 #### Minimal usage example

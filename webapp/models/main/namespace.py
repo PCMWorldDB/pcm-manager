@@ -24,6 +24,7 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     # Metadata
     pcm_version = db.Column(db.String(20))  # e.g., 'PCM2024', 'PCM2023'
     database_year = db.Column(db.Integer)  # e.g., 2024
+    gender = db.Column(db.String(20), nullable=False, default='Men')
     
     # Status
     status = db.Column(db.String(20), default='active', nullable=False)  # active, maintenance, archived

@@ -1,0 +1,432 @@
+{% extends "base.html" %}
+
+{% block title %}Stats Editor - WDB{% endblock %}
+
+{% block styles %}
+    .filters-grid {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 12px;
+        align-items: flex-end;
+    }
+    .filter-item {
+        flex: 0 0 auto;
+    }
+    .filter-item-compact {
+        width: 125px;
+    }
+    .filter-item-category {
+        width: 100px;
+    }
+    .filter-item-classification {
+        width: 170px;
+    }
+    .filter-item-date {
+        width: 170px;
+    }
+    .filter-item-checkbox {
+        width: 135px;
+    }
+    .filter-item-name {
+        width: 260px;
+    }
+    .stage-row {
+        background: #f8f9fa;
+    }
+    .stage-row td {
+        font-size: 0.9rem;
+    }
+    .toggle-btn {
+        min-width: 64px;
+    }
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-1">Stats Editor</h2>
+        <p class="text-muted mb-0">Make changes to rider stats</p>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if active_method == 'by_race' %}active{% endif %}" href="{{ url_for('web.stats_editor', method='by_race') }}">By Race Result</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if active_method == 'by_list' %}active{% endif %}" href="{{ url_for('web.stats_editor', method='by_list') }}">By List</a>
+    </li>
+</ul>
+{% if active_method == 'by_race' and season_selected %}
+<div class="panel-card card">
+    <div class="card-body">
+        <form method="get" action="{{ url_for('web.stats_editor') }}">
+            <input type="hidden" name="method" value="{{ active_method }}">
+            <h5 class="section-title">Search Races</h5>
+            <div class="filters-grid">
+                <div class="filter-item filter-item-name">
+                    <label class="form-label" for="race_name">Race Name</label>
+                    <input id="race_name" name="race_name" type="text" class="form-control" placeholder="Search race name" value="{{ selected_filters.race_name }}">
+                </div>
+                <div class="filter-item filter-item-category">
+                    <label class="form-label" for="category">Category</label>
+                    <select id="category" name="category" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.categories %}
+                        <option value="{{ value }}" {% if selected_filters.category == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-classification">
+                    <label class="form-label" for="classification">Classification</label>
+                    <select id="classification" name="classification" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.classifications %}
+                        <option value="{{ value }}" {% if selected_filters.classification == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-name">
+                    <label class="form-label" for="nation">Nation</label>
+                    <select id="nation" name="nation" class="form-select">
+                        <option value="">All</option>
+                        {% for value in filter_choices.nations %}
+                        <option value="{{ value }}" {% if selected_filters.nation == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-item filter-item-checkbox">
+                    <label class="form-label" for="is_stage_race">Race Type</label>
+                    <select id="is_stage_race" name="is_stage_race" class="form-select">
+                        <option value="" {% if not selected_filters.is_stage_race %}selected{% endif %}>All</option>
+                        <option value="false" {% if selected_filters.is_stage_race == 'false' %}selected{% endif %}>One Day</option>
+                        <option value="true" {% if selected_filters.is_stage_race == 'true' %}selected{% endif %}>Stage</option>
+                    </select>
+                </div>
+            </div>
+            <div class="filters-grid mt-2">
+                <div class="filter-item filter-item-date">
+                    <label class="form-label" for="start_date_from">From</label>
+                    <input id="start_date_from" name="start_date_from" type="date" class="form-control" value="{{ selected_filters.start_date_from }}">
+                </div>
+                <div class="filter-item filter-item-date">
+                    <label class="form-label" for="start_date_to">To</label>
+                    <input id="start_date_to" name="start_date_to" type="date" class="form-control" value="{{ selected_filters.start_date_to }}">
+                </div>
+            </div>
+            <div class="d-flex gap-4 mt-3">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="edit_status_pending_edits" name="edit_status" value="pending_edits" {% if 'pending_edits' in selected_filters.edit_statuses %}checked{% endif %}>
+                    <label class="form-check-label" for="edit_status_pending_edits">Pending Edits</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="edit_status_pending_approval" name="edit_status" value="pending_approval" {% if 'pending_approval' in selected_filters.edit_statuses %}checked{% endif %}>
+                    <label class="form-check-label" for="edit_status_pending_approval">Pending Approval</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="edit_status_approved" name="edit_status" value="approved" {% if 'approved' in selected_filters.edit_statuses %}checked{% endif %}>
+                    <label class="form-check-label" for="edit_status_approved">Approved</label>
+                </div>
+            </div>
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-outline-primary" type="submit">Apply Filters</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', method='by_race', race_name='') }}">Clear Filters</a>
+            </div>
+        </form>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if season_selected and active_method == 'by_race' %}
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Races ({{ races|length }})</h5>
+
+        {% if races %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width: 82px;" class="sortable-col" data-sort-type="number">Stages</th>
+                        <th style="width: 96px;">Status</th>
+                        <th class="sortable-col" data-sort-type="date">Start Date</th>
+                        <th class="sortable-col" data-sort-type="text">Name</th>
+                        <th class="sortable-col" data-sort-type="text">Nation</th>
+                        <th class="sortable-col" data-sort-type="text">Category</th>
+                        <th class="sortable-col" data-sort-type="text">Classification</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for race in races %}
+                    {% set stage_rows = race.race_stages | sort(attribute='stage_number') %}
+                    {% set has_stages = stage_rows|length > 0 %}
+                    {% set race_status = (race_status_map | default({})).get(race.id, {}) %}
+                    <tr class="race-row" data-race-id="{{ race.id }}">
+                        <td data-sort-value="{{ stage_rows|length if has_stages else 0 }}">
+                            {% if has_stages %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary toggle-btn" data-race-id="{{ race.id }}" data-stage-count="{{ stage_rows|length }}">
+                                ({{ stage_rows|length }})
+                            </button>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="text-nowrap">
+                            {% if race_status.get('is_result_downloaded') %}<span title="Race result downloaded">⬇️</span>{% endif %}
+                            {% if race_status.get('is_partial_result_downloaded') and not race_status.get('is_result_downloaded') %}<span class="ms-1" title="Stage results partially downloaded">🔄</span>{% endif %}
+                            {% if race_status.get('has_namespace') and race_status.get('has_stat_changes') %}<span class="ms-1" title="Edits Saved">✏️</span>{% endif %}
+                            {% if race_status.get('has_namespace') and race_status.get('is_approved') %}
+                            <span class="ms-1 text-success" title="Approved">☑</span>
+                            {% elif race_status.get('has_namespace') and race_status.get('has_stat_changes') %}
+                            <span class="ms-1" title="Approval pending">⏳</span>
+                            {% endif %}
+                        </td>
+                        <td data-sort-value="{{ race.start_date.isoformat() if race.start_date else '' }}">{{ race.start_date or '-' }}</td>
+                        <td data-sort-value="{{ (race.name or '')|lower }}">
+                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
+                                {{ race.name or '-' }}
+                            </a>
+                        </td>
+                        <td data-sort-value="{{ (race.nation_name or '')|lower }}">{{ race.nation_name or '-' }}</td>
+                        <td data-sort-value="{{ (race.category or '')|lower }}">{{ race.category or '-' }}</td>
+                        <td data-sort-value="{{ (race.classification_label or '')|lower }}">{{ race.classification_label or '-' }}</td>
+                    </tr>
+
+                    {% if has_stages %}
+                    {% for stage in stage_rows %}
+                    {% set stage_status = (stage_status_map | default({})).get(stage.id, {}) %}
+                    <tr class="stage-row stage-row-{{ race.id }}" style="display: none;">
+                        <td class="text-end">↳</td>
+                        <td class="text-nowrap">
+                            {% if stage_status.get('is_result_downloaded') %}<span title="Stage result downloaded">⬇️</span>{% endif %}
+                            {% if stage_status.get('has_namespace') and stage_status.get('has_stat_changes') %}<span class="ms-1" title="Edits Saved">✏️</span>{% endif %}
+                            {% if stage_status.get('has_namespace') and stage_status.get('is_approved') %}
+                            <span class="ms-1 text-success" title="Approved">☑</span>
+                            {% elif stage_status.get('has_namespace') and stage_status.get('has_stat_changes') %}
+                            <span class="ms-1" title="Approval pending">⏳</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ stage.stage_date or '-' }}</td>
+                        <td>
+                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, stage_id=stage.id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
+                                Stage {{ stage.stage_number or '?' }} - {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
+                            </a>
+                        </td>
+                        <td>-</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                    {% endfor %}
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No races found for the selected season/filters.</p>
+        {% endif %}
+    </div>
+</div>
+{% elif active_method == 'by_list' %}
+<div class="panel-card card">
+    <div class="card-body">
+        {% if season_selected %}
+        <div class="row g-3">
+            <div class="col-12">
+                <div class="section-block h-100">
+                    <h5 class="section-title">Create List</h5>
+                    <form method="post" action="{{ url_for('web.stats_editor_create_list') }}" class="row g-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="col-md-7">
+                            <label class="form-label">List Name</label>
+                            <input type="text" name="list_name" class="form-control" required>
+                        </div>
+                        <div class="col-md-5 d-flex align-items-end">
+                            <button class="btn btn-primary" type="submit">Create List</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="section-block h-100">
+                    <h5 class="section-title">Lists</h5>
+                    {% if list_entries %}
+                    <div class="table-wrapper">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>List Name</th>
+                                    <th>Status</th>
+                                    <th>Riders</th>
+                                    <th>Stat Changes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in list_entries %}
+                                <tr>
+                                    <td>
+                                        <a href="{{ url_for('web.stats_editor_list_detail', list_id=item['id']) }}">
+                                            {{ item['list_name'] }}
+                                        </a>
+                                    </td>
+                                    <td class="text-nowrap">
+                                        {% set s = item.get('status') or {} %}
+                                        {% if s.get('has_namespace') and s.get('has_stat_changes') %}
+                                            <span title="Edits Saved">✏️</span>
+                                        {% endif %}
+                                        {% if s.get('has_namespace') and s.get('is_approved') %}
+                                            <span class="ms-1 text-success" title="Approved">☑</span>
+                                        {% elif s.get('has_namespace') and s.get('has_stat_changes') %}
+                                            <span class="ms-1" title="Approval pending">⏳</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ item.get('riders_count', 0) }}</td>
+                                    <td>{{ item.get('total_changes', 0) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">No lists found yet. Create one to get started.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">Select a namespace with Database Year and Gender to view or create stat lists.</div>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">Select a namespace with Database Year and Gender to load stats editor data.</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleStages(raceId, button) {
+    const rows = document.querySelectorAll('.stage-row-' + raceId);
+    if (!rows.length) {
+        return;
+    }
+
+    const isHidden = rows[0].style.display === 'none';
+    rows.forEach(row => {
+        row.style.display = isHidden ? 'table-row' : 'none';
+    });
+
+    button.classList.toggle('expanded', isHidden);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.toggle-btn').forEach(button => {
+        button.addEventListener('click', function () {
+            const raceId = this.getAttribute('data-race-id');
+            toggleStages(raceId, this);
+        });
+    });
+
+    const raceResultsTable = document.querySelector('.race-results-table');
+    if (!raceResultsTable || !raceResultsTable.tBodies.length) {
+        return;
+    }
+
+    const tableBody = raceResultsTable.tBodies[0];
+    const sortableHeaders = Array.from(raceResultsTable.querySelectorAll('thead th.sortable-col'));
+    const sortState = {
+        columnIndex: null,
+        direction: 'asc',
+    };
+
+    function clearSortIndicators() {
+        sortableHeaders.forEach(function (header) {
+            header.classList.remove('sort-asc', 'sort-desc');
+        });
+    }
+
+    function getSortValue(primaryRow, columnIndex, sortType) {
+        const cell = primaryRow.cells[columnIndex];
+        if (!cell) {
+            return sortType === 'number' ? Number.POSITIVE_INFINITY : '';
+        }
+
+        const explicitValue = (cell.getAttribute('data-sort-value') || '').trim();
+        const rawValue = explicitValue || (cell.textContent || '').trim();
+
+        if (sortType === 'number') {
+            const parsedNumber = Number.parseFloat(rawValue);
+            return Number.isFinite(parsedNumber) ? parsedNumber : Number.POSITIVE_INFINITY;
+        }
+
+        if (sortType === 'date') {
+            const parsedDate = Date.parse(rawValue);
+            return Number.isFinite(parsedDate) ? parsedDate : Number.POSITIVE_INFINITY;
+        }
+
+        return rawValue.toLowerCase();
+    }
+
+    function collectRaceGroups() {
+        const allRows = Array.from(tableBody.rows);
+        const groups = [];
+
+        allRows.forEach(function (row) {
+            if (!row.classList.contains('race-row')) {
+                return;
+            }
+
+            const raceId = row.getAttribute('data-race-id');
+            const stageRows = allRows.filter(function (candidate) {
+                return candidate.classList.contains('stage-row-' + raceId);
+            });
+
+            groups.push({ primary: row, stages: stageRows });
+        });
+
+        return groups;
+    }
+
+    function sortRaceTableByColumn(header) {
+        const sortType = (header.getAttribute('data-sort-type') || 'text').toLowerCase();
+        const columnIndex = header.cellIndex;
+        const nextDirection = (
+            sortState.columnIndex === columnIndex && sortState.direction === 'asc'
+        ) ? 'desc' : 'asc';
+
+        const groups = collectRaceGroups();
+        groups.sort(function (groupA, groupB) {
+            const valueA = getSortValue(groupA.primary, columnIndex, sortType);
+            const valueB = getSortValue(groupB.primary, columnIndex, sortType);
+
+            if (valueA < valueB) {
+                return nextDirection === 'asc' ? -1 : 1;
+            }
+            if (valueA > valueB) {
+                return nextDirection === 'asc' ? 1 : -1;
+            }
+            return 0;
+        });
+
+        groups.forEach(function (group) {
+            tableBody.appendChild(group.primary);
+            group.stages.forEach(function (stageRow) {
+                tableBody.appendChild(stageRow);
+            });
+        });
+
+        clearSortIndicators();
+        header.classList.add(nextDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+        sortState.columnIndex = columnIndex;
+        sortState.direction = nextDirection;
+    }
+
+    sortableHeaders.forEach(function (header) {
+        header.addEventListener('click', function () {
+            sortRaceTableByColumn(header);
+        });
+    });
+});
+</script>
+{% endblock %}

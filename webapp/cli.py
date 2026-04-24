@@ -87,6 +87,15 @@ def initialize_database(log=None):
         # Step 1: Create tables
         log('\n1. Creating database tables...')
         db.create_all(bind_key='main')
+        with db.engine.begin() as conn:
+            conn.execute(text("""
+                ALTER TABLE namespaces
+                ADD COLUMN IF NOT EXISTS gender VARCHAR(20) NOT NULL DEFAULT 'Men'
+            """))
+            conn.execute(text("""
+                ALTER TABLE firstcycling_teams
+                ADD COLUMN IF NOT EXISTS rider_ids JSONB
+            """))
 
         # Create association tables using raw SQL (to avoid FK resolution issues)
         from webapp.models.main.user import create_association_tables
@@ -205,7 +214,7 @@ def _seed_roles(log=None):
     roles_data = [
         {'name': 'admin', 'display_name': 'Administrator', 
          'description': 'Full system access', 'is_system_role': True},
-        {'name': 'release_manager', 'display_name': 'Release Manager',
+        {'name': 'release_manager', 'display_name': 'Releases',
          'description': 'Can create namespaces and publish releases', 'is_system_role': True},
         {'name': 'stat_editor', 'display_name': 'Stat Editor',
          'description': 'Can edit rider/team/race statistics', 'is_system_role': True},

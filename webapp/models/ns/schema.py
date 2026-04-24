@@ -5,7 +5,7 @@ Each namespace gets its own PostgreSQL database with this schema.
 """
 import os
 import yaml
-from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, DateTime, BigInteger, UniqueConstraint, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -58,35 +58,112 @@ class CDBCyclist(NamespaceBase):
         return f'<Cyclist {self.first_name} {self.last_name}>'
 
 
-class RaceResultDelta(NamespaceBase):
-    """Stat deltas captured from FirstCycling race result review workflow."""
+class StatChange(NamespaceBase):
+    """Stat changes captured from race/stage review and ad-hoc list workflows."""
 
-    __tablename__ = 'race_result_delta'
+    __tablename__ = 'stat_changes'
 
     id = Column(Integer, primary_key=True)
-    first_cycling_race_id = Column(Integer, nullable=False, index=True)
+    first_cycling_race_id = Column(Integer, nullable=False, default=0, index=True)
     first_cycling_stage_id = Column(Integer, nullable=False, default=0, index=True)
+    stat_list_id = Column(Integer, nullable=False, default=0, index=True)
+    release_id = Column(Integer, nullable=True, index=True)
     cyclist_pcm_id = Column(Integer, nullable=False, index=True)
     first_cycling_rider_id = Column(Integer, nullable=False, index=True)
     stat_name = Column(String(20), nullable=False, index=True)
     original_value = Column(Integer, nullable=False)
     final_value = Column(Integer, nullable=False)
     delta_value = Column(Integer, nullable=False)
+    is_approved = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'first_cycling_race_id',
+            'first_cycling_stage_id',
+            'stat_list_id',
+            'cyclist_pcm_id',
+            'first_cycling_rider_id',
+            'stat_name',
+            name='uq_stat_changes_scope',
+        ),
+        Index(
+            'idx_stat_changes_race_stage_rider',
+            'first_cycling_race_id',
+            'first_cycling_stage_id',
+            'first_cycling_rider_id',
+        ),
+        Index('idx_stat_changes_list_rider', 'stat_list_id', 'first_cycling_rider_id'),
+        Index('idx_stat_changes_release', 'release_id'),
+    )
 
     def __repr__(self):
         return (
-            '<RaceResultDelta '
+            '<StatChange '
             f'race={self.first_cycling_race_id} '
+            f'stage={self.first_cycling_stage_id} '
+            f'list={self.stat_list_id} '
+            f'release={self.release_id} '
             f'rider={self.first_cycling_rider_id} '
             f'stat={self.stat_name} '
             f'delta={self.delta_value}>'
         )
 
 
+class Release(NamespaceBase):
+    """Namespace-scoped release record."""
+
+    __tablename__ = 'releases'
+
+    id = Column(Integer, primary_key=True)
+    version = Column(String(50), nullable=False, index=True)
+    release_name = Column(String(200))
+    release_type = Column(String(20), nullable=False, default='minor')
+    sqlite_file_path = Column(String(500), nullable=False, default='')
+    file_size_bytes = Column(BigInteger)
+    md5_checksum = Column(String(32))
+    sha256_checksum = Column(String(64))
+    status = Column(String(20), nullable=False, default='draft')
+    release_notes = Column(Text)
+    created_by_id = Column(Integer)
+    published_by_id = Column(Integer)
+    published_at = Column(DateTime)
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+
+
+class StatList(NamespaceBase):
+    """Ad-hoc stat list metadata."""
+
+    __tablename__ = 'stat_lists'
+
+    id = Column(Integer, primary_key=True)
+    list_name = Column(String(120), nullable=False)
+    season_year = Column(Integer, nullable=False, index=True)
+    gender = Column(String(20), nullable=False, index=True)
+    created_by_id = Column(Integer, nullable=True)
+
+
+class StatListItem(NamespaceBase):
+    """Riders assigned to a stat list."""
+
+    __tablename__ = 'stat_list_items'
+
+    id = Column(Integer, primary_key=True)
+    stat_list_id = Column(Integer, nullable=False, index=True)
+    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('stat_list_id', 'first_cycling_rider_id', name='uq_stat_list_items_list_rider'),
+    )
+
+
 # List of all tables to create (in order)
 NAMESPACE_TABLES = [
     CDBCyclist,
-    RaceResultDelta,
+    Release,
+    StatChange,
+    StatList,
+    StatListItem,
 ]
 
 

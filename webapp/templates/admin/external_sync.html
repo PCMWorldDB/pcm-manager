@@ -19,6 +19,13 @@
                     <div class="card border-0 bg-light mb-3">
                         <div class="card-body py-3">
                             <form method="get" action="{{ url_for('web.admin_external_sync') }}">
+                                <input type="hidden" name="sync_view" value="{{ active_sync_view }}">
+                                {% if selected_start_date %}
+                                <input type="hidden" name="start_date" value="{{ selected_start_date }}">
+                                {% endif %}
+                                {% if selected_end_date %}
+                                <input type="hidden" name="end_date" value="{{ selected_end_date }}">
+                                {% endif %}
                                 <h5 class="mb-3">Select a Season</h5>
                                 <div class="row g-3">
                                     <div class="col-md-4">
@@ -67,7 +74,7 @@
                             {% for view_key, view_label in sync_views.items() %}
                             <li class="nav-item">
                                 <a class="nav-link {% if active_sync_view == view_key %}active{% endif %}"
-                                   href="{{ url_for('web.admin_external_sync', sync_view=view_key, year=selected_season.year if selected_season else None, gender=selected_season.gender if selected_season else None) }}">
+                                   href="{{ url_for('web.admin_external_sync', sync_view=view_key, year=selected_season.year if selected_season else None, gender=selected_season.gender if selected_season else None, start_date=selected_start_date if selected_start_date else None, end_date=selected_end_date if selected_end_date else None) }}">
                                     {{ view_label }}
                                 </a>
                             </li>
@@ -81,6 +88,21 @@
                                     <input type="hidden" name="sync_type" value="{{ active_sync_view }}">
                                     <input type="hidden" name="year" value="{{ selected_season.year }}">
                                     <input type="hidden" name="gender" value="{{ selected_season.gender }}">
+                                    {% if active_sync_view == 'fc_race_results' %}
+                                    <p class="small text-muted mb-2">
+                                        Sync completed races with date windows overlapping the selected range.
+                                    </p>
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-auto">
+                                            <label for="start_date" class="form-label mb-1">Start Date</label>
+                                            <input id="start_date" name="start_date" type="date" class="form-control" value="{{ selected_start_date or '' }}" required>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label for="end_date" class="form-label mb-1">End Date</label>
+                                            <input id="end_date" name="end_date" type="date" class="form-control" value="{{ selected_end_date or '' }}" required>
+                                        </div>
+                                    </div>
+                                    {% endif %}
                                     <button type="submit" class="btn btn-primary">
                                         Start Sync - {{ sync_type_display(active_sync_view) }}
                                     </button>
