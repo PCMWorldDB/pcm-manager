@@ -1,5 +1,6 @@
 """Web routes for UI"""
 import hashlib
+import html
 import logging
 import json
 import os
@@ -8,7 +9,7 @@ import shutil
 import sqlite3
 from datetime import datetime
 
-from flask import render_template, redirect, url_for, flash, request, abort, current_app, session, make_response
+from flask import render_template, redirect, url_for, flash, request, abort, current_app, session, make_response, send_file
 from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import create_engine, text, cast, Integer, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -329,9 +330,46 @@ def _load_namespace_cyclist_stats(namespace, rider_ids):
     return stats_map
 
 
+def _load_namespace_cyclist_measurements(namespace, rider_ids):
+    if namespace is None or not rider_ids:
+        return {}
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        first_cycling_id,
+                        size_cm,
+                        weight_kg
+                    FROM cdb_cyclist
+                    WHERE first_cycling_id = ANY(:rider_ids)
+                    """
+                ),
+                {'rider_ids': list(rider_ids)},
+            ).mappings().all()
+    except Exception:
+        logger.exception('Failed to load cyclist measurements from namespace %s', namespace.slug)
+        return {}
+    finally:
+        engine.dispose()
+
+    measurements_map = {}
+    for row in rows:
+        measurements_map[row['first_cycling_id']] = {
+            'size_cm': row.get('size_cm'),
+            'weight_kg': row.get('weight_kg'),
+        }
+
+    return measurements_map
+
+
 def _load_namespace_race_result_deltas(namespace, first_cycling_race_id, first_cycling_stage_id, rider_ids):
     """Load saved stat delta rows keyed by rider and stat name for one race."""
-    if namespace is None or first_cycling_race_id is None or first_cycling_stage_id is None or not rider_ids:
+    if namespace is None or first_cycling_race_id is None or not rider_ids:
         return {}
 
     connection_string = namespace.build_connection_string()
@@ -347,16 +385,16 @@ def _load_namespace_race_result_deltas(namespace, first_cycling_race_id, first_c
                         original_value,
                         final_value,
                         delta_value
-                                        FROM stat_changes
+                    FROM stat_changes
                     WHERE first_cycling_race_id = :race_id
-                                            AND first_cycling_stage_id = :stage_id
-                                            AND stat_list_id = 0
+                      AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                      AND stat_list_id IS NULL
                       AND first_cycling_rider_id = ANY(:rider_ids)
                     """
                 ),
                 {
                     'race_id': first_cycling_race_id,
-                                        'stage_id': first_cycling_stage_id,
+                    'stage_id': first_cycling_stage_id,
                     'rider_ids': list(rider_ids),
                 },
             ).mappings().all()
@@ -400,9 +438,9 @@ def _load_namespace_race_delta_status(namespace, first_cycling_race_ids):
                         first_cycling_race_id,
                         COUNT(*) AS total_changes,
                         SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
-                                        FROM stat_changes
+                    FROM stat_changes
                     WHERE first_cycling_race_id = ANY(:race_ids)
-                                            AND stat_list_id = 0
+                      AND stat_list_id IS NULL
                     GROUP BY first_cycling_race_id
                     """
                 ),
@@ -443,10 +481,10 @@ def _load_namespace_stage_delta_status(namespace, first_cycling_race_ids):
                         first_cycling_stage_id,
                         COUNT(*) AS total_changes,
                         SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
-                                        FROM stat_changes
+                    FROM stat_changes
                     WHERE first_cycling_race_id = ANY(:race_ids)
-                      AND first_cycling_stage_id > 0
-                                            AND stat_list_id = 0
+                      AND first_cycling_stage_id IS NOT NULL
+                      AND stat_list_id IS NULL
                     GROUP BY first_cycling_stage_id
                     """
                 ),
@@ -474,7 +512,7 @@ def _load_namespace_stage_delta_status(namespace, first_cycling_race_ids):
     return status_map
 
 
-def _load_namespace_scope_delta_status(namespace, first_cycling_race_id=0, first_cycling_stage_id=0, stat_list_id=0):
+def _load_namespace_scope_delta_status(namespace, first_cycling_race_id=None, first_cycling_stage_id=None, stat_list_id=None):
     """Load aggregate delta status for one scope (race/stage or list)."""
     if namespace is None:
         return {
@@ -493,16 +531,16 @@ def _load_namespace_scope_delta_status(namespace, first_cycling_race_id=0, first
                     SELECT
                         COUNT(*) AS total_changes,
                         SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) AS approved_changes
-                                        FROM stat_changes
-                    WHERE first_cycling_race_id = :race_id
-                      AND first_cycling_stage_id = :stage_id
-                                            AND stat_list_id = :list_id
+                    FROM stat_changes
+                    WHERE first_cycling_race_id IS NOT DISTINCT FROM :race_id
+                      AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                      AND stat_list_id IS NOT DISTINCT FROM :list_id
                     """
                 ),
                 {
-                                        'race_id': first_cycling_race_id or 0,
-                                        'stage_id': first_cycling_stage_id or 0,
-                                        'list_id': stat_list_id or 0,
+                    'race_id': first_cycling_race_id,
+                    'stage_id': first_cycling_stage_id,
+                    'list_id': stat_list_id,
                 },
             ).mappings().first()
     except Exception:
@@ -554,9 +592,9 @@ def _decode_release_item_key(raw_key):
 
     return {
         'scope_type': scope_type,
-        'first_cycling_race_id': race_id,
-        'first_cycling_stage_id': stage_id,
-        'stat_list_id': list_id,
+        'first_cycling_race_id': race_id or None,
+        'first_cycling_stage_id': stage_id or None,
+        'stat_list_id': list_id or None,
     }
 
 
@@ -608,7 +646,7 @@ def _load_namespace_approved_release_items(namespace, season_year=None, gender=N
             list_name_map = {}
             if list_ids:
                 list_query = """
-                    SELECT id, list_name, season_year, gender
+                    SELECT id, list_name, season_year, gender, created_at
                     FROM stat_lists
                     WHERE id = ANY(:list_ids)
                 """
@@ -669,6 +707,9 @@ def _load_namespace_approved_release_items(namespace, season_year=None, gender=N
             scope_type = 'list'
             display_name = list_meta.get('list_name') or f'List #{list_id}'
             race_obj = None
+            item_date = list_meta.get('created_at') or '-'
+            category = '-'
+            classification_label = '-'
         elif stage_id > 0:
             race_obj = race_map.get(race_id)
             stage_obj = stage_map.get(stage_id)
@@ -677,26 +718,28 @@ def _load_namespace_approved_release_items(namespace, season_year=None, gender=N
             scope_type = 'stage'
             stage_name = stage_obj.stage_name or f'Stage {stage_obj.stage_number or "?"}'
             display_name = f"{race_obj.name or f'Race #{race_id}'} - {stage_name}"
+            item_date = stage_obj.stage_date if stage_obj is not None else (race_obj.start_date if race_obj is not None else '-')
+            category = race_obj.category if race_obj is not None else '-'
+            classification_label = race_obj.classification_label if race_obj is not None else '-'
         else:
             race_obj = race_map.get(race_id)
             if race_obj is None:
                 continue
             scope_type = 'race'
             display_name = race_obj.name or f'Race #{race_id}'
+            item_date = race_obj.start_date if race_obj is not None else '-'
+            category = race_obj.category if race_obj is not None else '-'
+            classification_label = race_obj.classification_label if race_obj is not None else '-'
 
         items.append({
             'item_key': _encode_release_item_key(scope_type, race_id, stage_id, list_id),
             'scope_type': scope_type,
+            'type_label': 'List' if scope_type == 'list' else 'Race',
             'is_selected': (int(row.get('selected_rows') or 0) > 0) if selected_release_id is not None else False,
-            'date': (
-                stage_map.get(stage_id).stage_date
-                if scope_type == 'stage' and stage_id in stage_map
-                else (race_obj.start_date if race_obj is not None else '-')
-            ),
+            'date': item_date,
             'name': display_name,
-            'nation_name': race_obj.nation_name if race_obj is not None else '-',
-            'category': race_obj.category if race_obj is not None else '-',
-            'classification_label': race_obj.classification_label if race_obj is not None else '-',
+            'category': category,
+            'classification_label': classification_label,
             'riders_edited': int(row.get('riders_edited') or 0),
             'total_edits': int(row.get('total_edits') or 0),
         })
@@ -740,9 +783,9 @@ def _sync_release_item_keys(namespace, release_id, selected_item_keys, visible_i
                         WHERE COALESCE(release_id, 0) IN (0, :current_release_id)
                           AND COALESCE(release_id, 0) <> :target_release_id
                           AND COALESCE(is_approved, FALSE) = TRUE
-                          AND first_cycling_race_id = :race_id
-                          AND first_cycling_stage_id = :stage_id
-                          AND stat_list_id = :list_id
+                          AND first_cycling_race_id IS NOT DISTINCT FROM :race_id
+                          AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                          AND stat_list_id IS NOT DISTINCT FROM :list_id
                         """
                     ),
                     {
@@ -765,8 +808,8 @@ def _sanitize_release_filename_part(value):
     return normalized.strip('-') or 'release'
 
 
-def _resolve_namespace_sqlite_file_path(namespace, stored_path):
-    """Resolve stored namespace-relative SQLite paths to absolute paths."""
+def _resolve_namespace_release_file_path(namespace, stored_path):
+    """Resolve stored namespace-relative release artifact paths to absolute paths."""
     if namespace is None or not stored_path:
         return None
 
@@ -781,6 +824,10 @@ def _resolve_namespace_sqlite_file_path(namespace, stored_path):
 
     absolute_path = os.path.join(get_namespace_path(namespace.slug), candidate)
     return absolute_path if os.path.exists(absolute_path) else None
+
+
+def _resolve_namespace_sqlite_file_path(namespace, stored_path):
+    return _resolve_namespace_release_file_path(namespace, stored_path)
 
 
 def _resolve_release_base_sqlite_path(namespace, release):
@@ -806,6 +853,114 @@ def _resolve_release_base_sqlite_path(namespace, release):
             return previous_path
 
     return _resolve_namespace_sqlite_file_path(namespace, namespace.sqlite_file_path)
+
+
+def _load_namespace_release_versions(namespace, release_id):
+    """Load generated release artifact records from the namespace database."""
+    if namespace is None or release_id is None:
+        return []
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        release_id,
+                        file_type,
+                        display_name,
+                        relative_path,
+                        content_type,
+                        file_size_bytes,
+                        md5_checksum,
+                        sha256_checksum,
+                        created_at
+                    FROM release_versions
+                    WHERE release_id = :release_id
+                    ORDER BY created_at ASC NULLS LAST, id ASC
+                    """
+                ),
+                {'release_id': release_id},
+            ).mappings().all()
+    except Exception:
+        logger.exception('Failed to load release artifact records for namespace %s release %s', namespace.slug, release_id)
+        return []
+    finally:
+        engine.dispose()
+
+    label_map = {
+        'cdb_sqlite': 'CDB SQLite',
+        'rider_stats_sql': 'Rider Stats SQL',
+        'release_overview_html': 'Release Overview HTML',
+    }
+
+    normalized_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        row_dict['file_type_label'] = label_map.get(row_dict.get('file_type'), row_dict.get('file_type') or '-')
+        normalized_rows.append(row_dict)
+
+    return normalized_rows
+
+
+def _replace_namespace_release_versions(namespace, release_id, files):
+    """Replace generated release artifact records for one release in the namespace database."""
+    if namespace is None or release_id is None:
+        return
+
+    connection_string = namespace.build_connection_string()
+    engine = create_engine(connection_string)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM release_versions WHERE release_id = :release_id"),
+                {'release_id': release_id},
+            )
+
+            for file_info in files:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO release_versions (
+                            release_id,
+                            file_type,
+                            display_name,
+                            relative_path,
+                            content_type,
+                            file_size_bytes,
+                            md5_checksum,
+                            sha256_checksum,
+                            created_at
+                        )
+                        VALUES (
+                            :release_id,
+                            :file_type,
+                            :display_name,
+                            :relative_path,
+                            :content_type,
+                            :file_size_bytes,
+                            :md5_checksum,
+                            :sha256_checksum,
+                            CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        'release_id': release_id,
+                        'file_type': file_info.get('file_type'),
+                        'display_name': file_info.get('display_name'),
+                        'relative_path': file_info.get('relative_path'),
+                        'content_type': file_info.get('content_type'),
+                        'file_size_bytes': file_info.get('file_size_bytes'),
+                        'md5_checksum': file_info.get('md5_checksum'),
+                        'sha256_checksum': file_info.get('sha256_checksum'),
+                    },
+                )
+    finally:
+        engine.dispose()
 
 
 def _load_release_stat_updates(namespace, release_id):
@@ -922,7 +1077,41 @@ def _compute_file_hashes(file_path):
     return md5_hash.hexdigest(), sha256_hash.hexdigest()
 
 
-def _build_review_sqlite_for_release(namespace, release):
+def _build_release_artifact_basename(namespace, release):
+    from webapp.config import ensure_namespace_directories
+
+    ensure_namespace_directories(namespace.slug)
+
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    safe_namespace = _sanitize_release_filename_part(namespace.slug or namespace.name)
+    safe_version = _sanitize_release_filename_part(release.version)
+    return f'{safe_namespace}-{safe_version}-{timestamp}'
+
+
+def _create_release_text_artifact(namespace, output_filename, content, content_type):
+    from webapp.config import ensure_namespace_directories, get_cdb_releases_path
+
+    ensure_namespace_directories(namespace.slug)
+    output_dir = get_cdb_releases_path(namespace.slug)
+    output_abs_path = os.path.join(output_dir, output_filename)
+
+    with open(output_abs_path, 'w', encoding='utf-8') as handle:
+        handle.write(content)
+
+    md5_checksum, sha256_checksum = _compute_file_hashes(output_abs_path)
+    relative_path = f'releases/{output_filename}'
+
+    return {
+        'display_name': output_filename,
+        'relative_path': relative_path,
+        'content_type': content_type,
+        'file_size_bytes': os.path.getsize(output_abs_path),
+        'md5_checksum': md5_checksum,
+        'sha256_checksum': sha256_checksum,
+    }
+
+
+def _build_review_sqlite_for_release(namespace, release, artifact_basename):
     """Create a release SQLite file from previous baseline and assigned stat changes."""
     if namespace is None or release is None:
         raise ValueError('Namespace and release are required')
@@ -937,10 +1126,7 @@ def _build_review_sqlite_for_release(namespace, release):
 
     ensure_namespace_directories(namespace.slug)
 
-    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    safe_namespace = _sanitize_release_filename_part(namespace.slug or namespace.name)
-    safe_version = _sanitize_release_filename_part(release.version)
-    output_filename = f'{safe_namespace}-{safe_version}-{timestamp}.sqlite'
+    output_filename = f'{artifact_basename}.sqlite'
     output_dir = get_cdb_releases_path(namespace.slug)
     output_abs_path = os.path.join(output_dir, output_filename)
 
@@ -960,15 +1146,231 @@ def _build_review_sqlite_for_release(namespace, release):
         raise
 
     md5_checksum, sha256_checksum = _compute_file_hashes(output_abs_path)
-    relative_path = f'cdb/releases/{output_filename}'
+    relative_path = f'releases/{output_filename}'
 
     return {
+        'display_name': output_filename,
         'relative_path': relative_path,
+        'content_type': 'application/vnd.sqlite3',
         'file_size_bytes': os.path.getsize(output_abs_path),
         'md5_checksum': md5_checksum,
         'sha256_checksum': sha256_checksum,
         'applied_changes': applied_changes,
     }
+
+
+def _build_release_stat_sql_for_release(namespace, release, artifact_basename):
+    """Create a standalone SQL script that applies the release's rider stat updates."""
+    if namespace is None or release is None:
+        raise ValueError('Namespace and release are required')
+
+    updates_payload = _load_release_stat_updates(namespace, release.id)
+    table_name = updates_payload['table_name']
+    id_column = updates_payload['id_column']
+    updates = updates_payload['updates']
+
+    rider_updates = {}
+    for (cyclist_pcm_id, stat_column), final_value in sorted(updates.items()):
+        rider_updates.setdefault(cyclist_pcm_id, []).append((stat_column, final_value))
+
+    release_title = f'{release.release_name or "Release"} {release.version or ""}'.strip()
+    lines = [
+        f'-- Rider stats update SQL for {release_title}',
+        f'-- Generated at {datetime.utcnow().isoformat()}Z',
+        'BEGIN TRANSACTION;',
+    ]
+
+    for cyclist_pcm_id in sorted(rider_updates):
+        assignments = ', '.join(
+            f'"{column_name}" = {int(final_value)}'
+            for column_name, final_value in sorted(rider_updates[cyclist_pcm_id])
+        )
+        lines.append(
+            f'UPDATE "{table_name}" SET {assignments} WHERE "{id_column}" = {int(cyclist_pcm_id)};'
+        )
+
+    lines.append('COMMIT;')
+    lines.append('')
+
+    file_info = _create_release_text_artifact(
+        namespace,
+        f'{artifact_basename}-rider-stats.sql',
+        '\n'.join(lines),
+        'application/sql',
+    )
+    file_info['applied_changes'] = len(updates)
+    return file_info
+
+
+def _build_release_overview_html_for_release(namespace, release, artifact_basename, generated_files):
+    """Create a static HTML overview for the release and its assigned items."""
+    if namespace is None or release is None:
+        raise ValueError('Namespace and release are required')
+
+    season_year, gender = _resolve_namespace_season(namespace)
+    selected_items = [
+        item
+        for item in _load_namespace_approved_release_items(
+            namespace,
+            season_year=season_year,
+            gender=gender,
+            selected_release_id=release.id,
+        )
+        if item.get('is_selected')
+    ]
+
+    release_title = f'{release.release_name or "Release"} {release.version or ""}'.strip()
+    release_notes = html.escape(release.release_notes or '-')
+    item_rows = []
+    for item in selected_items:
+        item_rows.append(
+            '<tr>'
+            f'<td>{html.escape(item.get("type_label") or "-")}</td>'
+            f'<td>{html.escape(str(item.get("date") or "-"))}</td>'
+            f'<td>{html.escape(item.get("name") or "-")}</td>'
+            f'<td>{int(item.get("riders_edited") or 0)}</td>'
+            f'<td>{int(item.get("total_edits") or 0)}</td>'
+            f'<td>{html.escape(item.get("category") or "-")}</td>'
+            f'<td>{html.escape(item.get("classification_label") or "-")}</td>'
+            '</tr>'
+        )
+
+    file_rows = []
+    for file_info in generated_files:
+        file_rows.append(
+            '<tr>'
+            f'<td>{html.escape(file_info.get("file_type_label") or "-")}</td>'
+            f'<td>{html.escape(file_info.get("display_name") or "-")}</td>'
+            f'<td>{int(file_info.get("file_size_bytes") or 0)}</td>'
+            '</tr>'
+        )
+
+    html_content = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(release_title)}</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 32px; color: #1f2937; }}
+    h1, h2 {{ margin-bottom: 0.5rem; }}
+    p {{ margin-top: 0; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; }}
+    th, td {{ border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; }}
+    th {{ background: #f3f4f6; }}
+    .meta {{ margin-bottom: 1.5rem; }}
+  </style>
+</head>
+<body>
+  <h1>{html.escape(release_title)}</h1>
+  <p>Namespace: {html.escape(namespace.name or namespace.slug or '-')}</p>
+  <div class="meta">
+    <p>Generated at: {html.escape(datetime.utcnow().isoformat())}Z</p>
+    <p>Release notes: {release_notes}</p>
+  </div>
+  <h2>Release Files</h2>
+  <table>
+    <thead>
+      <tr><th>Type</th><th>File</th><th>Size (bytes)</th></tr>
+    </thead>
+    <tbody>
+      {''.join(file_rows) or '<tr><td colspan="3">No files generated.</td></tr>'}
+    </tbody>
+  </table>
+  <h2>Included Items</h2>
+  <table>
+    <thead>
+      <tr><th>Type</th><th>Date</th><th>Name</th><th>Rider Edits</th><th>Total Edits</th><th>Category</th><th>Classification</th></tr>
+    </thead>
+    <tbody>
+      {''.join(item_rows) or '<tr><td colspan="7">No included items assigned.</td></tr>'}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+
+    return _create_release_text_artifact(
+        namespace,
+        f'{artifact_basename}-overview.html',
+        html_content,
+        'text/html',
+    )
+
+
+def _build_review_artifacts_for_release(namespace, release):
+    """Generate all release artifacts when moving a release from draft to review."""
+    artifact_basename = _build_release_artifact_basename(namespace, release)
+
+    sqlite_file = _build_review_sqlite_for_release(namespace, release, artifact_basename)
+    sqlite_file['file_type'] = 'cdb_sqlite'
+    sqlite_file['file_type_label'] = 'CDB SQLite'
+
+    sql_file = _build_release_stat_sql_for_release(namespace, release, artifact_basename)
+    sql_file['file_type'] = 'rider_stats_sql'
+    sql_file['file_type_label'] = 'Rider Stats SQL'
+
+    overview_file = _build_release_overview_html_for_release(
+        namespace,
+        release,
+        artifact_basename,
+        [sqlite_file, sql_file],
+    )
+    overview_file['file_type'] = 'release_overview_html'
+    overview_file['file_type_label'] = 'Release Overview HTML'
+
+    generated_files = [sqlite_file, sql_file, overview_file]
+    _replace_namespace_release_versions(namespace, release.id, generated_files)
+
+    return {
+        'sqlite_file': sqlite_file,
+        'files': generated_files,
+        'applied_changes': sqlite_file.get('applied_changes', 0),
+    }
+
+
+def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
+    """Apply pending stat_changes.final_value into cdb_cyclist for one scope."""
+    pending_rows = conn.execute(
+        text(
+            f"""
+            SELECT id, cyclist_pcm_id, stat_name, final_value
+            FROM stat_changes
+            WHERE {where_clause}
+              AND is_approved = FALSE
+            ORDER BY id ASC
+            """
+        ),
+        params,
+    ).mappings().all()
+
+    applied_count = 0
+    for row in pending_rows:
+        cyclist_pcm_id = _safe_int(row.get('cyclist_pcm_id'))
+        final_value = _safe_int(row.get('final_value'))
+        stat_name = (row.get('stat_name') or '').strip().lower()
+        stat_code = stat_name[5:] if stat_name.startswith('stat_') else stat_name
+        column_name = f'stat_{stat_code}' if stat_code in STAT_DELTA_FIELDS else None
+
+        if cyclist_pcm_id is None or final_value is None or not column_name:
+            continue
+
+        conn.execute(
+            text(
+                f'''
+                UPDATE cdb_cyclist
+                SET "{column_name}" = :final_value
+                WHERE id = :cyclist_pcm_id
+                '''
+            ),
+            {
+                'final_value': final_value,
+                'cyclist_pcm_id': cyclist_pcm_id,
+            },
+        )
+        applied_count += 1
+
+    return applied_count
 
 
 def _load_namespace_fully_approved_race_ids(namespace):
@@ -985,8 +1387,8 @@ def _load_namespace_fully_approved_race_ids(namespace):
                     """
                     SELECT first_cycling_race_id
                     FROM stat_changes
-                    WHERE stat_list_id = 0
-                      AND first_cycling_race_id > 0
+                    WHERE stat_list_id IS NULL
+                      AND first_cycling_race_id IS NOT NULL
                     GROUP BY first_cycling_race_id
                     HAVING COUNT(*) = SUM(CASE WHEN is_approved THEN 1 ELSE 0 END)
                     """
@@ -1021,7 +1423,7 @@ def _load_namespace_race_edit_aggregates(namespace, first_cycling_race_ids):
                         COUNT(*) AS total_edits,
                         COUNT(DISTINCT first_cycling_rider_id) AS riders_edited
                     FROM stat_changes
-                    WHERE stat_list_id = 0
+                    WHERE stat_list_id IS NULL
                       AND first_cycling_race_id = ANY(:race_ids)
                     GROUP BY first_cycling_race_id
                     """
@@ -1077,6 +1479,8 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                 selected_columns.append('season_year')
             if 'gender' in stat_list_columns:
                 selected_columns.append('gender')
+            if 'created_at' in stat_list_columns:
+                selected_columns.append('created_at')
 
             query = """
                 SELECT {selected_columns}
@@ -1101,6 +1505,8 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                 row_dict['season_year'] = None
             if 'gender' not in row_dict:
                 row_dict['gender'] = None
+            if 'created_at' not in row_dict:
+                row_dict['created_at'] = None
             normalized_rows.append(row_dict)
 
         # Enrich with rider counts and stat change aggregates
@@ -1228,6 +1634,8 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, rider_ids):
                         delta_value
                     FROM stat_changes
                     WHERE stat_list_id = :list_id
+                      AND first_cycling_race_id IS NULL
+                      AND first_cycling_stage_id IS NULL
                       AND first_cycling_rider_id = ANY(:rider_ids)
                     """
                 ),
@@ -1611,10 +2019,17 @@ def rider_detail(rider_id):
         abort(403)
 
     rider = FirstCyclingRider.query.filter_by(rider_id=rider_id).first_or_404()
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
 
     team = None
     if rider.team_id is not None:
         team = FirstCyclingTeam.query.filter_by(team_id=rider.team_id).first()
+
+    rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, [rider_id])
+    rider_stats = rider_stats_map.get(rider_id) or {}
+    rider_measurements_map = _load_namespace_cyclist_measurements(selected_namespace, [rider_id])
+    rider_measurements = rider_measurements_map.get(rider_id) or {}
 
     back_team_id = request.args.get('team_id', type=int)
     if back_team_id is None and rider.team_id is not None:
@@ -1624,6 +2039,9 @@ def rider_detail(rider_id):
         'rider_detail.html',
         rider=rider,
         team=team,
+        rider_stats=rider_stats,
+        rider_measurements=rider_measurements,
+        selected_namespace=selected_namespace,
         back_params={
             'team_id': back_team_id,
             'division': request.args.get('division', type=str) or '',
@@ -1944,6 +2362,10 @@ def stats_editor_create_list():
                 insert_values.append(':created_by_id')
                 insert_params['created_by_id'] = current_user.id
 
+            if 'created_at' in stat_list_columns:
+                insert_columns.append('created_at')
+                insert_values.append('CURRENT_TIMESTAMP')
+
             row = conn.execute(
                 text(
                     "INSERT INTO stat_lists ({columns}) VALUES ({values}) RETURNING id".format(
@@ -2052,6 +2474,21 @@ def stats_editor_toggle_list_rider(list_id):
                     },
                 )
             else:
+                conn.execute(
+                    text(
+                        """
+                        DELETE FROM stat_changes
+                        WHERE stat_list_id = :list_id
+                          AND first_cycling_race_id IS NULL
+                          AND first_cycling_stage_id IS NULL
+                          AND first_cycling_rider_id = :rider_id
+                        """
+                    ),
+                    {
+                        'list_id': list_id,
+                        'rider_id': rider_id,
+                    },
+                )
                 conn.execute(
                     text(
                         """
@@ -2173,8 +2610,8 @@ def stats_editor_list_detail(list_id):
     rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, rider_ids)
     scope_delta_status = _load_namespace_scope_delta_status(
         selected_namespace,
-        first_cycling_race_id=0,
-        first_cycling_stage_id=0,
+        first_cycling_race_id=None,
+        first_cycling_stage_id=None,
         stat_list_id=list_id,
     )
 
@@ -2205,6 +2642,7 @@ def stats_editor_list_detail(list_id):
         rows.append({
             'rider_id': rider_id,
             'rider_name': rider_name,
+            'team_id': rider.team_id if rider is not None else None,
             'team_name': rider.team_name if rider is not None and rider.team_name else '-',
             'rider_in_namespace': rider_in_namespace,
             'stats': final_stats,
@@ -2311,8 +2749,8 @@ def stats_editor_save_list_stat_deltas(list_id):
                         text(
                             """
                             DELETE FROM stat_changes
-                            WHERE first_cycling_race_id = 0
-                              AND first_cycling_stage_id = 0
+                            WHERE first_cycling_race_id IS NULL
+                              AND first_cycling_stage_id IS NULL
                               AND stat_list_id = :list_id
                               AND cyclist_pcm_id = :cyclist_pcm_id
                               AND first_cycling_rider_id = :rider_id
@@ -2332,8 +2770,8 @@ def stats_editor_save_list_stat_deltas(list_id):
                     text(
                         """
                         DELETE FROM stat_changes
-                        WHERE first_cycling_race_id = 0
-                          AND first_cycling_stage_id = 0
+                        WHERE first_cycling_race_id IS NULL
+                          AND first_cycling_stage_id IS NULL
                           AND stat_list_id = :list_id
                           AND cyclist_pcm_id = :cyclist_pcm_id
                           AND first_cycling_rider_id = :rider_id
@@ -2364,8 +2802,8 @@ def stats_editor_save_list_stat_deltas(list_id):
                             is_approved
                         )
                         VALUES (
-                            0,
-                            0,
+                            NULL,
+                            NULL,
                             :list_id,
                             :cyclist_pcm_id,
                             :rider_id,
@@ -2397,8 +2835,8 @@ def stats_editor_save_list_stat_deltas(list_id):
             flash(f'Skipped {skipped_count} invalid or unmatched change(s).', 'warning')
 
     except Exception:
-        logger.exception('Failed to save stat changes for list %s', list_id)
-        flash('Failed to save stat changes.', 'error')
+        logger.exception('Failed to save stat edits for list %s', list_id)
+        flash('Failed to save stat edits.', 'error')
     finally:
         engine.dispose()
 
@@ -2420,15 +2858,25 @@ def stats_editor_approve_list_stat_deltas(list_id):
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
     approved_count = 0
+    applied_count = 0
     try:
         with engine.begin() as conn:
+            applied_count = _apply_scope_stat_changes_to_cdb(
+                conn,
+                """
+                first_cycling_race_id IS NULL
+                AND first_cycling_stage_id IS NULL
+                AND stat_list_id = :list_id
+                """,
+                {'list_id': list_id},
+            )
             result = conn.execute(
                 text(
                     """
                     UPDATE stat_changes
                     SET is_approved = TRUE
-                    WHERE first_cycling_race_id = 0
-                      AND first_cycling_stage_id = 0
+                    WHERE first_cycling_race_id IS NULL
+                      AND first_cycling_stage_id IS NULL
                       AND stat_list_id = :list_id
                       AND is_approved = FALSE
                     """
@@ -2443,7 +2891,7 @@ def stats_editor_approve_list_stat_deltas(list_id):
         engine.dispose()
 
     if approved_count > 0:
-        flash(f'Approved {approved_count} stat change(s).', 'success')
+        flash(f'Approved {approved_count} stat change(s) and applied {applied_count} update(s) to CDB rider stats.', 'success')
     else:
         flash('No pending stat changes to approve.', 'info')
 
@@ -2558,6 +3006,17 @@ def releases():
         return redirect(url_for('web.releases', tab='catalog'))
 
     if request.method == 'POST' and active_tab == 'overview':
+        if request.form.get('save_release_notes'):
+            selected_release.release_notes = (request.form.get('release_notes', type=str) or '').strip() or None
+            try:
+                db.session.commit()
+                flash('Release notes updated.', 'success')
+            except Exception:
+                db.session.rollback()
+                logger.exception('Failed to update release notes for release %s', selected_release.id)
+                flash('Failed to update release notes.', 'error')
+            return redirect(url_for('web.releases', tab='overview', release_id=selected_release.id))
+
         current_status = (selected_release.status or 'draft').strip().lower()
         requested_target_status = (request.form.get('status_target', type=str) or '').strip().lower()
         if not requested_target_status:
@@ -2586,11 +3045,12 @@ def releases():
         review_build_result = None
         try:
             if current_status == 'draft' and next_status == 'review':
-                review_build_result = _build_review_sqlite_for_release(selected_namespace, selected_release)
-                selected_release.sqlite_file_path = review_build_result['relative_path']
-                selected_release.file_size_bytes = review_build_result['file_size_bytes']
-                selected_release.md5_checksum = review_build_result['md5_checksum']
-                selected_release.sha256_checksum = review_build_result['sha256_checksum']
+                review_build_result = _build_review_artifacts_for_release(selected_namespace, selected_release)
+                sqlite_file = review_build_result['sqlite_file']
+                selected_release.sqlite_file_path = sqlite_file['relative_path']
+                selected_release.file_size_bytes = sqlite_file['file_size_bytes']
+                selected_release.md5_checksum = sqlite_file['md5_checksum']
+                selected_release.sha256_checksum = sqlite_file['sha256_checksum']
 
             selected_release.status = next_status
             if next_status == 'published':
@@ -2601,9 +3061,9 @@ def releases():
             if review_build_result is not None:
                 flash(
                     (
-                        f'Release SQLite generated with '
+                        f'Release files generated with '
                         f'{review_build_result["applied_changes"]} applied stat change(s): '
-                        f'{review_build_result["relative_path"]}'
+                        f'{len(review_build_result["files"])} file(s)'
                     ),
                     'success',
                 )
@@ -2620,6 +3080,7 @@ def releases():
 
     stats_approved_items = []
     included_item_keys = set()
+    release_files = []
 
     if selected_namespace is not None and active_tab == 'stats':
         year, gender = _resolve_namespace_season(selected_namespace)
@@ -2634,6 +3095,9 @@ def releases():
             for item in stats_approved_items
             if item.get('is_selected')
         }
+
+    if selected_namespace is not None and selected_release is not None and active_tab == 'overview':
+        release_files = _load_namespace_release_versions(selected_namespace, selected_release.id)
 
     if request.method == 'POST' and active_tab == 'stats':
         if selected_namespace is None:
@@ -2679,11 +3143,43 @@ def releases():
         summary=summary,
         stats_approved_items=stats_approved_items,
         included_item_keys=included_item_keys,
+        release_files=release_files,
     )
 
 
-@web_bp.route('/stats-editor/<int:race_id>')
-@web_bp.route('/stats-editor/<int:race_id>/<int:stage_id>')
+@web_bp.route('/releases/<int:release_id>/files/<int:file_id>/download')
+@login_required
+def release_file_download(release_id, file_id):
+    if not _can_access_panel('release_manager'):
+        abort(403)
+
+    release = Release.query.get_or_404(release_id)
+
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    if selected_namespace is None or release.namespace_id != selected_namespace.id:
+        abort(404)
+
+    release_files = _load_namespace_release_versions(selected_namespace, release.id)
+    release_file = next((item for item in release_files if _safe_int(item.get('id')) == file_id), None)
+    if release_file is None:
+        abort(404)
+
+    absolute_path = _resolve_namespace_release_file_path(selected_namespace, release_file.get('relative_path'))
+    if not absolute_path:
+        flash('Release file could not be found on disk.', 'error')
+        return redirect(url_for('web.releases', tab='overview', release_id=release.id))
+
+    return send_file(
+        absolute_path,
+        as_attachment=True,
+        download_name=release_file.get('display_name') or os.path.basename(absolute_path),
+        mimetype=release_file.get('content_type') or None,
+    )
+
+
+@web_bp.route('/stats-editor/races/<int:race_id>')
+@web_bp.route('/stats-editor/races/<int:race_id>/<int:stage_id>')
 @login_required
 def stats_editor_race_detail(race_id, stage_id=None):
     """Race detail page with optional stage-specific view."""
@@ -2693,7 +3189,7 @@ def stats_editor_race_detail(race_id, stage_id=None):
     race = FirstCyclingRace.query.options(
         selectinload(FirstCyclingRace.race_stages),
         selectinload(FirstCyclingRace.race_results),
-    ).filter_by(id=race_id).first_or_404()
+    ).filter_by(race_id=race_id).first_or_404()
 
     stage_rows = sorted(
         race.race_stages,
@@ -2778,7 +3274,7 @@ def stats_editor_race_detail(race_id, stage_id=None):
             }
 
     rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, rider_ids)
-    stage_scope_id = selected_stage.id if selected_stage is not None else 0
+    stage_scope_id = selected_stage.id if selected_stage is not None else None
     scope_delta_status = _load_namespace_scope_delta_status(selected_namespace, race.race_id, stage_scope_id)
     rider_delta_map = _load_namespace_race_result_deltas(selected_namespace, race.race_id, stage_scope_id, rider_ids)
     delta_change_count = sum(len(changes) for changes in rider_delta_map.values())
@@ -2802,7 +3298,10 @@ def stats_editor_race_detail(race_id, stage_id=None):
             original_stats = dict(base_stats)
             final_stats = dict(base_stats)
             for stat_name, delta_info in (rider_delta_map.get(result.rider_id) or {}).items():
+                original_value = delta_info.get('original_value')
                 final_value = delta_info.get('final_value')
+                if original_value is not None:
+                    original_stats[stat_name] = original_value
                 if final_value is None:
                     continue
                 final_stats[stat_name] = final_value
@@ -2821,6 +3320,7 @@ def stats_editor_race_detail(race_id, stage_id=None):
             'result': result,
             'rider_name': rider_name,
             'rider_in_namespace': rider_in_namespace,
+            'team_id': team.team_id if team is not None else (rider.team_id if rider is not None else result.team_id),
             'team_name': team.team_name if team is not None else (rider.team_name if rider is not None and rider.team_name else '-'),
             'stats': final_stats,
             'original_stats': original_stats,
@@ -2891,14 +3391,14 @@ def select_namespace():
     return redirect(next_url)
 
 
-@web_bp.route('/stats-editor/races/<int:race_pk>/get-result', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/get-result', methods=['POST'])
 @login_required
-def stats_editor_get_result(race_pk):
+def stats_editor_get_result(race_id):
     """Fetch and persist race results for one race from FirstCycling."""
     if not _can_access_panel('stat_manager'):
         abort(403)
 
-    race = FirstCyclingRace.query.get_or_404(race_pk)
+    race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
 
     category = request.form.get('category', type=str) or ''
     race_name = request.form.get('race_name', type=str) or ''
@@ -2930,7 +3430,7 @@ def stats_editor_get_result(race_pk):
     if stage_id is not None:
         return redirect(url_for(
             'web.stats_editor_race_detail',
-            race_id=race.id,
+            race_id=race.race_id,
             stage_id=stage_id,
             race_name=race_name,
             category=category,
@@ -2944,7 +3444,7 @@ def stats_editor_get_result(race_pk):
 
     return redirect(url_for(
         'web.stats_editor_race_detail',
-        race_id=race.id,
+        race_id=race.race_id,
         race_name=race_name,
         category=category,
         classification=classification,
@@ -2956,14 +3456,14 @@ def stats_editor_get_result(race_pk):
     ))
 
 
-@web_bp.route('/stats-editor/races/<int:race_pk>/save-stat-deltas', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/save-stat-deltas', methods=['POST'])
 @login_required
-def stats_editor_save_stat_deltas(race_pk):
+def stats_editor_save_stat_deltas(race_id):
     """Persist edited stat deltas for this race into the selected namespace database."""
     if not _can_access_panel('stat_manager'):
         abort(403)
 
-    race = FirstCyclingRace.query.get_or_404(race_pk)
+    race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
 
     category = request.form.get('category', type=str) or ''
     race_name = request.form.get('race_name', type=str) or ''
@@ -2974,10 +3474,10 @@ def stats_editor_save_stat_deltas(race_pk):
     is_stage_race_filter = request.form.get('is_stage_race', type=str) or ''
     edit_status_filters = request.form.getlist('edit_status')
     stage_id = request.form.get('stage_id', type=int)
-    stage_scope_id = stage_id if stage_id is not None else 0
+    stage_scope_id = stage_id
 
     redirect_target = {
-        'race_id': race.id,
+        'race_id': race.race_id,
         'race_name': race_name,
         'category': category,
         'classification': classification,
@@ -3078,8 +3578,8 @@ def stats_editor_save_stat_deltas(race_pk):
                             """
                                                         DELETE FROM stat_changes
                             WHERE first_cycling_race_id = :race_id
-                                                            AND first_cycling_stage_id = :stage_id
-                                                            AND stat_list_id = 0
+                              AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                              AND stat_list_id IS NULL
                               AND cyclist_pcm_id = :cyclist_pcm_id
                               AND first_cycling_rider_id = :rider_id
                               AND stat_name = :stat_name
@@ -3100,8 +3600,8 @@ def stats_editor_save_stat_deltas(race_pk):
                         """
                         DELETE FROM stat_changes
                         WHERE first_cycling_race_id = :race_id
-                          AND first_cycling_stage_id = :stage_id
-                          AND stat_list_id = 0
+                          AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                          AND stat_list_id IS NULL
                           AND cyclist_pcm_id = :cyclist_pcm_id
                           AND first_cycling_rider_id = :rider_id
                           AND stat_name = :stat_name
@@ -3134,7 +3634,7 @@ def stats_editor_save_stat_deltas(race_pk):
                         VALUES (
                             :race_id,
                             :stage_id,
-                            0,
+                            NULL,
                             :cyclist_pcm_id,
                             :rider_id,
                             :stat_name,
@@ -3159,7 +3659,7 @@ def stats_editor_save_stat_deltas(race_pk):
                 saved_count += 1
 
         if saved_count > 0:
-            flash(f'Saved {saved_count} stat delta change(s).', 'success')
+            flash(f'Saved {saved_count} stat edit(s).', 'success')
         else:
             flash('No stat delta changes were saved.', 'info')
 
@@ -3175,14 +3675,14 @@ def stats_editor_save_stat_deltas(race_pk):
     return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
 
 
-@web_bp.route('/stats-editor/races/<int:race_pk>/approve-stat-deltas', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/approve-stat-deltas', methods=['POST'])
 @login_required
-def stats_editor_approve_stat_deltas(race_pk):
+def stats_editor_approve_stat_deltas(race_id):
     """Mark saved stat deltas as approved for this race or selected stage scope."""
     if not _can_access_panel('stat_manager'):
         abort(403)
 
-    race = FirstCyclingRace.query.get_or_404(race_pk)
+    race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
 
     category = request.form.get('category', type=str) or ''
     race_name = request.form.get('race_name', type=str) or ''
@@ -3193,10 +3693,10 @@ def stats_editor_approve_stat_deltas(race_pk):
     is_stage_race_filter = request.form.get('is_stage_race', type=str) or ''
     edit_status_filters = request.form.getlist('edit_status')
     stage_id = request.form.get('stage_id', type=int)
-    stage_scope_id = stage_id if stage_id is not None else 0
+    stage_scope_id = stage_id
 
     redirect_target = {
-        'race_id': race.id,
+        'race_id': race.race_id,
         'race_name': race_name,
         'category': category,
         'classification': classification,
@@ -3217,16 +3717,29 @@ def stats_editor_approve_stat_deltas(race_pk):
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
+    applied_count = 0
     try:
         with engine.begin() as conn:
+            applied_count = _apply_scope_stat_changes_to_cdb(
+                conn,
+                """
+                first_cycling_race_id = :race_id
+                AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                AND stat_list_id IS NULL
+                """,
+                {
+                    'race_id': race.race_id,
+                    'stage_id': stage_scope_id,
+                },
+            )
             result = conn.execute(
                 text(
                     """
                                         UPDATE stat_changes
                     SET is_approved = TRUE
                     WHERE first_cycling_race_id = :race_id
-                      AND first_cycling_stage_id = :stage_id
-                                            AND stat_list_id = 0
+                      AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+                      AND stat_list_id IS NULL
                       AND is_approved = FALSE
                     """
                 ),
@@ -3243,9 +3756,9 @@ def stats_editor_approve_stat_deltas(race_pk):
         engine.dispose()
 
     if approved_count > 0:
-        flash(f'Approved {approved_count} stat delta change(s).', 'success')
+        flash(f'Approved {approved_count} stat edit(s) and applied {applied_count} update(s) to CDB rider stats.', 'success')
     else:
-        flash('No pending stat delta changes to approve.', 'info')
+        flash('No pending stat edit to approve.', 'info')
 
     return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
 
@@ -4012,4 +4525,3 @@ def change_password():
         return redirect(url_for('web.dashboard'))
     
     return render_template('change_password.html', form=form)
-

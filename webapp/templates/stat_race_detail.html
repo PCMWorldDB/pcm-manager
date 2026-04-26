@@ -207,10 +207,10 @@ body.dark-mode .stat-input-row {
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h2 class="mb-1 page-header-title">
-            {% if selected_stage %}
+                {% if selected_stage %}
             <a
                 class="race-title-link"
-                href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}">
+                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}">
                 {{ race.name or 'Race Detail' }}
             </a>
             {% else %}
@@ -244,7 +244,7 @@ body.dark-mode .stat-input-row {
     </div>
     <div class="page-header-actions">
         <div>
-            <form method="post" action="{{ url_for('web.stats_editor_get_result', race_pk=race.id) }}" class="d-inline-block get-result-form">
+            <form method="post" action="{{ url_for('web.stats_editor_get_result', race_id=race.race_id) }}" class="d-inline-block get-result-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
                 <input type="hidden" name="category" value="{{ back_params.category }}">
@@ -366,7 +366,7 @@ body.dark-mode .stat-input-row {
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>
                             <a
-                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, stage_id=stage.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}#stage-selection"
+                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}#stage-selection"
                                 class="text-decoration-none">
                                 Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
@@ -392,48 +392,50 @@ body.dark-mode .stat-input-row {
                 {{ result_title }}
                 {% endif %}
             </h5>
-            <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_pk=race.id) }}" class="d-inline-block ms-3">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                <input type="hidden" name="category" value="{{ back_params.category }}">
-                <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                <input type="hidden" name="nation" value="{{ back_params.nation }}">
-                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                {% for edit_status_value in back_params.edit_statuses %}
-                <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
-                {% endfor %}
-                {% if selected_stage %}
-                <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
-                {% endif %}
-                <button
-                    type="submit"
-                    class="btn btn-success"
-                    {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>
-                    Approve
-                </button>
-            </form>
+            <div class="d-flex align-items-center gap-2 ms-3">
+                <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
+                <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_id=race.race_id) }}" id="stat-delta-form" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
+                    <input type="hidden" name="category" value="{{ back_params.category }}">
+                    <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                    <input type="hidden" name="nation" value="{{ back_params.nation }}">
+                    <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
+                    <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
+                    <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                    {% for edit_status_value in back_params.edit_statuses %}
+                    <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
+                    {% endfor %}
+                    {% if selected_stage %}
+                    <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
+                    {% endif %}
+                    <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits</button>
+                </form>
+                <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
+                    <input type="hidden" name="category" value="{{ back_params.category }}">
+                    <input type="hidden" name="classification" value="{{ back_params.classification }}">
+                    <input type="hidden" name="nation" value="{{ back_params.nation }}">
+                    <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
+                    <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
+                    <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
+                    {% for edit_status_value in back_params.edit_statuses %}
+                    <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
+                    {% endfor %}
+                    {% if selected_stage %}
+                    <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
+                    {% endif %}
+                    <button
+                        type="submit"
+                        class="btn btn-success"
+                        {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>
+                        Approve
+                    </button>
+                </form>
+            </div>
         </div>
-        <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_pk=race.id) }}" id="stat-delta-form" class="mb-3">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-            <input type="hidden" name="category" value="{{ back_params.category }}">
-            <input type="hidden" name="classification" value="{{ back_params.classification }}">
-            <input type="hidden" name="nation" value="{{ back_params.nation }}">
-            <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-            <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-            <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-            {% for edit_status_value in back_params.edit_statuses %}
-            <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
-            {% endfor %}
-            {% if selected_stage %}
-            <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
-            {% endif %}
-            <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-            <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Stat Changes</button>
-            <span class="text-muted ms-2" id="save-stat-delta-hint">No changes yet.</span>
-        </form>
         {% if result_rows %}
         <div class="table-wrapper results-table-wrapper">
             <table class="table table-sm table-striped align-middle mb-0 results-table">
@@ -495,9 +497,23 @@ body.dark-mode .stat-input-row {
                             {% endif %}
                         </td>
                         <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
+                            {% if result.rider_id is not none %}
+                            <a href="{{ url_for('web.rider_detail', rider_id=result.rider_id) }}" class="text-reset text-decoration-none">
+                                {{ row.rider_name }}
+                            </a>
+                            {% else %}
                             {{ row.rider_name }}
+                            {% endif %}
                         </td>
-                        <td>{{ row.team_name }}</td>
+                        <td>
+                            {% if row.team_id %}
+                            <a href="{{ url_for('web.team_detail', team_id=row.team_id) }}" class="text-reset text-decoration-none">
+                                {{ row.team_name }}
+                            </a>
+                            {% else %}
+                            {{ row.team_name }}
+                            {% endif %}
+                        </td>
                         <td>
                             {% if selected_stage %}
                                 {{ result.stage_time or '-' }}
