@@ -214,6 +214,23 @@
             color: #90cdf4;
             border-color: #2d5a8f;
         }
+
+        /* Content links should read like surrounding text instead of default blue links. */
+        .panel-card a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link):not(.header-title-link):not(.panel-menu-link),
+        .table a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link) {
+            color: inherit;
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 2px;
+        }
+
+        .panel-card a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link):not(.header-title-link):not(.panel-menu-link):hover,
+        .table a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link):hover {
+            color: inherit;
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 2px;
+        }
         
         body.dark-mode .text-muted {
             color: #9ca3af !important;

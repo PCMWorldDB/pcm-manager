@@ -184,7 +184,7 @@
                         </td>
                         <td data-sort-value="{{ race.start_date.isoformat() if race.start_date else '' }}">{{ race.start_date or '-' }}</td>
                         <td data-sort-value="{{ (race.name or '')|lower }}">
-                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
+                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
                                 {{ race.name or '-' }}
                             </a>
                         </td>
@@ -209,7 +209,7 @@
                         </td>
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>
-                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.id, stage_id=stage.id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
+                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id, race_name=selected_filters.race_name, category=selected_filters.category, classification=selected_filters.classification, nation=selected_filters.nation, start_date_from=selected_filters.start_date_from, start_date_to=selected_filters.start_date_to, is_stage_race=selected_filters.is_stage_race, edit_status=selected_filters.edit_statuses) }}">
                                 Stage {{ stage.stage_number or '?' }} - {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
                             </a>
                         </td>

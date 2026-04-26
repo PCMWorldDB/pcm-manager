@@ -64,9 +64,9 @@ class StatChange(NamespaceBase):
     __tablename__ = 'stat_changes'
 
     id = Column(Integer, primary_key=True)
-    first_cycling_race_id = Column(Integer, nullable=False, default=0, index=True)
-    first_cycling_stage_id = Column(Integer, nullable=False, default=0, index=True)
-    stat_list_id = Column(Integer, nullable=False, default=0, index=True)
+    first_cycling_race_id = Column(Integer, nullable=True, index=True)
+    first_cycling_stage_id = Column(Integer, nullable=True, index=True)
+    stat_list_id = Column(Integer, nullable=True, index=True)
     release_id = Column(Integer, nullable=True, index=True)
     cyclist_pcm_id = Column(Integer, nullable=False, index=True)
     first_cycling_rider_id = Column(Integer, nullable=False, index=True)
@@ -131,6 +131,27 @@ class Release(NamespaceBase):
     updated_at = Column(DateTime)
 
 
+class ReleaseVersion(NamespaceBase):
+    """Namespace-scoped release artifact records."""
+
+    __tablename__ = 'release_versions'
+
+    id = Column(Integer, primary_key=True)
+    release_id = Column(Integer, nullable=False, index=True)
+    file_type = Column(String(50), nullable=False, index=True)
+    display_name = Column(String(255), nullable=False)
+    relative_path = Column(String(500), nullable=False)
+    content_type = Column(String(120))
+    file_size_bytes = Column(BigInteger)
+    md5_checksum = Column(String(32))
+    sha256_checksum = Column(String(64))
+    created_at = Column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint('release_id', 'file_type', name='uq_release_versions_release_file_type'),
+    )
+
+
 class StatList(NamespaceBase):
     """Ad-hoc stat list metadata."""
 
@@ -141,6 +162,7 @@ class StatList(NamespaceBase):
     season_year = Column(Integer, nullable=False, index=True)
     gender = Column(String(20), nullable=False, index=True)
     created_by_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime)
 
 
 class StatListItem(NamespaceBase):
@@ -161,6 +183,7 @@ class StatListItem(NamespaceBase):
 NAMESPACE_TABLES = [
     CDBCyclist,
     Release,
+    ReleaseVersion,
     StatChange,
     StatList,
     StatListItem,

@@ -47,6 +47,31 @@ body > .container {
     background-color: #dc3545 !important;
     color: #ffffff !important;
 }
+/* Editable stat inputs need their own color classes, matching stat_race_detail */
+.stat-input.range-low {
+    background-color: #6c757d !important;
+    color: #ffffff !important;
+}
+.stat-input.range-decent {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+.stat-input.range-good {
+    background-color: #90ee90 !important;
+    color: #000000 !important;
+}
+.stat-input.range-very-good {
+    background-color: #ffd700 !important;
+    color: #000000 !important;
+}
+.stat-input.range-excellent {
+    background-color: #ff8c00 !important;
+    color: #000000 !important;
+}
+.stat-input.range-elite {
+    background-color: #dc3545 !important;
+    color: #ffffff !important;
+}
 .stat-input-row {
     display: flex;
     align-items: center;
@@ -108,13 +133,29 @@ body.dark-mode .panel-card .border.bg-light label,
 body.dark-mode .panel-card .border.bg-light {
     color: #f9fafb !important;
 }
+.page-header-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: 0.5rem;
+    font-size: 1rem;
+}
 {% endblock %}
 
 
 {% block content %}
 <!-- Page Title and Back Button -->
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="mb-0">{{ stat_list.list_name }}</h1>
+    <h1 class="mb-0">
+        {{ stat_list.list_name }}
+        <span class="page-header-status" aria-label="List status">
+            {% if scope_delta_status.approved_changes > 0 and scope_delta_status.unapproved_changes == 0 %}
+            <span class="text-success" title="Approved">☑</span>
+            {% elif scope_delta_status.unapproved_changes > 0 %}
+            <span title="Approval pending">⏳</span>
+            {% endif %}
+        </span>
+    </h1>
     <a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', method='by_list', list_id=stat_list.id) }}">Back To Stats Editor</a>
 </div>
 
@@ -128,7 +169,7 @@ body.dark-mode .panel-card .border.bg-light {
                 <form method="post" action="{{ url_for('web.stats_editor_save_list_stat_deltas', list_id=stat_list.id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Stat Changes</button>
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits</button>
                 </form>
                 <form method="post" action="{{ url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -143,7 +184,7 @@ body.dark-mode .panel-card .border.bg-light {
                 <table class="table table-sm table-striped align-middle mb-0">
                     <thead>
                         <tr>
-                            <th style="width: 60px;"></th>
+                            <th style="width: 60px;">Actions</th>
                             <th>Rider</th>
                             <th>Team</th>
                             {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
@@ -161,11 +202,23 @@ body.dark-mode .panel-card .border.bg-light {
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="rider_id" value="{{ row.rider_id }}">
                                     <input type="hidden" name="is_checked" value="0">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">X</button>
                                 </form>
                             </td>
-                            <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">{{ row.rider_name }}</td>
-                            <td>{{ row.team_name }}</td>
+                            <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
+                                <a href="{{ url_for('web.rider_detail', rider_id=row.rider_id) }}" class="text-reset text-decoration-none">
+                                    {{ row.rider_name }}
+                                </a>
+                            </td>
+                            <td>
+                                {% if row.team_id %}
+                                <a href="{{ url_for('web.team_detail', team_id=row.team_id) }}" class="text-reset text-decoration-none">
+                                    {{ row.team_name }}
+                                </a>
+                                {% else %}
+                                {{ row.team_name }}
+                                {% endif %}
+                            </td>
                             {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
                             {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                             {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
@@ -227,8 +280,20 @@ body.dark-mode .panel-card .border.bg-light {
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
                             </form>
                         </td>
-                        <td>{{ rider.name or ('Rider #' ~ rider.rider_id) }}</td>
-                        <td>{{ rider.team_name or '-' }}</td>
+                        <td>
+                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}" class="text-reset text-decoration-none">
+                                {{ rider.name or ('Rider #' ~ rider.rider_id) }}
+                            </a>
+                        </td>
+                        <td>
+                            {% if rider.team_id %}
+                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}" class="text-reset text-decoration-none">
+                                {{ rider.team_name or '-' }}
+                            </a>
+                            {% else %}
+                            {{ rider.team_name or '-' }}
+                            {% endif %}
+                        </td>
                         {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
                         <td class="stat-cell stat-col stat-value" data-stat-value="{{ rider.stats[stat_key] if rider.stats and stat_key in rider.stats else '' }}">
                             {{ rider.stats[stat_key] if rider.stats and stat_key in rider.stats else '-' }}
@@ -260,26 +325,43 @@ body.dark-mode .panel-card .border.bg-light {
         const statName = inputElement.getAttribute('data-stat-name');
         const key = `${riderId}:${statName}`;
         const originalValue = Number(inputElement.getAttribute('data-original-value'));
+        const savedValue = Number(inputElement.getAttribute('data-saved-value'));
         const currentValue = Number(inputElement.value);
         const deltaNode = inputElement.closest('.stat-input-row').querySelector('.delta-display');
 
-        if (!Number.isFinite(currentValue) || !Number.isFinite(originalValue) || currentValue === originalValue) {
+        if (!Number.isFinite(currentValue) || !Number.isFinite(originalValue)) {
             changedValues.delete(key);
             deltaNode.style.visibility = 'hidden';
             deltaNode.textContent = '+0';
+            deltaNode.style.color = '#6c757d';
             return;
         }
 
+        if (!Number.isFinite(savedValue) || currentValue === savedValue) {
+            changedValues.delete(key);
+            deltaNode.style.visibility = 'hidden';
+            deltaNode.textContent = '+0';
+            deltaNode.style.color = '#6c757d';
+        } else {
+            changedValues.set(key, {
+                first_cycling_rider_id: Number(riderId),
+                stat_name: statName,
+                original_value: originalValue,
+                final_value: currentValue,
+            });
+        }
+
         const delta = currentValue - originalValue;
+        if (delta === 0) {
+            deltaNode.style.visibility = 'hidden';
+            deltaNode.textContent = '+0';
+            deltaNode.style.color = '#6c757d';
+            return;
+        }
+
         deltaNode.style.visibility = 'visible';
         deltaNode.textContent = `${delta > 0 ? '+' : ''}${delta}`;
-
-        changedValues.set(key, {
-            first_cycling_rider_id: Number(riderId),
-            stat_name: statName,
-            original_value: originalValue,
-            final_value: currentValue,
-        });
+        deltaNode.style.color = delta > 0 ? '#198754' : '#dc3545';
     }
 
     function refreshFormState() {
@@ -317,6 +399,8 @@ body.dark-mode .panel-card .border.bg-light {
 <script>
 // Stat value coloring - apply same ranges as other pages
 (function () {
+    const rangeClasses = ['range-low', 'range-decent', 'range-good', 'range-very-good', 'range-excellent', 'range-elite'];
+
     function getStatValueClass(value) {
         if (value <= 65) return 'range-low';
         if (value >= 66 && value <= 69) return 'range-decent';
@@ -329,7 +413,7 @@ body.dark-mode .panel-card .border.bg-light {
 
     function applyColorToCell(td, rawValue) {
         try {
-            td.classList.remove('range-low','range-decent','range-good','range-very-good','range-excellent','range-elite');
+            td.classList.remove(...rangeClasses);
             var value = parseInt(String(rawValue || '').trim(), 10);
             if (!isNaN(value)) {
                 var cls = getStatValueClass(value);
@@ -340,15 +424,30 @@ body.dark-mode .panel-card .border.bg-light {
         }
     }
 
+    function applyColorToInput(input, rawValue) {
+        try {
+            input.classList.remove(...rangeClasses);
+            var value = parseInt(String(rawValue || '').trim(), 10);
+            if (!isNaN(value)) {
+                var cls = getStatValueClass(value);
+                if (cls) input.classList.add(cls);
+            }
+        } catch (e) {
+            console.debug('applyColorToInput error', e);
+        }
+    }
+
     function refreshAllStatColors() {
         try {
             document.querySelectorAll('td.stat-value').forEach(function (td) {
-                var raw = td.getAttribute('data-stat-value');
-                if (!raw) {
-                    var input = td.querySelector('input.stat-input');
-                    if (input) raw = input.value;
-                    else raw = (td.textContent || '').trim();
+                var input = td.querySelector('input.stat-input');
+                if (input) {
+                    applyColorToInput(input, input.value);
+                    return;
                 }
+
+                var raw = td.getAttribute('data-stat-value');
+                if (!raw) raw = (td.textContent || '').trim();
                 applyColorToCell(td, raw);
             });
         } catch (e) {
@@ -362,8 +461,7 @@ body.dark-mode .panel-card .border.bg-light {
                 // avoid duplicate listeners
                 if (input.__stat_color_listen) return;
                 input.addEventListener('input', function () {
-                    var td = input.closest('td.stat-value');
-                    if (td) applyColorToCell(td, input.value);
+                    applyColorToInput(input, input.value);
                 });
                 input.__stat_color_listen = true;
             });

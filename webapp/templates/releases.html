@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Release - WDB{% endblock %}
+{% block title %}{% if selected_release %}{{ (selected_release.release_name or 'Release') ~ ' ' ~ (selected_release.version or '') }} - WDB{% else %}Release - WDB{% endif %}{% endblock %}
 
 {% block styles %}
 body > .container {
@@ -33,6 +33,24 @@ body > .container {
 .summary-value {
     font-size: 1.4rem;
     font-weight: 700;
+    color: #111827;
+}
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 24px;
+}
+.detail-item--full {
+    grid-column: 1 / -1;
+}
+.detail-label {
+    font-size: 0.8rem;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.detail-value {
+    font-weight: 600;
     color: #111827;
 }
 .table-wrapper {
@@ -102,6 +120,12 @@ body.dark-mode .summary-label {
 body.dark-mode .summary-value {
     color: #f3f4f6;
 }
+body.dark-mode .detail-label {
+    color: #9ca3af;
+}
+body.dark-mode .detail-value {
+    color: #f3f4f6;
+}
 body.dark-mode .lifecycle-step {
     background: #1f2937;
     border-color: #4b5563;
@@ -126,13 +150,25 @@ body.dark-mode .lifecycle-arrow {
     .summary-grid {
         grid-template-columns: repeat(2, minmax(120px, 1fr));
     }
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+    .detail-item--full {
+        grid-column: auto;
+    }
 }
 {% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">Releases</h2>
+        <h2 class="mb-1">
+            {% if selected_release and active_tab != 'catalog' %}
+            {{ (selected_release.release_name or 'Release') ~ ' ' ~ (selected_release.version or '') }}
+            {% else %}
+            Releases
+            {% endif %}
+        </h2>
         <p class="text-muted mb-0">Create and manage release packages for the selected namespace.</p>
     </div>
     {% if selected_release and active_tab != 'catalog' %}
@@ -164,7 +200,6 @@ body.dark-mode .lifecycle-arrow {
             {% if active_tab != 'catalog' %}
             <form method="get" action="{{ url_for('web.releases') }}" class="ms-auto">
                 <input type="hidden" name="tab" value="{{ active_tab }}">
-                <label for="release_id" class="form-label mb-1">Selected Release</label>
                 <select id="release_id" name="release_id" class="form-select" onchange="this.form.submit()">
                     {% if releases %}
                         {% for release in releases %}
@@ -336,54 +371,41 @@ body.dark-mode .lifecycle-arrow {
             </form>
         </div>
 
-        <div class="row g-3">
-            <div class="col-md-3">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Version</div>
-                    <div class="summary-value">{{ selected_release.version }}</div>
-                </div>
+        <div class="detail-grid">
+            <div>
+                <div class="detail-label">Release Name</div>
+                <div class="detail-value">{{ selected_release.release_name or '-' }}</div>
             </div>
-            <div class="col-md-3">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Type</div>
-                    <div class="summary-value">{{ selected_release.release_type or '-' }}</div>
-                </div>
+            <div>
+                <div class="detail-label">Version</div>
+                <div class="detail-value">{{ selected_release.version }}</div>
             </div>
-            <div class="col-md-3">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Status</div>
-                    <div class="summary-value">{{ selected_release.status or '-' }}</div>
-                </div>
+            <div>
+                <div class="detail-label">Type</div>
+                <div class="detail-value">{{ selected_release.release_type or '-' }}</div>
             </div>
-            <div class="col-md-6">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Release Name</div>
-                    <div class="fw-semibold">{{ selected_release.release_name or '-' }}</div>
-                </div>
+            <div class="detail-item--full">
+                <div class="detail-label">Release Notes</div>
+                <form method="post" action="{{ url_for('web.releases', tab='overview', release_id=selected_release.id) }}" class="mt-1">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="save_release_notes" value="1">
+                    <textarea
+                        name="release_notes"
+                        rows="4"
+                        class="form-control"
+                        placeholder="Add release notes">{{ selected_release.release_notes or '' }}</textarea>
+                    <div class="mt-2">
+                        <button type="submit" class="btn btn-sm btn-primary">Save Notes</button>
+                    </div>
+                </form>
             </div>
-            <div class="col-md-6">
-                <div class="summary-card h-100">
-                    <div class="summary-label">SQLite File Path</div>
-                    <div class="fw-semibold">{{ selected_release.sqlite_file_path or '-' }}</div>
-                </div>
+            <div>
+                <div class="detail-label">Updated</div>
+                <div class="detail-value">{{ selected_release.updated_at or '-' }}</div>
             </div>
-            <div class="col-md-6">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Created</div>
-                    <div class="fw-semibold">{{ selected_release.created_at or '-' }}</div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="summary-card h-100">
-                    <div class="summary-label">Updated</div>
-                    <div class="fw-semibold">{{ selected_release.updated_at or '-' }}</div>
-                </div>
-            </div>
-            <div class="col-12">
-                <div class="summary-card">
-                    <div class="summary-label">Release Notes</div>
-                    <div class="fw-semibold">{{ selected_release.release_notes or '-' }}</div>
-                </div>
+            <div>
+                <div class="detail-label">Created</div>
+                <div class="detail-value">{{ selected_release.created_at or '-' }}</div>
             </div>
         </div>
         {% else %}
@@ -391,6 +413,43 @@ body.dark-mode .lifecycle-arrow {
         {% endif %}
     </div>
 </div>
+{% if selected_release %}
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Release Files</h5>
+        {% if release_files %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-striped align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>File</th>
+                        <th>Created</th>
+                        <th>Size</th>
+                        <th style="width: 110px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for file in release_files %}
+                    <tr>
+                        <td>{{ file.file_type_label or '-' }}</td>
+                        <td>{{ file.display_name or '-' }}</td>
+                        <td>{{ file.created_at or '-' }}</td>
+                        <td>{{ file.file_size_bytes or 0 }}</td>
+                        <td>
+                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('web.release_file_download', release_id=selected_release.id, file_id=file.id) }}">Download</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No release files have been generated yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 {% else %}
 {% if active_tab == 'stats' %}
 <div class="panel-card card">
@@ -411,11 +470,10 @@ body.dark-mode .lifecycle-arrow {
                             <th>Type</th>
                             <th>Date</th>
                             <th>Name</th>
-                            <th>Nation</th>
-                            <th>Category</th>
-                            <th>Classification</th>
                             <th>Riders Edited</th>
                             <th>Total Edits</th>
+                            <th>Category</th>
+                            <th>Classification</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -429,14 +487,13 @@ body.dark-mode .lifecycle-arrow {
                                     value="{{ item.item_key }}"
                                     {% if item.item_key in included_item_keys %}checked{% endif %}>
                             </td>
-                            <td class="text-capitalize">{{ item.scope_type }}</td>
+                            <td>{{ item.type_label or ('List' if item.scope_type == 'list' else 'Race') }}</td>
                             <td>{{ item.date or '-' }}</td>
                             <td>{{ item.name or '-' }}</td>
-                            <td>{{ item.nation_name or '-' }}</td>
-                            <td>{{ item.category or '-' }}</td>
-                            <td>{{ item.classification_label or '-' }}</td>
                             <td>{{ item.riders_edited or 0 }}</td>
                             <td>{{ item.total_edits or 0 }}</td>
+                            <td>{{ item.category or '-' }}</td>
+                            <td>{{ item.classification_label or '-' }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
