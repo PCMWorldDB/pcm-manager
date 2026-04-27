@@ -73,10 +73,11 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             failed_count = summary['failed']
             status = 'partial' if failed_count else 'success'
             applied = bool(summary.get('applied'))
+            applied_mode = summary.get('applied_mode')
             message = (
                 f"Teams sync complete for {season_year} [{gender}] "
                 f"({synced_count}/{requested_count}, failed={failed_count}; "
-                f"applied={'yes' if applied else 'no'})"
+                f"applied={applied_mode or ('yes' if applied else 'no')})"
             )
         elif sync_type == SYNC_TYPE_RIDERS:
             _update_sync_log(

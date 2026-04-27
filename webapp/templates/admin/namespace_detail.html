@@ -4,164 +4,155 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="row">
-        {% include 'admin/_admin_nav.html' %}
-
-        <!-- Namespace Detail Content -->
-        <div class="col-md-9">
-            <!-- Namespace Info Card -->
-            <div class="card mb-3">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                    <h4 class="mb-0">🗂️ Namespace: {{ namespace.name }}</h4>
-                    <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-light btn-sm">
-                        ← Back to Namespaces
-                    </a>
+    <div class="card mb-3">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0">🗂️ Namespace: {{ namespace.name }}</h4>
+            <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-light btn-sm">
+                ← Back to Namespaces
+            </a>
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <h6>Display Name</h6>
+                    <p>{{ namespace.name }}</p>
                 </div>
-                <div class="card-body">
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <h6>Display Name</h6>
-                            <p>{{ namespace.name }}</p>
-                        </div>
-                        <div class="col-md-6">
-                            <h6>Slug</h6>
-                            <p><code>{{ namespace.slug }}</code></p>
-                        </div>
-                    </div>
-                    
-                    {% if namespace.description %}
-                    <div class="mb-3">
-                        <h6>Description</h6>
-                        <p>{{ namespace.description }}</p>
-                    </div>
-                    {% endif %}
-                    
-                    <hr>
-                    
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <h6>Status</h6>
-                            <form method="POST" action="{{ url_for('web.admin_namespace_update_status', namespace_id=namespace.id) }}" class="d-inline status-form">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <div class="d-flex align-items-center gap-2">
-                                    <select name="status" class="form-select form-select-sm status-select" data-original="{{ namespace.status }}" style="width: auto;">
-                                        <option value="active" {% if namespace.status == 'active' %}selected{% endif %}>Active</option>
-                                        <option value="draft" {% if namespace.status == 'draft' %}selected{% endif %}>Draft</option>
-                                        <option value="archived" {% if namespace.status == 'archived' %}selected{% endif %}>Archived</option>
-                                    </select>
-                                    <button type="submit" class="btn btn-sm btn-success save-btn" style="display: none;">
-                                        💾 Save
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                        <div class="col-md-4">
-                            <h6>PCM Version</h6>
-                            <p>
-                                {% if namespace.pcm_version %}
-                                    {{ namespace.pcm_version }}
-                                {% else %}
-                                    <span class="text-muted">Not set</span>
-                                {% endif %}
-                            </p>
-                        </div>
-                        <div class="col-md-4">
-                            <h6>Database Year</h6>
-                            <p>
-                                {% if namespace.database_year %}
-                                    {{ namespace.database_year }}
-                                {% else %}
-                                    <span class="text-muted">Not set</span>
-                                {% endif %}
-                            </p>
-                        </div>
-                        <div class="col-md-4">
-                            <h6>Gender</h6>
-                            <p>
-                                {% if namespace.gender %}
-                                    {{ namespace.gender }}
-                                {% else %}
-                                    <span class="text-muted">Not set</span>
-                                {% endif %}
-                            </p>
-                        </div>
-                    </div>
-                    
-                    <hr>
-                    
-                    <div class="row mb-3">
-                        <div class="col-md-12">
-                            <h6>Database Name</h6>
-                            <p><code>{{ namespace.database_name }}</code></p>
-                        </div>
-                    </div>
-                    
-                    {% if namespace.sqlite_file_path %}
-                    <div class="mb-3">
-                        <h6>CDB File</h6>
-                        <p><code>{{ namespace.sqlite_file_path }}</code></p>
-                    </div>
-                    {% endif %}
-                    
-                    <hr>
-                    
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6>Created By</h6>
-                            <p>
-                                {% if namespace.created_by %}
-                                    <a href="{{ url_for('web.admin_user_detail', user_id=namespace.created_by.id) }}">
-                                        {{ namespace.created_by.username }}
-                                    </a>
-                                {% else %}
-                                    <span class="text-muted">System</span>
-                                {% endif %}
-                            </p>
-                        </div>
-                        <div class="col-md-6">
-                            <h6>Created</h6>
-                            <p>{{ namespace.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
-                        </div>
-                    </div>
+                <div class="col-md-6">
+                    <h6>Slug</h6>
+                    <p><code>{{ namespace.slug }}</code></p>
                 </div>
             </div>
 
-            <!-- Users with Access Card -->
-            <div class="card">
-                <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0">👥 Users with Access</h5>
+            {% if namespace.description %}
+            <div class="mb-3">
+                <h6>Description</h6>
+                <p>{{ namespace.description }}</p>
+            </div>
+            {% endif %}
+
+            <hr>
+
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <h6>Status</h6>
+                    <form method="POST" action="{{ url_for('web.admin_namespace_update_status', namespace_id=namespace.id) }}" class="d-inline status-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="d-flex align-items-center gap-2">
+                            <select name="status" class="form-select form-select-sm status-select" data-original="{{ namespace.status }}" style="width: auto;">
+                                <option value="active" {% if namespace.status == 'active' %}selected{% endif %}>Active</option>
+                                <option value="draft" {% if namespace.status == 'draft' %}selected{% endif %}>Draft</option>
+                                <option value="archived" {% if namespace.status == 'archived' %}selected{% endif %}>Archived</option>
+                            </select>
+                            <button type="submit" class="btn btn-sm btn-success save-btn" style="display: none;">
+                                💾 Save
+                            </button>
+                        </div>
+                    </form>
                 </div>
-                <div class="card-body">
-                    {% if users_with_access|length > 0 %}
-                        <div class="list-group">
-                            {% for user in users_with_access %}
-                                <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>{{ user.username }}</strong>
-                                        {% if not user.is_active %}
-                                            <span class="badge bg-danger ms-2">Inactive</span>
-                                        {% endif %}
-                                        {% if user.is_superadmin %}
-                                            <span class="badge bg-warning text-dark ms-2">Superadmin</span>
-                                        {% endif %}
-                                    </div>
-                                    <span class="text-muted">
-                                        {% if user.last_login %}
-                                            Last login: {{ user.last_login.strftime('%Y-%m-%d') }}
-                                        {% else %}
-                                            Never logged in
-                                        {% endif %}
-                                    </span>
-                                </a>
-                            {% endfor %}
-                        </div>
-                    {% else %}
-                        <div class="alert alert-info mb-0">
-                            No users have been granted access to this namespace yet.
-                        </div>
-                    {% endif %}
+                <div class="col-md-4">
+                    <h6>PCM Version</h6>
+                    <p>
+                        {% if namespace.pcm_version %}
+                            {{ namespace.pcm_version }}
+                        {% else %}
+                            <span class="text-muted">Not set</span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    <h6>Database Year</h6>
+                    <p>
+                        {% if namespace.database_year %}
+                            {{ namespace.database_year }}
+                        {% else %}
+                            <span class="text-muted">Not set</span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    <h6>Gender</h6>
+                    <p>
+                        {% if namespace.gender %}
+                            {{ namespace.gender }}
+                        {% else %}
+                            <span class="text-muted">Not set</span>
+                        {% endif %}
+                    </p>
                 </div>
             </div>
+
+            <hr>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <h6>Database Name</h6>
+                    <p><code>{{ namespace.database_name }}</code></p>
+                </div>
+            </div>
+
+            {% if namespace.sqlite_file_path %}
+            <div class="mb-3">
+                <h6>CDB File</h6>
+                <p><code>{{ namespace.sqlite_file_path }}</code></p>
+            </div>
+            {% endif %}
+
+            <hr>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Created By</h6>
+                    <p>
+                        {% if namespace.created_by %}
+                            <a href="{{ url_for('web.admin_user_detail', user_id=namespace.created_by.id) }}">
+                                {{ namespace.created_by.username }}
+                            </a>
+                        {% else %}
+                            <span class="text-muted">System</span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="col-md-6">
+                    <h6>Created</h6>
+                    <p>{{ namespace.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-secondary text-white">
+            <h5 class="mb-0">👥 Users with Access</h5>
+        </div>
+        <div class="card-body">
+            {% if users_with_access|length > 0 %}
+                <div class="list-group">
+                    {% for user in users_with_access %}
+                        <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ user.username }}</strong>
+                                {% if not user.is_active %}
+                                    <span class="badge bg-danger ms-2">Inactive</span>
+                                {% endif %}
+                                {% if user.is_superadmin %}
+                                    <span class="badge bg-warning text-dark ms-2">Superadmin</span>
+                                {% endif %}
+                            </div>
+                            <span class="text-muted">
+                                {% if user.last_login %}
+                                    Last login: {{ user.last_login.strftime('%Y-%m-%d') }}
+                                {% else %}
+                                    Never logged in
+                                {% endif %}
+                            </span>
+                        </a>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="alert alert-info mb-0">
+                    No users have been granted access to this namespace yet.
+                </div>
+            {% endif %}
         </div>
     </div>
 </div>

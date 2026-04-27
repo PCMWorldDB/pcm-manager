@@ -87,7 +87,7 @@ class NamespaceForm(FlaskForm):
     ])
     description = TextAreaField('Description', validators=[Optional()])
     pcm_version = SelectField('PCM Version', validators=[Optional()], default='PCM2025')
-    database_year = IntegerField('Database Year', validators=[Optional()], default=2025)
+    database_year = IntegerField('Database Year', validators=[Optional()], default=2026)
     gender = SelectField('Gender', choices=[('Men', 'Men'), ('Women', 'Women')], default='Men')
     cdb_file = FileField('CDB Database File (SQLite)', validators=[
         Optional(),

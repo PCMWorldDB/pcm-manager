@@ -574,13 +574,15 @@ class FirstCyclingClient:
         return race
 
     def _upsert_team(self, team_id, payload, source_endpoint):
+        normalized = self._team_record_from_payload(team_id=team_id, payload=payload, source_endpoint=source_endpoint)
+        return self._upsert_team_record(team_id=team_id, normalized=normalized)
+
+    def _upsert_team_record(self, team_id, normalized):
         team = self.db_session.query(FirstCyclingTeam).filter_by(team_id=team_id).first()
         is_new = team is None
         if team is None:
             team = FirstCyclingTeam(team_id=team_id)
             self.db_session.add(team)
-
-        normalized = self._team_record_from_payload(team_id=team_id, payload=payload, source_endpoint=source_endpoint)
 
         team.team_year = normalized['team_year']
         team.team_name = normalized['team_name']
@@ -926,8 +928,10 @@ class FirstCyclingClient:
                 )
 
         applied = False
+        applied_mode = None
         if self.sync_method == 'incremental_upsert':
             applied = upserted > 0
+            applied_mode = 'incremental_upsert' if applied else None
             logger.info(
                 'Team incremental upsert finished: year=%s gender=%s upserted=%s failed=%s',
                 year,
@@ -959,6 +963,7 @@ class FirstCyclingClient:
                 if team_mappings:
                     self.db_session.execute(FirstCyclingTeam.__table__.insert(), team_mappings)
                 applied = True
+                applied_mode = 'bulk_refresh'
 
                 logger.info(
                     'Team DB load finished: year=%s gender=%s rows=%s deleted=%s duration_ms=%s',
@@ -968,9 +973,21 @@ class FirstCyclingClient:
                     delete_count,
                     int((time.perf_counter() - db_load_started) * 1000),
                 )
+            elif normalized_rows:
+                for row in normalized_rows:
+                    self._upsert_team_record(team_id=row['team_id'], normalized=row)
+                applied = True
+                applied_mode = 'partial_upsert'
+                logger.warning(
+                    'Team refresh fell back to partial upsert due to collection failures: year=%s gender=%s applied=%s failures=%s',
+                    year,
+                    gender,
+                    len(normalized_rows),
+                    len(failures),
+                )
             else:
                 logger.warning(
-                    'Team refresh skipped due to collection failures: year=%s gender=%s failures=%s',
+                    'Team refresh skipped due to collection failures with no collected rows: year=%s gender=%s failures=%s',
                     year,
                     gender,
                     len(failures),
@@ -1002,6 +1019,7 @@ class FirstCyclingClient:
             'failures': failures,
             'applied': applied,
             'method': self.sync_method,
+            'applied_mode': applied_mode,
         }
 
     def sync_riders(self, year, gender, limit=None, commit=True):

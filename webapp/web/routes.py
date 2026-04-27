@@ -52,12 +52,16 @@ STAT_MAX_VALUE = 85
 EXTERNAL_SYNC_TYPE_LABELS = {
     'all': 'All Syncs',
     'fc_race_calendar': 'Race Calendar',
-    'fc_teams': 'FC Teams',
-    'fc_riders': 'FC Riders',
+    'fc_teams': 'Teams',
+    'fc_riders': 'Riders',
     'fc_race_results': 'Race Results',
 }
 
 EXTERNAL_SYNC_RUN_TYPES = ('fc_race_calendar', 'fc_teams', 'fc_riders', 'fc_race_results')
+INTEGRATION_PROVIDER_LABELS = {
+    'firstcycling': 'First Cycling',
+    'discord': 'Discord',
+}
 
 
 def _external_sync_type_display(sync_type):
@@ -3791,15 +3795,29 @@ def admin_namespaces():
     return render_template('admin/namespaces.html', namespaces=namespaces, active_section='namespaces')
 
 
-@web_bp.route('/admin/external-sync')
-@web_bp.route('/admin/external-sync/<sync_view>')
+@web_bp.route('/admin/integrations')
 @login_required
 @admin_required
-def admin_external_sync(sync_view='all'):
-    """Admin panel - External sync controls and history."""
-    requested_sync_view = (request.args.get('sync_view') or '').strip()
-    if requested_sync_view:
-        sync_view = requested_sync_view
+def admin_integrations_index():
+    """Redirect integrations index to the default provider view."""
+    query_params = request.args.to_dict()
+    return redirect(url_for('web.admin_integrations', provider='firstcycling', **query_params))
+
+
+@web_bp.route('/admin/integrations/<provider>')
+@login_required
+@admin_required
+def admin_integrations(provider='firstcycling'):
+    """Admin panel - integration controls and history."""
+    requested_provider = (request.args.get('provider') or '').strip().lower()
+    if requested_provider:
+        provider = requested_provider
+
+    provider = (provider or 'firstcycling').strip().lower()
+    if provider not in INTEGRATION_PROVIDER_LABELS:
+        abort(404)
+
+    sync_view = (request.args.get('sync_view') or 'all').strip()
 
     if sync_view not in EXTERNAL_SYNC_TYPE_LABELS:
         abort(404)
@@ -3814,24 +3832,37 @@ def admin_external_sync(sync_view='all'):
         request.args.get('gender'),
     )
 
-    history_query = ExternalSyncLog.query
-    if selected_season is not None:
-        history_query = history_query.filter_by(
-            season_year=selected_season['year'],
-            gender=selected_season['gender'],
-        )
-    if sync_view != 'all':
-        history_query = history_query.filter_by(sync_type=sync_view)
+    sync_history = []
+    has_running_sync = False
+    if provider == 'firstcycling':
+        history_query = ExternalSyncLog.query.filter_by(provider=provider)
+        if selected_season is not None:
+            history_query = history_query.filter_by(
+                season_year=selected_season['year'],
+                gender=selected_season['gender'],
+            )
+        if sync_view != 'all':
+            history_query = history_query.filter_by(sync_type=sync_view)
 
-    sync_history = history_query.order_by(ExternalSyncLog.timestamp.desc()).limit(200).all()
-    has_running_sync = any(log.status in ('queued', 'running') for log in sync_history)
+        sync_history = history_query.order_by(ExternalSyncLog.timestamp.desc()).limit(200).all()
+        for log in sync_history:
+            details = None
+            if log.details_json:
+                try:
+                    details = json.loads(log.details_json)
+                except (TypeError, ValueError):
+                    details = None
+            log.details = details or {}
+        has_running_sync = any(log.status in ('queued', 'running') for log in sync_history)
 
     selected_start_date = (request.args.get('start_date') or '').strip()
     selected_end_date = (request.args.get('end_date') or '').strip()
 
     response = make_response(render_template(
-        'admin/external_sync.html',
-        active_section='external_sync',
+        'admin/integrations.html',
+        active_section='integrations',
+        active_provider=provider,
+        integration_providers=INTEGRATION_PROVIDER_LABELS,
         active_sync_view=sync_view,
         sync_views=EXTERNAL_SYNC_TYPE_LABELS,
         run_sync_types=EXTERNAL_SYNC_RUN_TYPES,
@@ -3849,15 +3880,31 @@ def admin_external_sync(sync_view='all'):
     return response
 
 
+@web_bp.route('/admin/external-sync')
+@web_bp.route('/admin/external-sync/<provider>')
+@login_required
+@admin_required
+def admin_external_sync_redirect(provider='firstcycling'):
+    """Redirect legacy external sync URLs to integrations URLs."""
+    query_params = request.args.to_dict()
+    return redirect(url_for('web.admin_integrations', provider=provider, **query_params), code=302)
+
+
+@web_bp.route('/admin/integrations/run', methods=['POST'])
 @web_bp.route('/admin/external-sync/run', methods=['POST'])
 @login_required
 @admin_required
-def admin_external_sync_run():
+def admin_integrations_run():
     """Queue one external sync type job and write execution history."""
+    provider = (request.form.get('provider') or 'firstcycling').strip().lower()
+    if provider != 'firstcycling':
+        flash('This integration provider is scaffolded but not runnable yet.', 'info')
+        return redirect(url_for('web.admin_integrations', provider=provider))
+
     sync_type = (request.form.get('sync_type') or '').strip()
     if sync_type not in EXTERNAL_SYNC_RUN_TYPES:
         flash('Invalid sync type selected.', 'error')
-        return redirect(url_for('web.admin_external_sync', sync_view='all'))
+        return redirect(url_for('web.admin_integrations', provider=provider, sync_view='all'))
     sync_log = None
     sync_log_id = None
 
@@ -3872,7 +3919,7 @@ def admin_external_sync_run():
         )
         db.session.commit()
         flash('No valid SEASONS entries are configured; sync was not started.', 'error')
-        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
 
     selected_season = _resolve_external_sync_season(
         seasons,
@@ -3881,7 +3928,7 @@ def admin_external_sync_run():
     )
     if selected_season is None:
         flash('No season selected for sync execution.', 'error')
-        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
 
     selected_year = selected_season['year']
     selected_gender = selected_season['gender']
@@ -3893,7 +3940,8 @@ def admin_external_sync_run():
             flash('Start date and end date are required for race results sync.', 'error')
             return redirect(
                 url_for(
-                    'web.admin_external_sync',
+                    'web.admin_integrations',
+                    provider=provider,
                     sync_view=sync_type,
                     year=selected_year,
                     gender=selected_gender,
@@ -3909,7 +3957,8 @@ def admin_external_sync_run():
             flash('Invalid date format. Use YYYY-MM-DD for start and end date.', 'error')
             return redirect(
                 url_for(
-                    'web.admin_external_sync',
+                    'web.admin_integrations',
+                    provider=provider,
                     sync_view=sync_type,
                     year=selected_year,
                     gender=selected_gender,
@@ -3922,7 +3971,8 @@ def admin_external_sync_run():
             flash('Start date must be on or before end date.', 'error')
             return redirect(
                 url_for(
-                    'web.admin_external_sync',
+                    'web.admin_integrations',
+                    provider=provider,
                     sync_view=sync_type,
                     year=selected_year,
                     gender=selected_gender,
@@ -3942,7 +3992,7 @@ def admin_external_sync_run():
         )
         db.session.commit()
         flash('FIRST_CYCLING_API_PATH is not configured.', 'error')
-        return redirect(url_for('web.admin_external_sync', sync_view=sync_type))
+        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
 
     sync_log = _record_external_sync_log(
         provider='firstcycling',
@@ -4005,7 +4055,8 @@ def admin_external_sync_run():
         )
         return redirect(
             url_for(
-                'web.admin_external_sync',
+                'web.admin_integrations',
+                provider=provider,
                 sync_view=sync_type,
                 year=selected_year,
                 gender=selected_gender,
@@ -4023,7 +4074,8 @@ def admin_external_sync_run():
     )
     return redirect(
         url_for(
-            'web.admin_external_sync',
+            'web.admin_integrations',
+            provider=provider,
             sync_view=sync_type,
             year=selected_year,
             gender=selected_gender,

@@ -4,112 +4,105 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="row">
-        {% include 'admin/_admin_nav.html' %}
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">➕ Create New Namespace</h4>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('web.admin_namespace_create') }}" enctype="multipart/form-data">
+                {{ form.hidden_tag() }}
 
-        <!-- Form Content -->
-        <div class="col-md-9">
-            <div class="card">
-                <div class="card-header bg-primary text-white">
-                    <h4 class="mb-0">➕ Create New Namespace</h4>
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label for="{{ form.name.id }}" class="form-label">
+                            {{ form.name.label.text }} <span class="text-danger">*</span>
+                        </label>
+                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WorldDB 2024") }}
+                        {% if form.name.errors %}
+                            <div class="invalid-feedback">
+                                {{ form.name.errors[0] }}
+                            </div>
+                        {% endif %}
+                        <small class="form-text text-muted">User-friendly display name</small>
+                    </div>
+
+                    <div class="col-md-4 mb-3">
+                        <label for="{{ form.database_year.id }}" class="form-label">
+                            Season
+                        </label>
+                        {{ form.database_year(class="form-control", placeholder="e.g., 2024") }}
+                        <small class="form-text text-muted">Database season year</small>
+                    </div>
+
+                    <div class="col-md-4 mb-3">
+                        <label for="{{ form.gender.id }}" class="form-label">
+                            {{ form.gender.label.text }}
+                        </label>
+                        {{ form.gender(class="form-select") }}
+                        <small class="form-text text-muted">Database season gender</small>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <form method="POST" action="{{ url_for('web.admin_namespace_create') }}" enctype="multipart/form-data">
-                        {{ form.hidden_tag() }}
-                        
-                        <div class="row">
-                            <div class="col-md-4 mb-3">
-                                <label for="{{ form.name.id }}" class="form-label">
-                                    {{ form.name.label.text }} <span class="text-danger">*</span>
-                                </label>
-                                {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WorldDB 2024") }}
-                                {% if form.name.errors %}
-                                    <div class="invalid-feedback">
-                                        {{ form.name.errors[0] }}
-                                    </div>
-                                {% endif %}
-                                <small class="form-text text-muted">User-friendly display name</small>
-                            </div>
 
-                            <div class="col-md-4 mb-3">
-                                <label for="{{ form.database_year.id }}" class="form-label">
-                                    Season
-                                </label>
-                                {{ form.database_year(class="form-control", placeholder="e.g., 2024") }}
-                                <small class="form-text text-muted">Database season year</small>
+                <div class="row">
+                    <div class="col-md-12 mb-3">
+                        <label for="{{ form.slug.id }}" class="form-label">
+                            {{ form.slug.label.text }} <span class="text-danger">*</span>
+                        </label>
+                        {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-2024", readonly=true) }}
+                        {% if form.slug.errors %}
+                            <div class="invalid-feedback">
+                                {{ form.slug.errors[0] }}
                             </div>
-
-                            <div class="col-md-4 mb-3">
-                                <label for="{{ form.gender.id }}" class="form-label">
-                                    {{ form.gender.label.text }}
-                                </label>
-                                {{ form.gender(class="form-select") }}
-                                <small class="form-text text-muted">Database season gender</small>
-                            </div>
-                        </div>
-
-                        <div class="row">
-                            <div class="col-md-12 mb-3">
-                                <label for="{{ form.slug.id }}" class="form-label">
-                                    {{ form.slug.label.text }} <span class="text-danger">*</span>
-                                </label>
-                                {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-2024", readonly=true) }}
-                                {% if form.slug.errors %}
-                                    <div class="invalid-feedback">
-                                        {{ form.slug.errors[0] }}
-                                    </div>
-                                {% endif %}
-                                <small class="form-text text-muted">Auto-generated from Name, Season, and Gender.</small>
-                            </div>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="{{ form.description.id }}" class="form-label">
-                                {{ form.description.label.text }}
-                            </label>
-                            {{ form.description(class="form-control", rows=3, placeholder="Brief description of this namespace...") }}
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="{{ form.cdb_file.id }}" class="form-label">
-                                {{ form.cdb_file.label.text }}
-                            </label>
-                            {{ form.cdb_file(class="form-control", accept=".sqlite") }}
-                            {% if form.cdb_file.errors %}
-                                <div class="invalid-feedback d-block">
-                                    {{ form.cdb_file.errors[0] }}
-                                </div>
-                            {% endif %}
-                            <small class="form-text text-muted">Upload a SQLite CDB database file (optional). File will be copied to the namespace import directory. Only .sqlite files are accepted.</small>
-                        </div>
-                        
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="{{ form.pcm_version.id }}" class="form-label">
-                                    {{ form.pcm_version.label.text }}
-                                </label>
-                                {{ form.pcm_version(class="form-select") }}
-                                <small class="form-text text-muted">Game version</small>
-                            </div>
-
-                            <div class="col-md-6 mb-3">
-                                <label for="{{ form.status.id }}" class="form-label">
-                                    {{ form.status.label.text }}
-                                </label>
-                                {{ form.status(class="form-select") }}
-                                <small class="form-text text-muted">Initial status</small>
-                            </div>
-                        </div>
-                        
-                        <div class="d-flex justify-content-between">
-                            <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-secondary">
-                                Cancel
-                            </a>
-                            {{ form.submit(class="btn btn-primary") }}
-                        </div>
-                    </form>
+                        {% endif %}
+                        <small class="form-text text-muted">Auto-generated from Name, Season, and Gender.</small>
+                    </div>
                 </div>
-            </div>
+
+                <div class="mb-3">
+                    <label for="{{ form.description.id }}" class="form-label">
+                        {{ form.description.label.text }}
+                    </label>
+                    {{ form.description(class="form-control", rows=3, placeholder="Brief description of this namespace...") }}
+                </div>
+
+                <div class="mb-3">
+                    <label for="{{ form.cdb_file.id }}" class="form-label">
+                        {{ form.cdb_file.label.text }}
+                    </label>
+                    {{ form.cdb_file(class="form-control", accept=".sqlite") }}
+                    {% if form.cdb_file.errors %}
+                        <div class="invalid-feedback d-block">
+                            {{ form.cdb_file.errors[0] }}
+                        </div>
+                    {% endif %}
+                    <small class="form-text text-muted">Upload a SQLite CDB database file (optional). File will be copied to the namespace import directory. Only .sqlite files are accepted.</small>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="{{ form.pcm_version.id }}" class="form-label">
+                            {{ form.pcm_version.label.text }}
+                        </label>
+                        {{ form.pcm_version(class="form-select") }}
+                        <small class="form-text text-muted">Game version</small>
+                    </div>
+
+                    <div class="col-md-6 mb-3">
+                        <label for="{{ form.status.id }}" class="form-label">
+                            {{ form.status.label.text }}
+                        </label>
+                        {{ form.status(class="form-select") }}
+                        <small class="form-text text-muted">Initial status</small>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between">
+                    <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-secondary">
+                        Cancel
+                    </a>
+                    {{ form.submit(class="btn btn-primary") }}
+                </div>
+            </form>
         </div>
     </div>
 </div>
