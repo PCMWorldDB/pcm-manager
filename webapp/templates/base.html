@@ -385,6 +385,14 @@
         .dropdown-item.username:hover {
             background: none;
         }
+        body.dark-mode #userDropdown + .dropdown-menu,
+        body.dark-mode #userDropdown + .dropdown-menu .dropdown-item,
+        body.dark-mode #userDropdown + .dropdown-menu .dark-mode-toggle,
+        body.dark-mode #settingsDropdown + .dropdown-menu,
+        body.dark-mode #settingsDropdown + .dropdown-menu .dropdown-item,
+        body.dark-mode #settingsDropdown + .dropdown-menu .dark-mode-toggle {
+            color: #f9fafb;
+        }
         
         /* Dark mode toggle switch */
         .dark-mode-toggle {
@@ -638,22 +646,22 @@
                         ⚙️
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="settingsDropdown">
-                        <!-- Dark Mode Toggle -->
-                        <li>
-                            <div class="dark-mode-toggle" id="darkModeToggle">
-                                <span>🌙 Dark Mode</span>
-                                <div class="toggle-switch"></div>
-                            </div>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
-                        
                         {% if current_user.is_superadmin or current_user.has_role('admin') %}
                         <li>
-                            <a class="dropdown-item" href="{{ url_for('web.admin') }}" style="color: inherit !important;">
-                                🛠️ Admin Panel
+                            <a class="dropdown-item" href="{{ url_for('web.admin_users') }}" style="color: inherit !important;">
+                                👥 Users
                             </a>
                         </li>
-                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.admin_namespaces') }}" style="color: inherit !important;">
+                                🗂️ Namespaces
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.admin_integrations', provider='firstcycling') }}" style="color: inherit !important;">
+                                🔌 Integrations
+                            </a>
+                        </li>
                         {% endif %}
                     </ul>
                 </div>
@@ -664,6 +672,13 @@
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
                         <li><span class="dropdown-item username">{{ current_user.username }}</span></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <div class="dark-mode-toggle" id="darkModeToggle">
+                                <span>🌙 Dark Mode</span>
+                                <div class="toggle-switch"></div>
+                            </div>
+                        </li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
                             <a class="dropdown-item" href="{{ url_for('web.change_password') }}" style="color: inherit !important;">

@@ -4,159 +4,149 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="row">
-        {% include 'admin/_admin_nav.html' %}
-
-        <!-- User Detail Content -->
-        <div class="col-md-9">
-            <!-- User Info Card -->
-            <div class="card mb-3">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                    <h4 class="mb-0">👤 User: {{ user.username }}</h4>
-                    <a href="{{ url_for('web.admin_users') }}" class="btn btn-light btn-sm">
-                        ← Back to Users
-                    </a>
+    <div class="card mb-3">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0">👤 User: {{ user.username }}</h4>
+            <a href="{{ url_for('web.admin_users') }}" class="btn btn-light btn-sm">
+                ← Back to Users
+            </a>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Account Status</h6>
+                    <form method="POST" action="{{ url_for('web.admin_user_toggle_status', user_id=user.id) }}" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        {% if user.is_active %}
+                            <span class="badge bg-success">Active</span>
+                            <button type="submit" class="btn btn-sm btn-warning ms-2">Deactivate</button>
+                        {% else %}
+                            <span class="badge bg-danger">Inactive</span>
+                            <button type="submit" class="btn btn-sm btn-success ms-2">Activate</button>
+                        {% endif %}
+                    </form>
                 </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6>Account Status</h6>
-                            <form method="POST" action="{{ url_for('web.admin_user_toggle_status', user_id=user.id) }}" class="d-inline">
+                <div class="col-md-6">
+                    <h6>Superadmin</h6>
+                    {% if user.is_superadmin %}
+                        <span class="badge bg-warning text-dark">Yes</span>
+                    {% else %}
+                        <span class="text-muted">No</span>
+                    {% endif %}
+                </div>
+            </div>
+            <hr>
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Last Login</h6>
+                    {% if user.last_login %}
+                        {{ user.last_login.strftime('%Y-%m-%d %H:%M UTC') }}
+                    {% else %}
+                        <span class="text-muted">Never</span>
+                    {% endif %}
+                </div>
+                <div class="col-md-6">
+                    <h6>Created</h6>
+                    {{ user.created_at.strftime('%Y-%m-%d') }}
+                </div>
+            </div>
+            <hr>
+            <div>
+                <h6>Password Management</h6>
+                {% if user.is_temporary_password %}
+                    <span class="badge bg-warning text-dark">Temporary Password Set</span>
+                    <p class="text-muted small mb-2">User must change password on next login</p>
+                {% endif %}
+                <a href="{{ url_for('web.admin_user_reset_password', user_id=user.id) }}" class="btn btn-sm btn-outline-primary">
+                    🔑 Reset Password
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header bg-secondary text-white">
+            <h5 class="mb-0">🎭 Roles</h5>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('web.admin_user_add_role', user_id=user.id) }}" class="mb-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="row g-2">
+                    <div class="col-auto">
+                        <select name="role_id" class="form-select form-select-sm" required>
+                            <option value="">-- Select Role --</option>
+                            {% for role in all_roles %}
+                                <option value="{{ role.id }}">{{ role.display_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-sm btn-success">➕ Add Role</button>
+                    </div>
+                </div>
+            </form>
+
+            {% if user_roles|length > 0 %}
+                <div class="list-group">
+                    {% for role in user_roles %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ role.display_name }}</strong>
+                                <br><small class="text-muted">{{ role.description }}</small>
+                            </div>
+                            <form method="POST" action="{{ url_for('web.admin_user_remove_role', user_id=user.id, role_id=role.id) }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                {% if user.is_active %}
-                                    <span class="badge bg-success">Active</span>
-                                    <button type="submit" class="btn btn-sm btn-warning ms-2">Deactivate</button>
-                                {% else %}
-                                    <span class="badge bg-danger">Inactive</span>
-                                    <button type="submit" class="btn btn-sm btn-success ms-2">Activate</button>
-                                {% endif %}
+                                <button type="submit" class="btn btn-sm btn-danger">Remove</button>
                             </form>
                         </div>
-                        <div class="col-md-6">
-                            <h6>Superadmin</h6>
-                            {% if user.is_superadmin %}
-                                <span class="badge bg-warning text-dark">Yes</span>
-                            {% else %}
-                                <span class="text-muted">No</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6>Last Login</h6>
-                            {% if user.last_login %}
-                                {{ user.last_login.strftime('%Y-%m-%d %H:%M UTC') }}
-                            {% else %}
-                                <span class="text-muted">Never</span>
-                            {% endif %}
-                        </div>
-                        <div class="col-md-6">
-                            <h6>Created</h6>
-                            {{ user.created_at.strftime('%Y-%m-%d') }}
-                        </div>
-                    </div>
-                    <hr>
-                    <div>
-                        <h6>Password Management</h6>
-                        {% if user.is_temporary_password %}
-                            <span class="badge bg-warning text-dark">Temporary Password Set</span>
-                            <p class="text-muted small mb-2">User must change password on next login</p>
-                        {% endif %}
-                        <a href="{{ url_for('web.admin_user_reset_password', user_id=user.id) }}" class="btn btn-sm btn-outline-primary">
-                            🔑 Reset Password
-                        </a>
-                    </div>
+                    {% endfor %}
                 </div>
-            </div>
+            {% else %}
+                <div class="alert alert-info mb-0">No roles assigned</div>
+            {% endif %}
+        </div>
+    </div>
 
-            <!-- Roles Card -->
-            <div class="card mb-3">
-                <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0">🎭 Roles</h5>
-                </div>
-                <div class="card-body">
-                    <form method="POST" action="{{ url_for('web.admin_user_add_role', user_id=user.id) }}" class="mb-3">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="row g-2">
-                            <div class="col-auto">
-                                <select name="role_id" class="form-select form-select-sm" required>
-                                    <option value="">-- Select Role --</option>
-                                    {% for role in all_roles %}
-                                        <option value="{{ role.id }}">{{ role.display_name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div class="col-auto">
-                                <button type="submit" class="btn btn-sm btn-success">➕ Add Role</button>
-                            </div>
-                        </div>
-                    </form>
-                    
-                    {% if user_roles|length > 0 %}
-                        <div class="list-group">
-                            {% for role in user_roles %}
-                                <div class="list-group-item d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>{{ role.display_name }}</strong>
-                                        <br><small class="text-muted">{{ role.description }}</small>
-                                    </div>
-                                    <form method="POST" action="{{ url_for('web.admin_user_remove_role', user_id=user.id, role_id=role.id) }}" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
-                                    </form>
-                                </div>
+    <div class="card">
+        <div class="card-header bg-secondary text-white">
+            <h5 class="mb-0">🗂️ Namespace Access</h5>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('web.admin_user_add_namespace', user_id=user.id) }}" class="mb-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="row g-2">
+                    <div class="col-auto">
+                        <select name="namespace_id" class="form-select form-select-sm" required>
+                            <option value="">-- Select Namespace --</option>
+                            {% for namespace in all_namespaces %}
+                                <option value="{{ namespace.id }}">{{ namespace.name }}</option>
                             {% endfor %}
-                        </div>
-                    {% else %}
-                        <div class="alert alert-info mb-0">No roles assigned</div>
-                    {% endif %}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-sm btn-success">➕ Grant Access</button>
+                    </div>
                 </div>
-            </div>
+            </form>
 
-            <!-- Namespaces Card -->
-            <div class="card">
-                <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0">🗂️ Namespace Access</h5>
-                </div>
-                <div class="card-body">
-                    <form method="POST" action="{{ url_for('web.admin_user_add_namespace', user_id=user.id) }}" class="mb-3">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="row g-2">
-                            <div class="col-auto">
-                                <select name="namespace_id" class="form-select form-select-sm" required>
-                                    <option value="">-- Select Namespace --</option>
-                                    {% for namespace in all_namespaces %}
-                                        <option value="{{ namespace.id }}">{{ namespace.name }}</option>
-                                    {% endfor %}
-                                </select>
+            {% if user_namespaces|length > 0 %}
+                <div class="list-group">
+                    {% for namespace in user_namespaces %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ namespace.name }}</strong>
+                                <br><small class="text-muted">{{ namespace.slug }}</small>
                             </div>
-                            <div class="col-auto">
-                                <button type="submit" class="btn btn-sm btn-success">➕ Grant Access</button>
-                            </div>
+                            <form method="POST" action="{{ url_for('web.admin_user_remove_namespace', user_id=user.id, namespace_id=namespace.id) }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-danger">Revoke</button>
+                            </form>
                         </div>
-                    </form>
-                    
-                    {% if user_namespaces|length > 0 %}
-                        <div class="list-group">
-                            {% for namespace in user_namespaces %}
-                                <div class="list-group-item d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>{{ namespace.name }}</strong>
-                                        <br><small class="text-muted">{{ namespace.slug }}</small>
-                                    </div>
-                                    <form method="POST" action="{{ url_for('web.admin_user_remove_namespace', user_id=user.id, namespace_id=namespace.id) }}" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-sm btn-danger">Revoke</button>
-                                    </form>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    {% else %}
-                        <div class="alert alert-info mb-0">No namespace access granted</div>
-                    {% endif %}
+                    {% endfor %}
                 </div>
-            </div>
+            {% else %}
+                <div class="alert alert-info mb-0">No namespace access granted</div>
+            {% endif %}
         </div>
     </div>
 </div>

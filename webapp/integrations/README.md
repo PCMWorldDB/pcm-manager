@@ -61,6 +61,20 @@ client.sync_race_calendar(season_year=2025)
 client.sync_race(1, season_year=2025)
 ```
 
+### Discord (`discord.py`)
+
+`DiscordClient` is a scaffold for future Discord integration work.
+
+#### Intended configuration
+
+- `DISCORD_WEBHOOK_URL`
+- `DISCORD_BOT_TOKEN`
+
+#### Current status
+
+- Provider tab is available in the admin Integrations page.
+- Runtime behavior is intentionally not implemented yet.
+
 ## Adding new integrations
 
 - Create a new integration module in this folder.
