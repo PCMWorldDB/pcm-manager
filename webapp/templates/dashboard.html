@@ -3,39 +3,95 @@
 {% block title %}Dashboard - WDB{% endblock %}
 
 {% block styles %}
-.welcome {
-    margin-bottom: 30px;
+.namespace-dashboard {
+    display: flex;
+    align-items: flex-start;
 }
-.welcome h2 {
+.namespace-stats {
+    width: 100%;
+    max-width: 360px;
+}
+.namespace-stats h2 {
     color: #2c3e50;
-    margin-bottom: 10px;
+    font-size: 1.25rem;
+    margin-bottom: 14px;
 }
-.welcome p {
-    color: #7f8c8d;
+.stats-list {
+    border-left: 3px solid var(--brand-primary);
+    padding-left: 14px;
 }
-.dashboard-note {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 22px;
-    max-width: 760px;
-    color: #4b5563;
+.stat-pair {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 8px 0;
+    border-bottom: 1px solid #e5e7eb;
 }
-body.dark-mode .dashboard-note {
-    background: #2d3748;
-    border-color: #4a5568;
+.stat-pair:last-child {
+    border-bottom: 0;
+}
+.stat-label {
+    color: #6b7280;
+    font-size: 0.9rem;
+}
+.stat-value {
+    color: #111827;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+.stat-context {
+    color: #6b7280;
+    margin-top: 10px;
+}
+body.dark-mode .stats-list {
+    border-left-color: var(--brand-primary-border);
+}
+body.dark-mode .stat-pair {
+    border-bottom-color: #4a5568;
+}
+body.dark-mode .namespace-stats h2,
+body.dark-mode .stat-value {
+    color: #f9fafb;
+}
+body.dark-mode .stat-label,
+body.dark-mode .stat-context {
     color: #d1d5db;
 }
 {% endblock %}
 
 {% block content %}
-<div class="welcome">
-    <h2>Welcome, {{ current_user.username }}!</h2>
-    <p>Use the menu button in the top-left corner to open your panels.</p>
-</div>
-
-<div class="dashboard-note">
-    Panel navigation has moved to the left sidebar.
-    The list shows all panels; unavailable panels are disabled based on your permissions.
+<div class="namespace-dashboard">
+    <div class="namespace-stats">
+        <h2>{% if selected_namespace %}Namespace Stats - {{ selected_namespace.slug }}{% else %}Namespace Stats{% endif %}</h2>
+        <div class="stats-list">
+            <div class="stat-pair">
+                <div class="stat-label">Main Team Count</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.team_count or 0) }}</div>
+            </div>
+            <div class="stat-pair">
+                <div class="stat-label">Main Rider Count</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.rider_count or 0) }}</div>
+            </div>
+            <div class="stat-pair">
+                <div class="stat-label">CDB Team Count</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.cdb_team_count or 0) }}</div>
+            </div>
+            <div class="stat-pair">
+                <div class="stat-label">CDB Rider Count</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.cdb_rider_count or 0) }}</div>
+            </div>
+            <div class="stat-pair">
+                <div class="stat-label">Total Stat Edits</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.total_stat_edits or 0) }}</div>
+            </div>
+            <div class="stat-pair">
+                <div class="stat-label">Publish Releases</div>
+                <div class="stat-value">{{ "{:,}".format(namespace_stats.published_releases or 0) }}</div>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

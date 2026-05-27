@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-SITE_VERSION = 'v0.1.0'  # Update this as needed for new releases
+SITE_VERSION = 'v0.2.0'  # Update this as needed for new releases
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
@@ -31,8 +31,8 @@ def get_cdb_import_path(namespace_name):
 
 
 def get_cdb_releases_path(namespace_name):
-    """Get the CDB releases directory path for a namespace"""
-    return os.path.join(get_namespace_path(namespace_name), 'cdb', 'releases')
+    """Get the releases directory path for a namespace."""
+    return os.path.join(get_namespace_path(namespace_name), 'releases')
 
 
 def get_photos_path(namespace_name=None):
@@ -117,6 +117,11 @@ class Config:
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     CELERY_BROKER_URL = REDIS_URL
     CELERY_RESULT_BACKEND = REDIS_URL
+
+    # Discord
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    DISCORD_CLIENT_ID = os.getenv('DISCORD_CLIENT_ID')
+    DISCORD_CLIENT_SECRET = os.getenv('DISCORD_CLIENT_SECRET')
     
     # Session
     SESSION_COOKIE_NAME = 'pcm_session'
@@ -141,6 +146,11 @@ class Config:
     
     # Security
     BCRYPT_LOG_ROUNDS = int(os.getenv('BCRYPT_LOG_ROUNDS', 12))
+    AUTH_INVITE_TOKEN_HOURS = int(os.getenv('AUTH_INVITE_TOKEN_HOURS', '72'))
+    AUTH_RESET_TOKEN_MINUTES = int(os.getenv('AUTH_RESET_TOKEN_MINUTES', '30'))
+    AUTH_LOGIN_FAILURE_LIMIT = int(os.getenv('AUTH_LOGIN_FAILURE_LIMIT', '5'))
+    AUTH_LOGIN_LOCK_SECONDS = int(os.getenv('AUTH_LOGIN_LOCK_SECONDS', '60'))
+    AUTH_LOGIN_LOCK_MAX_SECONDS = int(os.getenv('AUTH_LOGIN_LOCK_MAX_SECONDS', '900'))
 
     # Site metadata
     SITE_VERSION = SITE_VERSION

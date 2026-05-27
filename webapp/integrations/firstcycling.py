@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from flask import current_app, has_app_context
 
 from webapp.extensions import db
+from webapp.models.main.base import ExternalSyncAPICallLog
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
     FirstCyclingRaceResult,
@@ -63,9 +64,17 @@ class FirstCyclingAPIError(Exception):
 class FirstCyclingClient:
     """Abstraction for the FirstCycling API and persistence in main database"""
 
-    def __init__(self, db_session=None, base_url=None, api_path=None, timeout_seconds=30):
+    def __init__(
+        self,
+        db_session=None,
+        base_url=None,
+        api_path=None,
+        timeout_seconds=30,
+        external_sync_log_id=None,
+    ):
         self.db_session = db_session or db.session
         self.timeout_seconds = timeout_seconds
+        self.external_sync_log_id = external_sync_log_id
 
         if has_app_context():
             configured_base_url = current_app.config.get('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
@@ -196,6 +205,43 @@ class FirstCyclingClient:
             url = f'{url}?{urlencode(params)}'
         return url
 
+    def _record_api_call(
+        self,
+        *,
+        endpoint_path,
+        params,
+        request_url,
+        attempt,
+        max_attempts,
+        outcome,
+        duration_ms,
+        http_status=None,
+        response_bytes=None,
+        error=None,
+    ):
+        try:
+            params_json = json.dumps(params, default=str, sort_keys=True) if params else None
+            error_message = str(error) if error is not None else None
+            values = {
+                'external_sync_log_id': self.external_sync_log_id,
+                'provider': 'firstcycling',
+                'endpoint': endpoint_path.lstrip('/'),
+                'request_url': self._redact_url(request_url),
+                'request_params_json': params_json,
+                'attempt': attempt,
+                'max_attempts': max_attempts,
+                'outcome': outcome,
+                'http_status': http_status,
+                'duration_ms': duration_ms,
+                'response_bytes': response_bytes,
+                'error_type': type(error).__name__ if error is not None else None,
+                'error_message': error_message[:4000] if error_message else None,
+            }
+            with db.engines['main'].begin() as conn:
+                conn.execute(ExternalSyncAPICallLog.__table__.insert().values(**values))
+        except Exception:
+            logger.exception('Failed to record FirstCycling API call log for endpoint %s', endpoint_path)
+
     def _fetch_json(self, endpoint_path, params=None):
         request_url = self._build_api_url(endpoint_path, params=params)
         total_attempts = self.retry_attempts + 1
@@ -210,16 +256,61 @@ class FirstCyclingClient:
             )
 
             self._throttle_request()
+            request_started = time.perf_counter()
 
             try:
                 with urlopen(request, timeout=self.timeout_seconds) as response:
                     response_status = getattr(response, 'status', None) or response.getcode()
-                    payload = response.read().decode('utf-8')
-                parsed = json.loads(payload)
+                    response_body = response.read()
+                duration_ms = int((time.perf_counter() - request_started) * 1000)
+                payload = response_body.decode('utf-8')
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    self._record_api_call(
+                        endpoint_path=endpoint_path,
+                        params=params,
+                        request_url=request_url,
+                        attempt=attempt,
+                        max_attempts=total_attempts,
+                        outcome='invalid_json',
+                        http_status=response_status,
+                        duration_ms=duration_ms,
+                        response_bytes=len(response_body),
+                        error=exc,
+                    )
+                    logger.error('❌ FirstCycling invalid JSON response: %s', self._redact_url(request_url))
+                    raise FirstCyclingAPIError(
+                        f'FirstCycling API returned invalid JSON for {self._redact_url(request_url)}'
+                    ) from exc
+
+                self._record_api_call(
+                    endpoint_path=endpoint_path,
+                    params=params,
+                    request_url=request_url,
+                    attempt=attempt,
+                    max_attempts=total_attempts,
+                    outcome='success',
+                    http_status=response_status,
+                    duration_ms=duration_ms,
+                    response_bytes=len(response_body),
+                )
                 logger.info('✅ FirstCycling response HTTP %s: %s', response_status, self._redact_url(request_url))
                 return parsed, request_url
             except HTTPError as exc:
+                duration_ms = int((time.perf_counter() - request_started) * 1000)
                 is_retryable = exc.code == 429 or 500 <= exc.code < 600
+                self._record_api_call(
+                    endpoint_path=endpoint_path,
+                    params=params,
+                    request_url=request_url,
+                    attempt=attempt,
+                    max_attempts=total_attempts,
+                    outcome='http_retry' if is_retryable and attempt < total_attempts else 'http_error',
+                    http_status=exc.code,
+                    duration_ms=duration_ms,
+                    error=exc,
+                )
                 if is_retryable and attempt < total_attempts:
                     retry_after = self._parse_retry_after(exc)
                     wait_seconds = retry_after if retry_after is not None else self.retry_backoff_seconds * (2 ** (attempt - 1))
@@ -246,6 +337,17 @@ class FirstCyclingClient:
                     f'FirstCycling API HTTP {exc.code} for {self._redact_url(request_url)}'
                 ) from exc
             except URLError as exc:
+                duration_ms = int((time.perf_counter() - request_started) * 1000)
+                self._record_api_call(
+                    endpoint_path=endpoint_path,
+                    params=params,
+                    request_url=request_url,
+                    attempt=attempt,
+                    max_attempts=total_attempts,
+                    outcome='connection_retry' if attempt < total_attempts else 'connection_error',
+                    duration_ms=duration_ms,
+                    error=exc,
+                )
                 if attempt < total_attempts:
                     wait_seconds = self.retry_backoff_seconds * (2 ** (attempt - 1))
                     logger.warning(
@@ -267,11 +369,6 @@ class FirstCyclingClient:
 
                 raise FirstCyclingAPIError(
                     f'FirstCycling API connection failure for {self._redact_url(request_url)}'
-                ) from exc
-            except json.JSONDecodeError as exc:
-                logger.error('❌ FirstCycling invalid JSON response: %s', self._redact_url(request_url))
-                raise FirstCyclingAPIError(
-                    f'FirstCycling API returned invalid JSON for {self._redact_url(request_url)}'
                 ) from exc
 
         raise FirstCyclingAPIError(
@@ -611,20 +708,21 @@ class FirstCyclingClient:
         return {key: value for key, value in payload.items() if key in allowed}
 
     def _upsert_rider(self, rider_id, payload, source_endpoint, season_year=None):
-        rider = self.db_session.query(FirstCyclingRider).filter_by(rider_id=rider_id).first()
-        is_new = rider is None
-        if rider is None:
-            rider = FirstCyclingRider(rider_id=rider_id)
-            self.db_session.add(rider)
-
         normalized = self._rider_record_from_payload(
             rider_id=rider_id,
             payload=payload,
             source_endpoint=source_endpoint,
             season_year=season_year,
         )
+        return self._upsert_rider_record(rider_id=rider_id, normalized=normalized)
 
-        rider.season_year = normalized['season_year']
+    def _upsert_rider_record(self, rider_id, normalized):
+        rider = self.db_session.query(FirstCyclingRider).filter_by(rider_id=rider_id).first()
+        is_new = rider is None
+        if rider is None:
+            rider = FirstCyclingRider(rider_id=rider_id)
+            self.db_session.add(rider)
+
         rider.first_name = normalized['first_name']
         rider.last_name = normalized['last_name']
         rider.gender = normalized['gender']
@@ -634,7 +732,6 @@ class FirstCyclingClient:
         rider.team_id = normalized['team_id']
         rider.team_name = normalized['team_name']
         rider.name = normalized['name']
-        rider.source_endpoint = normalized['source_endpoint']
         rider.last_synced_at = normalized['last_synced_at']
         if self.verbose_sync:
             logger.info(
@@ -674,35 +771,34 @@ class FirstCyclingClient:
         missing_ids = [rider_id for rider_id in rider_ids if rider_id not in existing_ids]
         return missing_ids, len(existing_ids)
 
-    def _collect_rider_ids_from_teams(self, year, gender):
-        """Collect unique rider IDs from stored team rider lists for the selected season."""
-        query = self.db_session.query(FirstCyclingTeam.gender, FirstCyclingTeam.rider_ids).filter(
-            FirstCyclingTeam.team_year == year
-        )
-
+    def _collect_rider_ids_from_overview(self, year, gender):
+        """Collect unique rider IDs from the rider overview feed for one season."""
+        payload, _source_endpoint = self.get_rider_overview(season_year=year)
+        rider_rows = self._extract_rider_overview_rows(payload)
         rider_ids = []
         seen = set()
         skipped_rows = 0
+        filtered_out = 0
 
-        for row in query.all():
-            team_gender = row[0] if row else None
-            team_rider_ids = row[1] if row else None
+        for row in rider_rows:
+            if isinstance(row, dict):
+                if not _gender_matches(row.get('gender'), gender):
+                    filtered_out += 1
+                    continue
+                raw_rider_id = row.get('riderId') or row.get('id')
+            else:
+                raw_rider_id = row
 
-            if not _gender_matches(team_gender, gender):
-                continue
-
-            if not isinstance(team_rider_ids, list):
+            parsed_rider_id = self._parse_int(raw_rider_id)
+            if parsed_rider_id is None:
                 skipped_rows += 1
                 continue
+            if parsed_rider_id in seen:
+                continue
+            seen.add(parsed_rider_id)
+            rider_ids.append(parsed_rider_id)
 
-            for raw_rider_id in team_rider_ids:
-                parsed_rider_id = self._parse_int(raw_rider_id)
-                if parsed_rider_id is None or parsed_rider_id in seen:
-                    continue
-                seen.add(parsed_rider_id)
-                rider_ids.append(parsed_rider_id)
-
-        return sorted(rider_ids), skipped_rows
+        return sorted(rider_ids), skipped_rows, filtered_out
 
     def get_race(self, race_id, season_year):
         endpoint = f'{season_year}/{race_id}.json'
@@ -1031,15 +1127,15 @@ class FirstCyclingClient:
             self.sync_method,
             self.fetch_only_missing,
         )
-        rider_ids, skipped = self._collect_rider_ids_from_teams(year=year, gender=gender)
-        filtered_out = 0
+        rider_ids, skipped, filtered_out = self._collect_rider_ids_from_overview(year=year, gender=gender)
 
         logger.info(
-            'Rider IDs loaded from teams table: year=%s gender=%s candidates=%s skipped=%s',
+            'Rider IDs loaded from rider overview: year=%s gender=%s candidates=%s skipped=%s filtered_out=%s',
             year,
             gender,
             len(rider_ids),
             skipped,
+            filtered_out,
         )
 
         if limit is not None:
@@ -1107,8 +1203,10 @@ class FirstCyclingClient:
                 )
 
         applied = False
+        applied_mode = None
         if self.sync_method == 'incremental_upsert':
             applied = upserted > 0
+            applied_mode = 'incremental_upsert' if applied else None
             logger.info(
                 'Rider incremental upsert finished: year=%s gender=%s upserted=%s failed=%s',
                 year,
@@ -1140,6 +1238,7 @@ class FirstCyclingClient:
                 if rider_mappings:
                     self.db_session.execute(FirstCyclingRider.__table__.insert(), rider_mappings)
                 applied = True
+                applied_mode = 'bulk_refresh'
 
                 logger.info(
                     'Rider DB load finished: year=%s gender=%s rows=%s deleted=%s duration_ms=%s',
@@ -1148,6 +1247,18 @@ class FirstCyclingClient:
                     len(rider_mappings),
                     delete_count,
                     int((time.perf_counter() - db_load_started) * 1000),
+                )
+            elif normalized_rows:
+                for row in normalized_rows:
+                    self._upsert_rider_record(rider_id=row['rider_id'], normalized=row)
+                applied = True
+                applied_mode = 'partial_upsert'
+                logger.warning(
+                    'Rider refresh fell back to partial upsert due to collection failures: year=%s gender=%s applied=%s failures=%s',
+                    year,
+                    gender,
+                    len(normalized_rows),
+                    len(failures),
                 )
             else:
                 logger.warning(
@@ -1183,6 +1294,7 @@ class FirstCyclingClient:
             'failures': failures,
             'applied': applied,
             'method': self.sync_method,
+            'applied_mode': applied_mode,
         }
 
     def sync_race_results_window(self, year, gender, start_date, end_date, commit=True):

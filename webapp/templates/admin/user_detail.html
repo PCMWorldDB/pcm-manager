@@ -61,6 +61,29 @@
                     🔑 Reset Password
                 </a>
             </div>
+            <hr>
+            <div>
+                <h6>Discord Recovery</h6>
+                <form method="POST" action="{{ url_for('web.admin_user_update_discord_id', user_id=user.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="input-group input-group-sm" style="max-width: 520px;">
+                        <span class="input-group-text">Discord User ID</span>
+                        <input
+                            name="discord_user_id"
+                            class="form-control"
+                            value="{{ user.discord_user_id or '' }}"
+                            placeholder="Numeric Discord user ID"
+                            inputmode="numeric"
+                        >
+                        <button type="submit" class="btn btn-outline-primary">Save</button>
+                    </div>
+                    {% if user.discord_user_id %}
+                        <small class="text-muted">Clear the field and save to remove Discord recovery.</small>
+                    {% else %}
+                        <small class="text-muted">Add a Discord user ID to enable Discord-verified recovery.</small>
+                    {% endif %}
+                </form>
+            </div>
         </div>
     </div>
 

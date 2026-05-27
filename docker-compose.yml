@@ -10,6 +10,7 @@ x-common-env: &common-env
   REDIS_URL: redis://cache:6379/0
   FIRST_CYCLING_BASE_URL: ${FIRST_CYCLING_BASE_URL:-https://firstcycling.com}
   FIRST_CYCLING_API_PATH: ${FIRST_CYCLING_API_PATH}
+  FIRST_CYCLING_FETCH_ONLY_MISSING: True
 
 x-common-depends: &common-depends
   database:
@@ -64,6 +65,7 @@ services:
       # Admin user creation (optional)
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     volumes:
       - ./webapp:/app/webapp
       - ./migrations:/app/migrations

@@ -96,6 +96,34 @@ def initialize_database(log=None):
                 ALTER TABLE firstcycling_teams
                 ADD COLUMN IF NOT EXISTS rider_ids JSONB
             """))
+            conn.execute(text("""
+                ALTER TABLE firstcycling_riders
+                ADD COLUMN IF NOT EXISTS pcs_name VARCHAR(255)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_firstcycling_riders_pcs_name
+                ON firstcycling_riders (pcs_name)
+            """))
+            conn.execute(text("""
+                ALTER TABLE users
+                ALTER COLUMN password_hash DROP NOT NULL
+            """))
+            conn.execute(text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0
+            """))
+            conn.execute(text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMP
+            """))
+            conn.execute(text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS discord_user_id VARCHAR(32)
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_users_discord_user_id
+                ON users (discord_user_id)
+            """))
 
         # Create association tables using raw SQL (to avoid FK resolution issues)
         from webapp.models.main.user import create_association_tables

@@ -19,6 +19,9 @@
     .teams-table .col-division {
         width: 80px;
     }
+    .teams-table .col-riders {
+        width: 72px;
+    }
     .teams-table .team-name-cell a {
         display: inline-block;
         max-width: 100%;
@@ -73,18 +76,20 @@
             <table class="table table-sm table-hover align-middle mb-0 teams-table">
                 <colgroup>
                     <col class="col-uci-rank">
+                    <col class="col-division">
                     <col class="col-team-code">
                     <col class="col-team-name">
-                    <col class="col-division">
                     <col>
+                    <col class="col-riders">
                 </colgroup>
                 <thead>
                     <tr>
                         <th class="sortable-col" data-sort-type="number">UCI Rank</th>
-                        <th class="sortable-col" data-sort-type="text">Code</th>
-                        <th class="sortable-col" data-sort-type="text">Team Name</th>
                         <th class="sortable-col" data-sort-type="text">Division</th>
+                        <th class="sortable-col" data-sort-type="text">Team Code</th>
+                        <th class="sortable-col" data-sort-type="text">Team Name</th>
                         <th class="sortable-col" data-sort-type="text">Nation</th>
+                        <th class="sortable-col" data-sort-type="number">Riders</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -97,6 +102,7 @@
                                 -
                             {% endif %}
                         </td>
+                        <td data-sort-value="{{ team.division or '' }}">{{ team.division or '-' }}</td>
                         <td data-sort-value="{{ team.uci_code or '' }}">{{ team.uci_code or '-' }}</td>
                         <td class="team-name-cell" data-sort-value="{{ team.team_name or ('Team #' ~ team.team_id) }}">
                             <a
@@ -106,8 +112,8 @@
                                 {{ team.team_name or ('Team #' ~ team.team_id) }}
                             </a>
                         </td>
-                        <td data-sort-value="{{ team.division or '' }}">{{ team.division or '-' }}</td>
                         <td data-sort-value="{{ team.nation_name or '' }}">{{ team.nation_name or '-' }}</td>
+                        <td data-sort-value="{{ rider_counts.get(team.team_id, 0) }}">{{ rider_counts.get(team.team_id, 0) }}</td>
                     </tr>
                     {% endfor %}
                 {% block scripts %}

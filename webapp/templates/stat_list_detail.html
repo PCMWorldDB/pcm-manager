@@ -28,7 +28,7 @@ body > .container {
     color: #ffffff !important;
 }
 .stat-value.range-decent {
-    background-color: #0d6efd !important;
+    background-color: var(--brand-primary) !important;
     color: #ffffff !important;
 }
 .stat-value.range-good {
@@ -53,7 +53,7 @@ body > .container {
     color: #ffffff !important;
 }
 .stat-input.range-decent {
-    background-color: #0d6efd !important;
+    background-color: var(--brand-primary) !important;
     color: #ffffff !important;
 }
 .stat-input.range-good {
@@ -156,7 +156,7 @@ body.dark-mode .panel-card .border.bg-light {
             {% endif %}
         </span>
     </h1>
-    <a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', method='by_list', list_id=stat_list.id) }}">Back To Stats Editor</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor') }}">Back To Stats Editor</a>
 </div>
 
 <!-- Main List Editor Section -->
@@ -173,10 +173,66 @@ body.dark-mode .panel-card .border.bg-light {
                 </form>
                 <form method="post" action="{{ url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-success">Approve</button>
+                    <button
+                        type="submit"
+                        class="btn btn-success"
+                        {% if not selected_namespace or not scope_delta_status.unapproved_changes or stat_conflicts %}disabled{% endif %}>
+                        Approve
+                    </button>
                 </form>
             </div>
         </div>
+
+        {% if stat_conflicts %}
+        <div class="alert alert-warning mb-3">
+            <h6 class="mb-2">Stat Conflicts</h6>
+            <div class="table-wrapper">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Rider</th>
+                            <th>Stat</th>
+                            <th>Initial Value</th>
+                            <th>Their Edit</th>
+                            <th>Your Edit</th>
+                            <th>Resolve</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for conflict in stat_conflicts %}
+                        <tr>
+                            <td>{{ conflict.rider_name }}</td>
+                            <td>{{ conflict.stat_name }}</td>
+                            <td>{{ conflict.snapshot_value }}</td>
+                            <td>{{ conflict.current_value }}</td>
+                            <td>{{ conflict.proposed_value }}</td>
+                            <td class="text-nowrap">
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-secondary conflict-resolution-btn"
+                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-stat-name="{{ conflict.stat_code }}"
+                                    data-resolution="their_edit"
+                                    data-resolution-value="{{ conflict.current_value }}">
+                                    Their Edit
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-primary conflict-resolution-btn ms-1"
+                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-stat-name="{{ conflict.stat_code }}"
+                                    data-resolution="your_edit"
+                                    data-resolution-value="{{ conflict.proposed_value }}">
+                                    Your Edit
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
 
         <div class="mb-4 border rounded p-3 bg-light">
             {% if rows %}
@@ -315,6 +371,7 @@ body.dark-mode .panel-card .border.bg-light {
 <script>
 (function () {
     const changedValues = new Map();
+    const conflictResolutions = new Map();
     const form = document.getElementById('stat-delta-form');
     const saveButton = document.getElementById('save-stat-delta-btn');
     const changesInput = document.getElementById('stat-delta-changes-json');
@@ -348,6 +405,7 @@ body.dark-mode .panel-card .border.bg-light {
                 stat_name: statName,
                 original_value: originalValue,
                 final_value: currentValue,
+                is_confilict_override: false,
             });
         }
 
@@ -365,7 +423,31 @@ body.dark-mode .panel-card .border.bg-light {
     }
 
     function refreshFormState() {
-        const changes = Array.from(changedValues.values());
+        const changesByKey = new Map(changedValues);
+        conflictResolutions.forEach(function (resolution, key) {
+            const inputElement = document.querySelector(
+                '.stat-input[data-rider-id="' + resolution.riderId + '"][data-stat-name="' + resolution.statName + '"]'
+            );
+            if (!inputElement) {
+                return;
+            }
+
+            const originalValue = Number(inputElement.getAttribute('data-original-value'));
+            const finalValue = Number(inputElement.value);
+            if (!Number.isFinite(originalValue) || !Number.isFinite(finalValue)) {
+                return;
+            }
+
+            changesByKey.set(key, {
+                first_cycling_rider_id: Number(resolution.riderId),
+                stat_name: resolution.statName,
+                original_value: originalValue,
+                final_value: finalValue,
+                is_confilict_override: resolution.resolution === 'your_edit',
+            });
+        });
+
+        const changes = Array.from(changesByKey.values());
         changesInput.value = JSON.stringify(changes);
         const hasChanges = changes.length > 0;
         saveButton.disabled = !hasChanges;
@@ -387,6 +469,37 @@ body.dark-mode .panel-card .border.bg-light {
         });
 
         updateChangeDisplay(inputElement);
+    });
+
+    document.querySelectorAll('.conflict-resolution-btn[data-rider-id]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const riderId = button.getAttribute('data-rider-id');
+            const statName = button.getAttribute('data-stat-name');
+            const resolution = button.getAttribute('data-resolution');
+            const resolutionValue = Number(button.getAttribute('data-resolution-value'));
+            const key = `${riderId}:${statName}`;
+            const inputElement = document.querySelector(
+                '.stat-input[data-rider-id="' + riderId + '"][data-stat-name="' + statName + '"]'
+            );
+            if (!inputElement || !Number.isFinite(resolutionValue)) {
+                return;
+            }
+
+            inputElement.value = String(resolutionValue);
+            conflictResolutions.set(key, {
+                riderId: riderId,
+                statName: statName,
+                resolution: resolution,
+            });
+            document.querySelectorAll(
+                '.conflict-resolution-btn[data-rider-id="' + riderId + '"][data-stat-name="' + statName + '"]'
+            ).forEach(function (peerButton) {
+                peerButton.classList.remove('active');
+            });
+            button.classList.add('active');
+            updateChangeDisplay(inputElement);
+            refreshFormState();
+        });
     });
 
     refreshFormState();

@@ -88,11 +88,11 @@ body > .container {
 }
 .results-table thead th.sortable-col.sort-asc::after {
     content: ' ↑';
-    color: #0d6efd;
+    color: var(--brand-primary);
 }
 .results-table thead th.sortable-col.sort-desc::after {
     content: ' ↓';
-    color: #0d6efd;
+    color: var(--brand-primary);
 }
 .stat-input-row {
     display: flex;
@@ -126,7 +126,7 @@ body > .container {
 }
 .stat-input:focus {
     outline: none;
-    background-color: #f0f8ff;
+    background-color: var(--brand-primary-soft);
     box-shadow: none;
 }
 .stat-input::-webkit-outer-spin-button,
@@ -141,7 +141,7 @@ body > .container {
     color: #ffffff !important;
 }
 .stat-input.range-decent {
-    background-color: #0d6efd !important;
+    background-color: var(--brand-primary) !important;
     color: #ffffff !important;
 }
 .stat-input.range-good {
@@ -182,7 +182,7 @@ body.dark-mode .results-table thead th.sortable-col::after {
 }
 body.dark-mode .results-table thead th.sortable-col.sort-asc::after,
 body.dark-mode .results-table thead th.sortable-col.sort-desc::after {
-    color: #93c5fd;
+    color: var(--brand-primary-soft);
 }
 body.dark-mode .race-title-link {
     color: #f3f4f6;
@@ -210,7 +210,7 @@ body.dark-mode .stat-input-row {
                 {% if selected_stage %}
             <a
                 class="race-title-link"
-                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}">
+                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}">
                 {{ race.name or 'Race Detail' }}
             </a>
             {% else %}
@@ -246,16 +246,6 @@ body.dark-mode .stat-input-row {
         <div>
             <form method="post" action="{{ url_for('web.stats_editor_get_result', race_id=race.race_id) }}" class="d-inline-block get-result-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                <input type="hidden" name="category" value="{{ back_params.category }}">
-                <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                <input type="hidden" name="nation" value="{{ back_params.nation }}">
-                <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                {% for edit_status_value in back_params.edit_statuses %}
-                <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
-                {% endfor %}
                 {% if selected_stage %}
                 <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                 {% endif %}
@@ -265,9 +255,7 @@ body.dark-mode .stat-input-row {
             <div class="result-status-future mt-2 text-end">Available on race start date</div>
             {% endif %}
         </div>
-        <a
-            href="{{ url_for('web.stats_editor', race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}"
-            class="btn btn-outline-secondary">
+        <a href="{{ url_for('web.stats_editor') }}" class="btn btn-outline-secondary">
             Back To Stats Editor
         </a>
     </div>
@@ -366,7 +354,7 @@ body.dark-mode .stat-input-row {
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>
                             <a
-                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id, race_name=back_params.race_name, category=back_params.category, classification=back_params.classification, nation=back_params.nation, start_date_from=back_params.start_date_from, start_date_to=back_params.start_date_to, is_stage_race=back_params.is_stage_race, edit_status=back_params.edit_statuses) }}#stage-selection"
+                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id) }}#stage-selection"
                                 class="text-decoration-none">
                                 Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
@@ -396,16 +384,6 @@ body.dark-mode .stat-input-row {
                 <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
                 <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_id=race.race_id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                    <input type="hidden" name="category" value="{{ back_params.category }}">
-                    <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                    <input type="hidden" name="nation" value="{{ back_params.nation }}">
-                    <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                    <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                    <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                    {% for edit_status_value in back_params.edit_statuses %}
-                    <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
-                    {% endfor %}
                     {% if selected_stage %}
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                     {% endif %}
@@ -414,28 +392,72 @@ body.dark-mode .stat-input-row {
                 </form>
                 <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="race_name" value="{{ back_params.race_name }}">
-                    <input type="hidden" name="category" value="{{ back_params.category }}">
-                    <input type="hidden" name="classification" value="{{ back_params.classification }}">
-                    <input type="hidden" name="nation" value="{{ back_params.nation }}">
-                    <input type="hidden" name="start_date_from" value="{{ back_params.start_date_from }}">
-                    <input type="hidden" name="start_date_to" value="{{ back_params.start_date_to }}">
-                    <input type="hidden" name="is_stage_race" value="{{ back_params.is_stage_race }}">
-                    {% for edit_status_value in back_params.edit_statuses %}
-                    <input type="hidden" name="edit_status" value="{{ edit_status_value }}">
-                    {% endfor %}
                     {% if selected_stage %}
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                     {% endif %}
                     <button
                         type="submit"
                         class="btn btn-success"
-                        {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>
+                        {% if not selected_namespace
+                            or not scope_delta_status.unapproved_changes
+                            or stat_conflicts
+                            or (result_state.is_stage_race and selected_stage)
+                            or (result_state.is_stage_race and (not result_state.is_completed or not result_state.has_overall_result)) %}disabled{% endif %}>
                         Approve
                     </button>
                 </form>
             </div>
         </div>
+        {% if stat_conflicts %}
+        <div class="alert alert-warning mb-3">
+            <h6 class="mb-2">Stat Conflicts</h6>
+            <div class="table-wrapper">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Rider</th>
+                            <th>Stat</th>
+                            <th>Initial Value</th>
+                            <th>Their Edit</th>
+                            <th>Your Edit</th>
+                            <th>Resolve</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for conflict in stat_conflicts %}
+                        <tr>
+                            <td>{{ conflict.rider_name }}</td>
+                            <td>{{ conflict.stat_name }}</td>
+                            <td>{{ conflict.snapshot_value }}</td>
+                            <td>{{ conflict.current_value }}</td>
+                            <td>{{ conflict.proposed_value }}</td>
+                            <td class="text-nowrap">
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-secondary conflict-resolution-btn"
+                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-stat-name="{{ conflict.stat_code }}"
+                                    data-resolution="their_edit"
+                                    data-resolution-value="{{ conflict.current_value }}">
+                                    Their Edit
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-primary conflict-resolution-btn ms-1"
+                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-stat-name="{{ conflict.stat_code }}"
+                                    data-resolution="your_edit"
+                                    data-resolution-value="{{ conflict.proposed_value }}">
+                                    Your Edit
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
         {% if result_rows %}
         <div class="table-wrapper results-table-wrapper">
             <table class="table table-sm table-striped align-middle mb-0 results-table">
@@ -613,6 +635,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const saveButton = document.getElementById('save-stat-delta-btn');
     const saveHint = document.getElementById('save-stat-delta-hint');
     const changesInput = document.getElementById('stat-delta-changes-json');
+    const conflictResolutions = new Map();
 
     function updateDeltaDisplay(inputElement) {
         const riderId = inputElement.getAttribute('data-rider-id');
@@ -640,7 +663,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function collectStatChanges() {
-        const changes = [];
+        const changesByKey = new Map();
 
         document.querySelectorAll('.stat-input[data-rider-id]').forEach(function (inputElement) {
             const riderId = parseIntValue(inputElement.getAttribute('data-rider-id'));
@@ -648,22 +671,48 @@ document.addEventListener('DOMContentLoaded', function () {
             const savedValue = parseIntValue(inputElement.getAttribute('data-saved-value'));
             const currentValue = parseIntValue(inputElement.value);
             const statName = (inputElement.getAttribute('data-stat-name') || '').trim();
+            const key = String(riderId) + ':' + statName;
 
             if (riderId === null || originalValue === null || savedValue === null || currentValue === null || !statName) {
                 return;
             }
 
             if (savedValue !== currentValue) {
-                changes.push({
+                changesByKey.set(key, {
                     first_cycling_rider_id: riderId,
                     stat_name: statName,
                     original_value: originalValue,
                     final_value: currentValue,
+                    is_confilict_override: false,
                 });
             }
         });
 
-        return changes;
+        conflictResolutions.forEach(function (resolution, key) {
+            const inputElement = document.querySelector(
+                '.stat-input[data-rider-id="' + resolution.riderId + '"][data-stat-name="' + resolution.statName + '"]'
+            );
+            if (!inputElement) {
+                return;
+            }
+
+            const riderId = parseIntValue(resolution.riderId);
+            const originalValue = parseIntValue(inputElement.getAttribute('data-original-value'));
+            const finalValue = parseIntValue(inputElement.value);
+            if (riderId === null || originalValue === null || finalValue === null) {
+                return;
+            }
+
+            changesByKey.set(key, {
+                first_cycling_rider_id: riderId,
+                stat_name: resolution.statName,
+                original_value: originalValue,
+                final_value: finalValue,
+                is_confilict_override: resolution.resolution === 'your_edit',
+            });
+        });
+
+        return Array.from(changesByKey.values());
     }
 
     function refreshSaveState() {
@@ -718,6 +767,38 @@ document.addEventListener('DOMContentLoaded', function () {
             const normalized = clampStatValue(parsedValue);
             inputElement.value = String(normalized);
             applyStatValueColor(inputElement, normalized);
+            updateDeltaDisplay(inputElement);
+            refreshSaveState();
+        });
+    });
+
+    document.querySelectorAll('.conflict-resolution-btn[data-rider-id]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const riderId = button.getAttribute('data-rider-id');
+            const statName = button.getAttribute('data-stat-name');
+            const resolution = button.getAttribute('data-resolution');
+            const resolutionValue = parseIntValue(button.getAttribute('data-resolution-value'));
+            const key = String(riderId) + ':' + statName;
+            const inputElement = document.querySelector(
+                '.stat-input[data-rider-id="' + riderId + '"][data-stat-name="' + statName + '"]'
+            );
+            if (!inputElement || resolutionValue === null) {
+                return;
+            }
+
+            inputElement.value = String(resolutionValue);
+            conflictResolutions.set(key, {
+                riderId: riderId,
+                statName: statName,
+                resolution: resolution,
+            });
+            document.querySelectorAll(
+                '.conflict-resolution-btn[data-rider-id="' + riderId + '"][data-stat-name="' + statName + '"]'
+            ).forEach(function (peerButton) {
+                peerButton.classList.remove('active');
+            });
+            button.classList.add('active');
+            applyStatValueColor(inputElement, resolutionValue);
             updateDeltaDisplay(inputElement);
             refreshSaveState();
         });

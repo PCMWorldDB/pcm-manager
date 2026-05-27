@@ -36,7 +36,7 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             season_year,
             gender,
         )
-        client = FirstCyclingClient(api_path=api_path)
+        client = FirstCyclingClient(api_path=api_path, external_sync_log_id=log_id)
 
         if sync_type == SYNC_TYPE_RACE:
             _update_sync_log(
@@ -95,10 +95,11 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             failed_count = summary['failed']
             status = 'partial' if failed_count else 'success'
             applied = bool(summary.get('applied'))
+            applied_mode = summary.get('applied_mode')
             message = (
                 f"Riders sync complete for {season_year} [{gender}] "
                 f"({synced_count}/{requested_count}, failed={failed_count}; "
-                f"applied={'yes' if applied else 'no'})"
+                f"applied={applied_mode or ('yes' if applied else 'no')})"
             )
         elif sync_type == SYNC_TYPE_RACE_RESULTS:
             if not start_date or not end_date:
