@@ -89,13 +89,13 @@ body > .container {
     transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 .lifecycle-step-btn:hover {
-    border-color: #2563eb;
-    background: #eff6ff;
+    border-color: var(--brand-primary);
+    background: var(--brand-primary-soft);
 }
 .lifecycle-step.active {
-    border-color: #2563eb;
-    background: #eff6ff;
-    color: #1d4ed8;
+    border-color: var(--brand-primary);
+    background: var(--brand-primary-soft);
+    color: var(--brand-primary);
 }
 .lifecycle-step.disabled {
     opacity: 0.7;
@@ -133,12 +133,12 @@ body.dark-mode .lifecycle-step {
 }
 body.dark-mode .lifecycle-step-btn:hover {
     background: #374151;
-    border-color: #60a5fa;
+    border-color: var(--brand-primary-border);
 }
 body.dark-mode .lifecycle-step.active {
-    background: #1e3a8a;
-    border-color: #3b82f6;
-    color: #dbeafe;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary-border);
+    color: #ffffff;
 }
 body.dark-mode .lifecycle-step-description {
     color: #cbd5e1;
@@ -164,7 +164,7 @@ body.dark-mode .lifecycle-arrow {
     <div>
         <h2 class="mb-1">
             {% if selected_release and active_tab != 'catalog' %}
-            {{ (selected_release.release_name or 'Release') ~ ' ' ~ (selected_release.version or '') }}
+            {{ 'Release: ' ~ (selected_release.release_name) ~ ' - ' ~ (selected_release.version or '') }}
             {% else %}
             Releases
             {% endif %}
@@ -293,22 +293,30 @@ body.dark-mode .lifecycle-arrow {
         <form method="post" action="{{ url_for('web.releases', tab='create') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="row g-3">
-                <div class="col-md-3">
-                    <label for="version" class="form-label">Version</label>
-                    <input id="version" name="version" type="text" class="form-control" placeholder="e.g. 1.0.0" required>
-                </div>
-                <div class="col-md-3">
-                    <label for="release_type" class="form-label">Release Type</label>
-                    <select id="release_type" name="release_type" class="form-select">
-                        <option value="major">Major</option>
-                        <option value="minor" selected>Minor</option>
-                        <option value="patch">Patch</option>
-                        <option value="beta">Beta</option>
-                    </select>
-                </div>
-                <div class="col-md-6">
+                <div class="col-md-9">
                     <label for="release_name" class="form-label">Release Name</label>
                     <input id="release_name" name="release_name" type="text" class="form-control" placeholder="Optional display name">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Version</label>
+                    <div class="form-control bg-light">{{ next_release_version }}</div>
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Change Types</label>
+                    <div class="d-flex flex-wrap gap-3 pt-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="create_change_type_stats" name="included_change_types" value="stats_editor" checked>
+                            <label class="form-check-label" for="create_change_type_stats">Stats</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="create_change_type_palmares" name="included_change_types" value="palmares">
+                            <label class="form-check-label" for="create_change_type_palmares">Palmares</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="create_change_type_photos" name="included_change_types" value="photos">
+                            <label class="form-check-label" for="create_change_type_photos">Photos</label>
+                        </div>
+                    </div>
                 </div>
                 <div class="col-12">
                     <label for="release_notes" class="form-label">Release Notes</label>
@@ -408,6 +416,31 @@ body.dark-mode .lifecycle-arrow {
                 <div class="detail-value">{{ selected_release.created_at or '-' }}</div>
             </div>
         </div>
+
+        <div class="summary-card mt-3">
+            <div class="summary-label mb-2">Included Change Types</div>
+            <form method="post" action="{{ url_for('web.releases', tab='overview', release_id=selected_release.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="save_change_types" value="1">
+                <div class="d-flex flex-wrap gap-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="change_type_stats_overview" name="included_change_types" value="stats_editor" {% if selected_release.include_stats_editor_changes %}checked{% endif %}>
+                        <label class="form-check-label" for="change_type_stats_overview">Stats Editor</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="change_type_palmares_overview" name="included_change_types" value="palmares" {% if selected_release.include_palmares_changes %}checked{% endif %}>
+                        <label class="form-check-label" for="change_type_palmares_overview">Palmares</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="change_type_photos_overview" name="included_change_types" value="photos" {% if selected_release.include_photo_changes %}checked{% endif %}>
+                        <label class="form-check-label" for="change_type_photos_overview">Photos</label>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <button type="submit" class="btn btn-sm btn-primary">Save Change Types</button>
+                </div>
+            </form>
+        </div>
         {% else %}
         <p class="text-muted mb-0">Select a release from the Releases page.</p>
         {% endif %}
@@ -433,7 +466,7 @@ body.dark-mode .lifecycle-arrow {
                     {% for file in release_files %}
                     <tr>
                         <td>{{ file.file_type_label or '-' }}</td>
-                        <td>{{ file.display_name or '-' }}</td>
+                        <td>{{ file.file_name or '-' }}</td>
                         <td>{{ file.created_at or '-' }}</td>
                         <td>{{ file.file_size_bytes or 0 }}</td>
                         <td>
@@ -454,55 +487,64 @@ body.dark-mode .lifecycle-arrow {
 {% if active_tab == 'stats' %}
 <div class="panel-card card">
     <div class="card-body">
-        <h5 class="mb-3">Unreleased Stats Changes</h5>
-
-        {% if not stats_approved_items %}
-        <p class="text-muted mb-0">No fully approved items found in Stats Editor for this namespace/season.</p>
+        <h5 class="mb-3">Stats Editor Changes</h5>
+        <div class="summary-grid mb-3">
+            <div class="summary-card">
+                <div class="summary-label">Race Results Included</div>
+                <div class="summary-value">{{ stats_release_summary.race_results_included or 0 }}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Stat Lists Included</div>
+                <div class="summary-value">{{ stats_release_summary.stat_lists_included or 0 }}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Riders with Edits</div>
+                <div class="summary-value">{{ stats_release_summary.riders_with_edits or 0 }}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Total Edits</div>
+                <div class="summary-value">{{ stats_release_summary.total_edits or 0 }}</div>
+            </div>
+        </div>
+        <hr>
+        <h6 class="mb-3">Included Race Results and Stat Lists</h6>
+        {% if stats_included_items %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-striped align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Date</th>
+                        <th>Name</th>
+                        <th>Riders Edited</th>
+                        <th>Total Edits</th>
+                        <th>Category</th>
+                        <th>Classification</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in stats_included_items %}
+                    <tr>
+                        <td>{{ item.type_label or ('List' if item.scope_type == 'list' else 'Race') }}</td>
+                        <td>{{ item.date or '-' }}</td>
+                        <td>
+                            {% if item.detail_url %}
+                            <a href="{{ item.detail_url }}">{{ item.name or '-' }}</a>
+                            {% else %}
+                            {{ item.name or '-' }}
+                            {% endif %}
+                        </td>
+                        <td>{{ item.riders_edited or 0 }}</td>
+                        <td>{{ item.total_edits or 0 }}</td>
+                        <td>{{ item.category or '-' }}</td>
+                        <td>{{ item.classification_label or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
-        <form method="post" action="{{ url_for('web.releases', tab='stats', release_id=selected_release.id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <p class="text-muted">Release: <strong>{{ selected_release.version }}</strong> | Unreleased approved items: {{ stats_approved_items|length }}</p>
-            <div class="table-wrapper">
-                <table class="table table-sm table-striped align-middle mb-0">
-                    <thead>
-                        <tr>
-                            <th style="width: 90px;">Include</th>
-                            <th>Type</th>
-                            <th>Date</th>
-                            <th>Name</th>
-                            <th>Riders Edited</th>
-                            <th>Total Edits</th>
-                            <th>Category</th>
-                            <th>Classification</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for item in stats_approved_items %}
-                        <tr>
-                            <td>
-                                <input
-                                    class="form-check-input"
-                                    type="checkbox"
-                                    name="included_item_keys"
-                                    value="{{ item.item_key }}"
-                                    {% if item.item_key in included_item_keys %}checked{% endif %}>
-                            </td>
-                            <td>{{ item.type_label or ('List' if item.scope_type == 'list' else 'Race') }}</td>
-                            <td>{{ item.date or '-' }}</td>
-                            <td>{{ item.name or '-' }}</td>
-                            <td>{{ item.riders_edited or 0 }}</td>
-                            <td>{{ item.total_edits or 0 }}</td>
-                            <td>{{ item.category or '-' }}</td>
-                            <td>{{ item.classification_label or '-' }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            <div class="mt-3">
-                <button type="submit" class="btn btn-primary">Assign Selected Items</button>
-            </div>
-        </form>
+        <p class="text-muted mb-0">No race results or stat lists are included in this release yet.</p>
         {% endif %}
     </div>
 </div>

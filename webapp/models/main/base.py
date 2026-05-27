@@ -117,11 +117,15 @@ class AuditAction:
     USER_LOGIN = 'user_login'
     USER_LOGOUT = 'user_logout'
     USER_LOGIN_FAILED = 'user_login_failed'
+    USER_LOGIN_LOCKED = 'user_login_locked'
     USER_CREATED = 'user_created'
     USER_ACTIVATED = 'user_activated'
     USER_DEACTIVATED = 'user_deactivated'
+    USER_INVITE_CREATED = 'user_invite_created'
     USER_PASSWORD_CHANGED = 'user_password_changed'
     USER_PASSWORD_RESET = 'user_password_reset'
+    USER_DISCORD_LINKED = 'user_discord_linked'
+    USER_DISCORD_UNLINKED = 'user_discord_unlinked'
     USER_ROLE_ADDED = 'user_role_added'
     USER_ROLE_REMOVED = 'user_role_removed'
     USER_NAMESPACE_ACCESS_GRANTED = 'user_namespace_access_granted'
@@ -157,4 +161,37 @@ class ExternalSyncLog(MainDBModel):
         return (
             f'<ExternalSyncLog provider={self.provider} sync_type={self.sync_type} '
             f'status={self.status} timestamp={self.timestamp}>'
+        )
+
+
+class ExternalSyncAPICallLog(MainDBModel):
+    """Per-request debug log for external provider API calls."""
+
+    __tablename__ = 'external_sync_api_call_log'
+
+    external_sync_log_id = db.Column(
+        db.Integer,
+        db.ForeignKey('external_sync_log.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    provider = db.Column(db.String(50), nullable=False, index=True)
+    endpoint = db.Column(db.String(255), nullable=False, index=True)
+    request_url = db.Column(db.Text, nullable=False)
+    request_params_json = db.Column(db.Text, nullable=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    max_attempts = db.Column(db.Integer, nullable=False, default=1)
+    outcome = db.Column(db.String(40), nullable=False, index=True)
+    http_status = db.Column(db.Integer, nullable=True, index=True)
+    duration_ms = db.Column(db.Integer, nullable=True)
+    response_bytes = db.Column(db.Integer, nullable=True)
+    error_type = db.Column(db.String(120), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+
+    external_sync_log = db.relationship('ExternalSyncLog', foreign_keys=[external_sync_log_id])
+
+    def __repr__(self):
+        return (
+            f'<ExternalSyncAPICallLog provider={self.provider} endpoint={self.endpoint} '
+            f'outcome={self.outcome} http_status={self.http_status}>'
         )

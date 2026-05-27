@@ -10,6 +10,17 @@
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+        :root {
+            --brand-primary: #002352;
+            --brand-primary-hover: #001a3d;
+            --brand-primary-soft: #e6edf5;
+            --brand-primary-border: #99a7ba;
+            --bs-primary: var(--brand-primary);
+            --bs-primary-rgb: 0, 35, 82;
+            --bs-link-color: var(--brand-primary);
+            --bs-link-hover-color: var(--brand-primary-hover);
+        }
+
                 /* Global table color and background styles */
                 /* Sticky table header row for all tables */
                 .data-table thead th, .table thead th {
@@ -82,18 +93,18 @@
                                 }
                                 th.sortable-col.sort-asc::after {
                                     content: ' ↑';
-                                    color: #0d6efd;
+                                    color: var(--brand-primary);
                                 }
                                 th.sortable-col.sort-desc::after {
                                     content: ' ↓';
-                                    color: #0d6efd;
+                                    color: var(--brand-primary);
                                 }
                                 body.dark-mode th.sortable-col::after {
                                     color: #9ca3af;
                                 }
                                 body.dark-mode th.sortable-col.sort-asc::after,
                                 body.dark-mode th.sortable-col.sort-desc::after {
-                                    color: #93c5fd;
+                                    color: var(--brand-primary-soft);
                                 }
                                 /* Section/card border/margin for separation */
                                 .panel-card {
@@ -125,7 +136,7 @@
         }
         
         body.dark-mode .header {
-            background-color: #01123a;
+            background-color: var(--brand-primary);
             background-image: url('{{ url_for('static', filename='images/Background_blue-gradient-02.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}');
             background-position: center;
             background-repeat: no-repeat;
@@ -177,7 +188,7 @@
         body.dark-mode .form-select:focus {
             background: #374151;
             color: #e0e0e0;
-            border-color: #60a5fa;
+            border-color: var(--brand-primary-border);
         }
         
         body.dark-mode .dropdown-menu {
@@ -210,9 +221,85 @@
         }
         
         body.dark-mode .alert-info {
-            background: #1e3a5f;
-            color: #90cdf4;
-            border-color: #2d5a8f;
+            background: var(--brand-primary);
+            color: #ffffff;
+            border-color: var(--brand-primary-border);
+        }
+
+        .btn-primary {
+            --bs-btn-bg: var(--brand-primary);
+            --bs-btn-border-color: var(--brand-primary);
+            --bs-btn-hover-bg: var(--brand-primary-hover);
+            --bs-btn-hover-border-color: var(--brand-primary-hover);
+            --bs-btn-active-bg: var(--brand-primary-hover);
+            --bs-btn-active-border-color: var(--brand-primary-hover);
+            --bs-btn-disabled-bg: var(--brand-primary);
+            --bs-btn-disabled-border-color: var(--brand-primary);
+        }
+
+        .btn-outline-primary {
+            --bs-btn-color: var(--brand-primary);
+            --bs-btn-border-color: var(--brand-primary);
+            --bs-btn-hover-bg: var(--brand-primary);
+            --bs-btn-hover-border-color: var(--brand-primary);
+            --bs-btn-active-bg: var(--brand-primary);
+            --bs-btn-active-border-color: var(--brand-primary);
+            --bs-btn-disabled-color: var(--brand-primary);
+            --bs-btn-disabled-border-color: var(--brand-primary);
+        }
+
+        .bg-primary {
+            background-color: var(--brand-primary) !important;
+        }
+
+        .text-primary {
+            color: var(--brand-primary) !important;
+        }
+
+        .border-primary {
+            border-color: var(--brand-primary) !important;
+        }
+
+        .nav-pills .nav-link.active,
+        .nav-pills .show > .nav-link {
+            background-color: var(--brand-primary);
+        }
+
+        .nav-link {
+            color: var(--brand-primary);
+        }
+
+        .nav-link:hover,
+        .nav-link:focus {
+            color: var(--brand-primary-hover);
+        }
+
+        .form-control:focus,
+        .form-select:focus {
+            border-color: var(--brand-primary-border);
+            box-shadow: 0 0 0 0.25rem rgba(0, 35, 82, 0.18);
+        }
+
+        .page-link {
+            color: var(--brand-primary);
+        }
+
+        .active > .page-link,
+        .page-link.active {
+            background-color: var(--brand-primary);
+            border-color: var(--brand-primary);
+        }
+
+        .table-primary {
+            --bs-table-color: #ffffff;
+            --bs-table-bg: var(--brand-primary);
+            --bs-table-border-color: var(--brand-primary-border);
+            --bs-table-striped-bg: var(--brand-primary);
+            --bs-table-striped-color: #ffffff;
+            --bs-table-active-bg: var(--brand-primary-hover);
+            --bs-table-active-color: #ffffff;
+            --bs-table-hover-bg: var(--brand-primary-hover);
+            --bs-table-hover-color: #ffffff;
         }
 
         /* Content links should read like surrounding text instead of default blue links. */
@@ -246,36 +333,38 @@
             margin: 0 auto;
             padding: 20px;
         }
+        body.has-side-panel {
+            padding-left: 48px;
+        }
         .header {
-            background-color: #01123a;
+            background-color: var(--brand-primary);
             background-image: url('{{ url_for('static', filename='images/Background_blue-gradient-02.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}');
             background-position: center;
             background-repeat: no-repeat;
             background-size: cover;
             color: white;
-            padding: 8px 0;
+            padding: 0;
             margin-bottom: 20px;
+            height: 86px;
+            overflow: hidden;
         }
         .header .container {
             display: flex;
-            justify-content: flex-end;
+            justify-content: center;
             align-items: center;
             position: relative;
             max-width: 100%;
             width: 100%;
+            height: 100%;
             padding-left: 20px;
             padding-right: 20px;
         }
         .hamburger-btn {
-            position: absolute;
-            left: 8px;
-            top: 50%;
-            transform: translateY(-50%);
             width: 42px;
             height: 42px;
             border: none;
             border-radius: 8px;
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(31, 41, 55, 0.06);
             display: inline-flex;
             flex-direction: column;
             justify-content: center;
@@ -289,71 +378,77 @@
             height: 2px;
             width: 100%;
             border-radius: 2px;
-            background: #ffffff;
+            background: #1f2937;
         }
         .hamburger-btn:hover {
+            background: var(--brand-primary-soft);
+        }
+        body.dark-mode .hamburger-btn {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        body.dark-mode .hamburger-btn span {
+            background: #f9fafb;
+        }
+        body.dark-mode .hamburger-btn:hover {
             background: rgba(255, 255, 255, 0.16);
         }
         .header h1 {
             font-size: 24px;
             margin: 0;
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
         }
         .header-title-link {
             color: white;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
+            height: 86px;
+            overflow: hidden;
+        }
+        .header-logo {
+            height: 210px;
+            transform: translateY(4px);
+            vertical-align: middle;
         }
         .header-title-link:hover {
             color: white;
             text-decoration: none;
             opacity: 0.9;
         }
-        .header nav {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-            margin-left: auto;
-            margin-right: 0;
-        }
-        .header nav a {
-            color: white;
-            text-decoration: none;
-        }
-        .header nav a:hover {
-            text-decoration: underline;
-        }
         .settings-dropdown {
             position: relative;
         }
-        .settings-btn {
-            background: none;
-            border: none;
-            color: white;
-            font-size: 24px;
-            cursor: pointer;
-            padding: 5px 10px;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-        .settings-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
+        .settings-btn,
         .user-btn {
-            background: none;
+            width: 100%;
+            min-height: 44px;
+            background: #ffffff;
             border: none;
-            color: white;
-            font-size: 24px;
+            color: #1f2937;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            line-height: inherit;
             cursor: pointer;
-            padding: 5px 10px;
-            border-radius: 4px;
-            transition: background 0.2s;
+            padding: 10px 12px;
+            border-radius: 8px;
+            transition: background 0.2s, border-color 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-align: left;
         }
+        .settings-btn:hover,
         .user-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
+            background: var(--brand-primary-soft);
+        }
+        body.dark-mode .settings-btn,
+        body.dark-mode .user-btn {
+            color: #e5e7eb;
+            background: #374151;
+        }
+        body.dark-mode .settings-btn:hover,
+        body.dark-mode .user-btn:hover {
+            background: #4b5563;
         }
         .dropdown-menu {
             min-width: 200px;
@@ -435,7 +530,7 @@
         }
         
         body.dark-mode .toggle-switch {
-            background: #60a5fa;
+            background: var(--brand-primary);
         }
         
         body.dark-mode .toggle-switch::after {
@@ -485,72 +580,95 @@
             color: #9ca3af;
         }
 
-        .sidebar-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.35);
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s ease;
-            z-index: 1040;
-        }
         .side-panel {
             position: fixed;
             top: 0;
             left: 0;
-            width: min(280px, 78vw);
+            width: 48px;
             height: 100vh;
             background: #f2f4f7;
             border-right: 1px solid #d1d5db;
-            transform: translateX(-100%);
-            transition: transform 0.25s ease;
+            transition: width 0.22s ease, box-shadow 0.22s ease;
             z-index: 1050;
             display: flex;
             flex-direction: column;
+            overflow: visible;
         }
         body.dark-mode .side-panel {
             background: #1f2937;
             border-right-color: #4b5563;
         }
+        .side-panel:hover,
         .side-panel.open {
-            transform: translateX(0);
-        }
-        .sidebar-overlay.open {
-            opacity: 1;
-            pointer-events: auto;
+            width: min(280px, calc(100vw - 24px));
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
         }
         .side-panel-header {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-start;
             align-items: center;
-            padding: 14px 16px;
-            border-bottom: 1px solid #d1d5db;
+            gap: 12px;
+            min-height: 55px;
+            padding: 6px;
         }
-        body.dark-mode .side-panel-header {
-            border-bottom-color: #4b5563;
+        .side-panel .hamburger-btn {
+            width: 36px;
+            height: 36px;
+            flex: 0 0 36px;
+            padding: 0 7px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            align-items: stretch;
+        }
+        .side-panel .hamburger-btn span {
+            background: #1f2937;
+            opacity: 1;
+        }
+        .side-panel .hamburger-btn:hover {
+            background: var(--brand-primary-soft);
+        }
+        body.dark-mode .side-panel .hamburger-btn {
+            background: #374151;
+            border-color: #4b5563;
+        }
+        body.dark-mode .side-panel .hamburger-btn span {
+            background: #f9fafb;
+        }
+        body.dark-mode .side-panel .hamburger-btn:hover {
+            background: #4b5563;
         }
         .side-panel-title {
             font-size: 1rem;
             font-weight: 700;
             margin: 0;
+            opacity: 0;
+            white-space: nowrap;
+            transition: opacity 0.16s ease;
         }
-        .side-panel-close {
-            border: none;
-            background: transparent;
-            font-size: 1.4rem;
-            line-height: 1;
-            color: #6b7280;
-            cursor: pointer;
-        }
-        body.dark-mode .side-panel-close {
-            color: #9ca3af;
+        .side-panel:hover .side-panel-title,
+        .side-panel.open .side-panel-title,
+        .side-panel:hover .side-panel-label,
+        .side-panel.open .side-panel-label,
+        .side-panel:hover .side-panel-section-label,
+        .side-panel.open .side-panel-section-label,
+        .side-panel:hover .namespace-selector,
+        .side-panel.open .namespace-selector,
+        .side-panel:hover .namespace-empty,
+        .side-panel.open .namespace-empty {
+            opacity: 1;
+            pointer-events: auto;
         }
         .side-panel-content {
-            padding: 14px 16px;
+            padding: 6px;
             overflow-y: auto;
+            overflow-x: hidden;
+            flex: 1;
         }
         .side-panel-section {
             margin-bottom: 18px;
+        }
+        .side-panel:not(:hover):not(.open) .side-panel-section {
+            margin-bottom: 8px;
         }
         .side-panel-section-label {
             font-size: 0.78rem;
@@ -559,12 +677,50 @@
             color: #6b7280;
             margin-bottom: 8px;
             font-weight: 700;
+            opacity: 0;
+            white-space: nowrap;
+            transition: opacity 0.16s ease;
+        }
+        .side-panel:not(:hover):not(.open) .side-panel-section-label {
+            display: none;
         }
         body.dark-mode .side-panel-section-label {
             color: #9ca3af;
         }
         .side-panel .namespace-selector .form-select {
             font-size: 0.92rem;
+        }
+        .namespace-selector,
+        .namespace-empty {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.16s ease;
+        }
+        .namespace-collapsed-tile {
+            width: 36px;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+        }
+        .namespace-collapsed-tile img {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+        }
+        body.dark-mode .namespace-collapsed-tile {
+            background: #374151;
+            border-color: #4b5563;
+        }
+        .side-panel:not(:hover):not(.open) .namespace-collapsed-tile {
+            transform: translateY(6px);
+        }
+        .side-panel:hover .namespace-collapsed-tile,
+        .side-panel.open .namespace-collapsed-tile {
+            display: none;
         }
         .panel-menu-list {
             list-style: none;
@@ -582,7 +738,18 @@
             border-radius: 8px;
             padding: 10px 12px;
             text-decoration: none;
+            font-family: inherit;
             font-weight: 600;
+            min-height: 44px;
+            overflow: hidden;
+        }
+        .panel-menu-link > span:first-child,
+        .panel-menu-disabled > span:first-child,
+        .settings-btn > span:first-child,
+        .user-btn > span:first-child {
+            flex: 0 0 auto;
+            font-size: 1.25rem;
+            line-height: 1;
         }
         .panel-menu-link {
             color: #1f2937;
@@ -590,8 +757,8 @@
             border: 1px solid #e5e7eb;
         }
         .panel-menu-link:hover {
-            background: #eef2ff;
-            border-color: #c7d2fe;
+            background: var(--brand-primary-soft);
+            border-color: var(--brand-primary-border);
             color: #1f2937;
         }
         .panel-menu-disabled {
@@ -616,36 +783,128 @@
             background: #2b3443;
             border-color: #4b5563;
         }
+        .side-panel:not(:hover):not(.open) .panel-menu-link,
+        .side-panel:not(:hover):not(.open) .panel-menu-disabled,
+        .side-panel:not(:hover):not(.open) .settings-btn,
+        .side-panel:not(:hover):not(.open) .user-btn {
+            width: 36px;
+            justify-content: center;
+            gap: 0;
+            padding-left: 0;
+            padding-right: 0;
+        }
+        .side-panel:not(:hover):not(.open) .side-panel-label {
+            display: none;
+        }
+        .side-panel-label {
+            font-family: inherit;
+            opacity: 0;
+            white-space: nowrap;
+            transition: opacity 0.16s ease;
+        }
         .panel-lock {
             margin-left: auto;
             font-size: 0.8rem;
         }
+        .side-panel:not(:hover):not(.open) .panel-lock {
+            display: none;
+        }
+        .side-panel-footer {
+            padding: 6px;
+            border-top: 1px solid #d1d5db;
+        }
+        body.dark-mode .side-panel-footer {
+            border-top-color: #4b5563;
+        }
+        .side-panel-utility-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
         {% block styles %}{% endblock %}
     </style>
 </head>
-<body>
+<body class="{% if current_user.is_authenticated %}has-side-panel{% endif %}">
     {% if current_user.is_authenticated %}
     <div class="header">
         <div class="container">
-            <button class="hamburger-btn" type="button" id="menuToggleBtn" aria-label="Open menu" aria-controls="sidePanel" aria-expanded="false">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
             <h1>
                 <a class="header-title-link" href="{{ url_for('web.dashboard') }}">
                     <img src="{{ url_for('static', filename='images/wdbo_title.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" 
                          alt="WorldDB Online" 
-                        style="height: 180px; vertical-align: middle;">
+                         class="header-logo">
                 </a>
             </h1>
-            <nav>
-                <!-- Settings Dropdown -->
-                <div class="dropdown settings-dropdown">
-                    <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                        ⚙️
+        </div>
+    </div>
+
+    <aside class="side-panel" id="sidePanel" aria-label="Primary navigation">
+        <div class="side-panel-header">
+            <button class="hamburger-btn" type="button" id="menuToggleBtn" aria-label="Toggle menu" aria-controls="sidePanel" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <h2 class="side-panel-title">Navigation</h2>
+        </div>
+        <div class="side-panel-content">
+            <div class="side-panel-section">
+                <div class="side-panel-section-label">Database</div>
+                <div class="namespace-collapsed-tile" title="{{ selected_namespace.name if selected_namespace else 'Namespace' }}">
+                    <img src="{{ url_for('static', filename='images/wdbo_favicon.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" alt="">
+                </div>
+                {% if available_namespaces %}
+                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+                    <select name="namespace_id" class="form-select" onchange="this.form.submit()">
+                        {% for namespace in available_namespaces %}
+                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
+                            {{ namespace.name }} - {{ namespace.database_year or '-' }} - {{ namespace.gender or 'Men' }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% else %}
+                <div class="panel-menu-disabled namespace-empty">
+                    <span>🗄️</span>
+                    <span class="side-panel-label">No namespace available</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="side-panel-section">
+                <ul class="panel-menu-list">
+                    {% for panel in panel_menu_items %}
+                    <li>
+                        {% if panel.is_clickable %}
+                        <a class="panel-menu-link" href="{{ panel.url }}" title="{{ panel.display_name }}">
+                            <span>{{ panel.icon }}</span>
+                            <span class="side-panel-label">{{ panel.display_name }}</span>
+                        </a>
+                        {% else %}
+                        <span class="panel-menu-disabled" aria-disabled="true" title="{{ panel.display_name }}">
+                            <span>{{ panel.icon }}</span>
+                            <span class="side-panel-label">{{ panel.display_name }}</span>
+                            <span class="panel-lock">🔒</span>
+                        </span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        <div class="side-panel-footer">
+            <ul class="side-panel-utility-list">
+                <li class="dropend settings-dropdown">
+                    <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Settings">
+                        <span>⚙️</span>
+                        <span class="side-panel-label">Settings</span>
                     </button>
-                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="settingsDropdown">
+                    <ul class="dropdown-menu" aria-labelledby="settingsDropdown">
                         {% if current_user.is_superadmin or current_user.has_role('admin') %}
                         <li>
                             <a class="dropdown-item" href="{{ url_for('web.admin_users') }}" style="color: inherit !important;">
@@ -664,14 +923,18 @@
                         </li>
                         {% endif %}
                     </ul>
-                </div>
-
-                <div class="dropdown settings-dropdown">
-                    <button class="user-btn" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                        👤
+                </li>
+                <li class="dropend settings-dropdown">
+                    <button class="user-btn" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="User">
+                        <span>👤</span>
+                        <span class="side-panel-label">Account</span>
                     </button>
-                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
-                        <li><span class="dropdown-item username">{{ current_user.username }}</span></li>
+                    <ul class="dropdown-menu" aria-labelledby="userDropdown">
+                        <li>
+                            <a class="dropdown-item username" href="{{ url_for('web.account') }}" style="color: inherit !important;">
+                                {{ current_user.username }}
+                            </a>
+                        </li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
                             <div class="dark-mode-toggle" id="darkModeToggle">
@@ -691,58 +954,8 @@
                             </a>
                         </li>
                     </ul>
-                </div>
-            </nav>
-        </div>
-    </div>
-
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
-    <aside class="side-panel" id="sidePanel" aria-hidden="true">
-        <div class="side-panel-header">
-            <h2 class="side-panel-title">Navigation</h2>
-            <button type="button" class="side-panel-close" id="menuCloseBtn" aria-label="Close menu">&times;</button>
-        </div>
-        <div class="side-panel-content">
-            <div class="side-panel-section">
-                <div class="side-panel-section-label">Database</div>
-                {% if available_namespaces %}
-                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
-                    <select name="namespace_id" class="form-select" onchange="this.form.submit()">
-                        {% for namespace in available_namespaces %}
-                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
-                            {{ namespace.name }} - {{ namespace.database_year or '-' }} - {{ namespace.gender or 'Men' }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </form>
-                {% else %}
-                <div class="panel-menu-disabled">No namespace available</div>
-                {% endif %}
-            </div>
-
-            <div class="side-panel-section">
-                <div class="side-panel-section-label">Panels</div>
-                <ul class="panel-menu-list">
-                    {% for panel in panel_menu_items %}
-                    <li>
-                        {% if panel.is_clickable %}
-                        <a class="panel-menu-link" href="{{ panel.url }}">
-                            <span>{{ panel.icon }}</span>
-                            <span>{{ panel.display_name }}</span>
-                        </a>
-                        {% else %}
-                        <span class="panel-menu-disabled" aria-disabled="true">
-                            <span>{{ panel.icon }}</span>
-                            <span>{{ panel.display_name }}</span>
-                            <span class="panel-lock">🔒</span>
-                        </span>
-                        {% endif %}
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
+                </li>
+            </ul>
         </div>
     </aside>
     {% endif %}
@@ -796,42 +1009,24 @@
             }
 
             const menuToggleBtn = document.getElementById('menuToggleBtn');
-            const menuCloseBtn = document.getElementById('menuCloseBtn');
             const sidePanel = document.getElementById('sidePanel');
-            const sidebarOverlay = document.getElementById('sidebarOverlay');
 
-            function openMenu() {
-                if (!sidePanel || !sidebarOverlay || !menuToggleBtn) {
+            function setMenuOpen(isOpen) {
+                if (!sidePanel || !menuToggleBtn) {
                     return;
                 }
-                sidePanel.classList.add('open');
-                sidebarOverlay.classList.add('open');
-                sidePanel.setAttribute('aria-hidden', 'false');
-                menuToggleBtn.setAttribute('aria-expanded', 'true');
-            }
-
-            function closeMenu() {
-                if (!sidePanel || !sidebarOverlay || !menuToggleBtn) {
-                    return;
-                }
-                sidePanel.classList.remove('open');
-                sidebarOverlay.classList.remove('open');
-                sidePanel.setAttribute('aria-hidden', 'true');
-                menuToggleBtn.setAttribute('aria-expanded', 'false');
+                sidePanel.classList.toggle('open', isOpen);
+                menuToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
             }
 
             if (menuToggleBtn) {
-                menuToggleBtn.addEventListener('click', openMenu);
-            }
-            if (menuCloseBtn) {
-                menuCloseBtn.addEventListener('click', closeMenu);
-            }
-            if (sidebarOverlay) {
-                sidebarOverlay.addEventListener('click', closeMenu);
+                menuToggleBtn.addEventListener('click', function() {
+                    setMenuOpen(!sidePanel.classList.contains('open'));
+                });
             }
             document.addEventListener('keydown', function(event) {
                 if (event.key === 'Escape') {
-                    closeMenu();
+                    setMenuOpen(false);
                 }
             });
         });

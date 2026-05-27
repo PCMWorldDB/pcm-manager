@@ -3,6 +3,7 @@ from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
 from wtforms import StringField, PasswordField, BooleanField, SubmitField, TextAreaField, SelectField, IntegerField
 from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError
+from webapp.security import PasswordPolicy
 
 
 class LoginForm(FlaskForm):
@@ -25,18 +26,7 @@ class UserCreateForm(FlaskForm):
         Length(min=3, max=80, message='Username must be between 3 and 80 characters'),
         Regexp(r'^[a-zA-Z0-9_-]+$', message='Username can only contain letters, numbers, hyphens, and underscores')
     ])
-    temporary_password = PasswordField('Temporary Password', validators=[
-        DataRequired(message='Temporary password is required'),
-        Length(min=8, message='Password must be at least 8 characters')
-    ])
-    confirm_password = PasswordField('Confirm Password', validators=[
-        DataRequired(message='Please confirm the password')
-    ])
-    submit = SubmitField('Create User')
-    
-    def validate_confirm_password(self, field):
-        if field.data != self.temporary_password.data:
-            raise ValidationError('Passwords must match')
+    submit = SubmitField('Create Invite')
 
 
 class PasswordChangeForm(FlaskForm):
@@ -46,7 +36,7 @@ class PasswordChangeForm(FlaskForm):
     ])
     new_password = PasswordField('New Password', validators=[
         DataRequired(message='New password is required'),
-        Length(min=8, message='Password must be at least 8 characters')
+        PasswordPolicy()
     ])
     confirm_password = PasswordField('Confirm New Password', validators=[
         DataRequired(message='Please confirm the new password')
@@ -58,20 +48,25 @@ class PasswordChangeForm(FlaskForm):
             raise ValidationError('Passwords must match')
 
 
-class PasswordResetForm(FlaskForm):
-    """Admin password reset form"""
-    new_password = PasswordField('New Temporary Password', validators=[
+class PasswordSetupForm(FlaskForm):
+    """Password form used by one-time invite and reset links."""
+    new_password = PasswordField('New Password', validators=[
         DataRequired(message='New password is required'),
-        Length(min=8, message='Password must be at least 8 characters')
+        PasswordPolicy()
     ])
     confirm_password = PasswordField('Confirm Password', validators=[
         DataRequired(message='Please confirm the password')
     ])
-    submit = SubmitField('Reset Password')
+    submit = SubmitField('Set Password')
     
     def validate_confirm_password(self, field):
         if field.data != self.new_password.data:
             raise ValidationError('Passwords must match')
+
+
+class AdminPasswordResetForm(FlaskForm):
+    """Admin action form that issues a one-time reset link."""
+    submit = SubmitField('Create Reset Link')
 
 
 class NamespaceForm(FlaskForm):

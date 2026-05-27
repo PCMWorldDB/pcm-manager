@@ -74,6 +74,7 @@ class StatChange(NamespaceBase):
     original_value = Column(Integer, nullable=False)
     final_value = Column(Integer, nullable=False)
     delta_value = Column(Integer, nullable=False)
+    is_confilict_override = Column(Boolean, nullable=False, default=False)
     is_approved = Column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
@@ -109,6 +110,64 @@ class StatChange(NamespaceBase):
         )
 
 
+class StatChangeSnapshot(NamespaceBase):
+    """CDB rider stat snapshot captured before stat changes are approved."""
+
+    __tablename__ = 'stat_change_snapshot'
+
+    id = Column(Integer, primary_key=True)
+    first_cycling_race_id = Column(Integer, nullable=True, index=True)
+    first_cycling_stage_id = Column(Integer, nullable=True, index=True)
+    stat_list_id = Column(Integer, nullable=True, index=True)
+    cyclist_pcm_id = Column(Integer, nullable=False, index=True)
+    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+    stat_mo = Column(Integer, nullable=False)
+    stat_mm = Column(Integer, nullable=False)
+    stat_dh = Column(Integer, nullable=False)
+    stat_hil = Column(Integer, nullable=False)
+    stat_tt = Column(Integer, nullable=False)
+    stat_prl = Column(Integer, nullable=False)
+    stat_fla = Column(Integer, nullable=False)
+    stat_spr = Column(Integer, nullable=False)
+    stat_acc = Column(Integer, nullable=False)
+    stat_end = Column(Integer, nullable=False)
+    stat_res = Column(Integer, nullable=False)
+    stat_rec = Column(Integer, nullable=False)
+    stat_cob = Column(Integer, nullable=False)
+    stat_att = Column(Integer, nullable=False)
+    discord_thread_id = Column(String(64), nullable=True)
+    discord_thread_url = Column(String(500), nullable=True)
+    discord_notified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'first_cycling_race_id',
+            'first_cycling_stage_id',
+            'stat_list_id',
+            'cyclist_pcm_id',
+            'first_cycling_rider_id',
+            name='uq_stat_change_snapshot_scope_rider',
+        ),
+        Index(
+            'idx_stat_change_snapshot_race_stage_rider',
+            'first_cycling_race_id',
+            'first_cycling_stage_id',
+            'first_cycling_rider_id',
+        ),
+        Index('idx_stat_change_snapshot_list_rider', 'stat_list_id', 'first_cycling_rider_id'),
+    )
+
+    def __repr__(self):
+        return (
+            '<StatChangeSnapshot '
+            f'race={self.first_cycling_race_id} '
+            f'stage={self.first_cycling_stage_id} '
+            f'list={self.stat_list_id} '
+            f'rider={self.first_cycling_rider_id}>'
+        )
+
+
 class Release(NamespaceBase):
     """Namespace-scoped release record."""
 
@@ -117,24 +176,27 @@ class Release(NamespaceBase):
     id = Column(Integer, primary_key=True)
     version = Column(String(50), nullable=False, index=True)
     release_name = Column(String(200))
-    release_type = Column(String(20), nullable=False, default='minor')
-    sqlite_file_path = Column(String(500), nullable=False, default='')
-    file_size_bytes = Column(BigInteger)
-    md5_checksum = Column(String(32))
-    sha256_checksum = Column(String(64))
+    release_type = Column(String(50), nullable=False, default='stats')
     status = Column(String(20), nullable=False, default='draft')
     release_notes = Column(Text)
+    include_stats_editor_changes = Column(Boolean, nullable=False, default=False)
+    include_palmares_changes = Column(Boolean, nullable=False, default=False)
+    include_photo_changes = Column(Boolean, nullable=False, default=False)
     created_by_id = Column(Integer)
     published_by_id = Column(Integer)
     published_at = Column(DateTime)
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
 
+    __table_args__ = (
+        UniqueConstraint('version', name='uq_releases_version'),
+    )
 
-class ReleaseVersion(NamespaceBase):
-    """Namespace-scoped release artifact records."""
 
-    __tablename__ = 'release_versions'
+class ReleaseFile(NamespaceBase):
+    """Namespace-scoped release file records."""
+
+    __tablename__ = 'release_files'
 
     id = Column(Integer, primary_key=True)
     release_id = Column(Integer, nullable=False, index=True)
@@ -148,7 +210,7 @@ class ReleaseVersion(NamespaceBase):
     created_at = Column(DateTime)
 
     __table_args__ = (
-        UniqueConstraint('release_id', 'file_type', name='uq_release_versions_release_file_type'),
+        UniqueConstraint('release_id', 'file_type', name='uq_release_files_release_file_type'),
     )
 
 
@@ -183,8 +245,9 @@ class StatListItem(NamespaceBase):
 NAMESPACE_TABLES = [
     CDBCyclist,
     Release,
-    ReleaseVersion,
+    ReleaseFile,
     StatChange,
+    StatChangeSnapshot,
     StatList,
     StatListItem,
 ]

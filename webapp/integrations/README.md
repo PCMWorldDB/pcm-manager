@@ -43,7 +43,7 @@ Use sync methods to fetch and persist in one step:
 - `sync_race(race_id, season_year=2025)`
 - `sync_race_calendar(season_year=2025, gender='Men')`
 - `sync_teams(season_year=2025, gender='Men')`
-- `sync_riders(season_year=2025, gender='Men')` (loads rider IDs from `firstcycling_teams.rider_ids` and fetches rider details)
+- `sync_riders(season_year=2025, gender='Men')` (loads rider IDs from `riderOverview` and fetches rider details)
 - `sync_race_results_window(season_year=2025, gender='Men', start_date='2025-03-01', end_date='2025-03-31')`
 - `sync_latest_results(only_today=False)`
 

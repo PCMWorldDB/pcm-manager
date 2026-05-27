@@ -35,7 +35,6 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     
     # Relationships
     created_by = db.relationship('User', foreign_keys=[created_by_id])
-    releases = db.relationship('Release', back_populates='namespace', cascade='all, delete-orphan')
     
     @classmethod
     def get_namespaces_with_authorized_users_view(cls):

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Invite Created - {{ user.username }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">Invite Created for {{ user.username }}</h4>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-success">
+                Share this one-time invite link with the user. They will choose their password when they open it.
+            </div>
+            <label for="invite-url" class="form-label">Invite link</label>
+            <input id="invite-url" class="form-control mb-3" value="{{ invite_url }}" readonly>
+            <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="btn btn-primary">Manage User</a>
+            <a href="{{ url_for('web.admin_users') }}" class="btn btn-secondary">All Users</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

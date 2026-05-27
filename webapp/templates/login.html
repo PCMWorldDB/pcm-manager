@@ -34,12 +34,12 @@
 }
 .form-group input:focus {
     outline: none;
-    border-color: #3498db;
+    border-color: var(--brand-primary);
 }
 .btn {
     width: 100%;
     padding: 12px;
-    background: #3498db;
+    background: var(--brand-primary);
     color: white;
     border: none;
     border-radius: 4px;
@@ -48,7 +48,7 @@
     font-weight: 500;
 }
 .btn:hover {
-    background: #2980b9;
+    background: var(--brand-primary-hover);
 }
 .checkbox-group {
     margin-bottom: 20px;
@@ -84,7 +84,7 @@
     color: #334155;
 }
 .password-toggle-button:focus-visible {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--brand-primary);
     outline-offset: 2px;
     border-radius: 4px;
 }
@@ -151,6 +151,9 @@ body.dark-mode .password-toggle-button:hover {
         
         <button type="submit" class="btn">Login</button>
     </form>
+    <p style="margin: 16px 0 0; text-align: center;">
+        <a href="{{ url_for('web.forgot_password') }}">Recover password</a>
+    </p>
 </div>
 {% endblock %}
 

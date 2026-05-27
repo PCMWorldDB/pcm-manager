@@ -7,11 +7,12 @@ from webapp.models.main.base import (
     AuditLog,
     AuditAction,
     ExternalSyncLog,
+    ExternalSyncAPICallLog,
 )
 from webapp.models.main.role import Role, Resource, Action, RolePermission
 from webapp.models.main.namespace import Namespace
-from webapp.models.main.user import User
-from webapp.models.main.release import Release
+from webapp.models.main.user import User, UserSecurityToken
+from webapp.models.main.discord_settings import DiscordSettings, DiscordWorkflowThread, DISCORD_WORKFLOW_CHOICES
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
     FirstCyclingRaceStage,
@@ -19,6 +20,7 @@ from webapp.models.main.firstcycling import (
     FirstCyclingTeam,
     FirstCyclingRider,
 )
+from webapp.models.main.pcs import PcsRaceResult
 
 
 # Association tables and relationship configuration are handled in CLI after db.create_all()
@@ -30,13 +32,17 @@ __all__ = [
     'TimestampMixin',
     'SoftDeleteMixin',
     'ExternalSyncLog',
+    'ExternalSyncAPICallLog',
     'Role',
     'Resource',
     'Action',
     'RolePermission',
     'Namespace',
     'User',
-    'Release',
+    'UserSecurityToken',
+    'DiscordSettings',
+    'DiscordWorkflowThread',
+    'DISCORD_WORKFLOW_CHOICES',
     'AuditLog',
     'AuditAction',
     'FirstCyclingRace',
@@ -44,4 +50,5 @@ __all__ = [
     'FirstCyclingRaceResult',
     'FirstCyclingTeam',
     'FirstCyclingRider',
+    'PcsRaceResult',
 ]
