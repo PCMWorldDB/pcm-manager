@@ -528,13 +528,22 @@ def _load_dashboard_namespace_stats(namespace):
             gender=selected_gender,
         ).all()
         stats['team_count'] = len(main_teams)
-        main_rider_ids = set()
-        for team in main_teams:
-            for rider_id in team.rider_ids or []:
-                parsed_rider_id = _safe_int(rider_id)
-                if parsed_rider_id is not None:
-                    main_rider_ids.add(parsed_rider_id)
-        stats['rider_count'] = len(main_rider_ids)
+
+        rider_query = FirstCyclingRider.query
+        normalized_gender = _normalize_gender_token(selected_gender)
+        if normalized_gender:
+            gender_tokens = {normalized_gender, selected_gender}
+            rider_query = rider_query.filter(or_(
+                FirstCyclingRider.gender.is_(None),
+                func.lower(FirstCyclingRider.gender).in_({
+                    str(token).strip().lower()
+                    for token in gender_tokens
+                    if str(token).strip()
+                }),
+            ))
+        stats['rider_count'] = rider_query.with_entities(
+            func.count(func.distinct(FirstCyclingRider.rider_id))
+        ).scalar() or 0
 
     connection_string = namespace.build_connection_string()
     engine = create_engine(connection_string)
