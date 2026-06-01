@@ -70,6 +70,21 @@ docker compose exec webapp webapp create-admin
 
 See `.env.example` for all environment variables.
 
+### Discord Bot
+
+Install the Discord bot to a guild with the required workflow notification permissions:
+
+https://discord.com/oauth2/authorize?client_id=1505027515385647175&permissions=309237680192&integration_type=0&scope=bot
+
+Set `DISCORD_BOT_TOKEN` in the application environment before testing or sending Discord notifications.
+
+After the bot is installed, go to **Admin > Integrations > Discord** for the target namespace and configure:
+
+- `Channel ID`: Discord channel where workflow threads/messages should be created
+- `Approver Role ID`: Discord role to mention for approval notifications
+
+Use the **Test** action in the Discord integration settings to confirm the bot can create a thread and post in the configured channel.
+
 ## License
 
 MIT License
