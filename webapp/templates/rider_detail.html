@@ -100,7 +100,7 @@ body.dark-mode .meta-label {
         <p class="text-muted mb-0">Rider profile and attributes.</p>
     </div>
     <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams', division=back_params.division) }}">Back to Teams</a>
+        <a class="btn btn-outline-secondary" href="{{ back_url }}">{{ back_label }}</a>
     </div>
 </div>
 
@@ -113,7 +113,7 @@ body.dark-mode .meta-label {
                 <div class="meta-value">
                     {% if rider.team_id %}
                         {% if team %}
-                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id, division=back_params.division) }}">
+                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}">
                                 {{ team.team_name or rider.team_name or ('Team #' ~ rider.team_id) }}
                             </a>
                         {% else %}
@@ -126,11 +126,19 @@ body.dark-mode .meta-label {
             </div>
             <div>
                 <div class="meta-label">Nation</div>
-                <div class="meta-value">{{ rider.nation_name or '-' }}</div>
+                <div class="meta-value">
+                    {% if rider.nation_name %}
+                        {{ rider.nation_name }}
+                    {% elif rider.region_id %}
+                        Region #{{ rider.region_id }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
             </div>
             <div>
                 <div class="meta-label">Birth Date</div>
-                <div class="meta-value">{{ rider.birth_date.strftime('%Y-%m-%d') if rider.birth_date else '-' }}</div>
+                <div class="meta-value">{{ rider.birth_date_display or '-' }}</div>
             </div>
             <div>
                 <div class="meta-label">Height</div>
@@ -153,12 +161,12 @@ body.dark-mode .meta-label {
                 </div>
             </div>
             <div class="meta-item--full">
-                <div class="meta-label">FC Rider ID</div>
-                <div class="meta-value">{{ rider.rider_id }}</div>
+                <div class="meta-label">CDB Cyclist ID</div>
+                <div class="meta-value">{{ rider.cyclist_id }}</div>
             </div>
             <div class="meta-item--full">
-                <div class="meta-label">Last Synced</div>
-                <div class="meta-value">{{ rider.last_synced_at.strftime('%Y-%m-%d %H:%M:%S') if rider.last_synced_at else '-' }}</div>
+                <div class="meta-label">FirstCycling Rider ID</div>
+                <div class="meta-value">{{ rider.first_cycling_id or '-' }}</div>
             </div>
         </div>
     </div>
@@ -172,14 +180,14 @@ body.dark-mode .meta-label {
             <table class="table table-sm table-striped align-middle mb-0">
                 <thead>
                     <tr>
-                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                        {% for stat_key in stat_fields %}
                         <th class="stat-col">{{ stat_key|upper }}</th>
                         {% endfor %}
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                        {% for stat_key in stat_fields %}
                         {% set stat_value = rider_stats.get(stat_key) %}
                         <td class="stat-value stat-col{% if stat_value is not none %}{% if stat_value <= 65 %} range-low{% elif stat_value <= 69 %} range-decent{% elif stat_value <= 73 %} range-good{% elif stat_value <= 77 %} range-very-good{% elif stat_value <= 81 %} range-excellent{% else %} range-elite{% endif %}{% endif %}" data-stat-value="{{ stat_value if stat_value is not none else '' }}">
                             {{ stat_value if stat_value is not none else '-' }}
@@ -193,6 +201,66 @@ body.dark-mode .meta-label {
         <p class="text-muted mb-0">No rider stats found for this rider in the selected namespace.</p>
         {% else %}
         <p class="text-muted mb-0">Select a namespace to view rider stats.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Stat Edits</h5>
+        {% if rider_stat_edits %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Type</th>
+                        <th class="stat-col">Stat</th>
+                        <th class="stat-col">Original</th>
+                        <th class="stat-col">Final</th>
+                        <th class="stat-col">Delta</th>
+                        <th>Approval</th>
+                        <th>Release</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for edit in rider_stat_edits %}
+                    <tr>
+                        <td>
+                            {% if edit.source.url %}
+                            <a href="{{ edit.source.url }}" class="text-reset text-decoration-none">
+                                {{ edit.source.label }}
+                            </a>
+                            {% else %}
+                            {{ edit.source.label }}
+                            {% endif %}
+                        </td>
+                        <td>{{ edit.source.type }}</td>
+                        <td class="stat-col">{{ edit.stat }}</td>
+                        <td class="stat-col">{{ edit.original_value }}</td>
+                        <td class="stat-col">{{ edit.final_value }}</td>
+                        <td class="stat-col">
+                            {% if edit.delta_value is not none and edit.delta_value > 0 %}+{% endif %}{{ edit.delta_value }}
+                        </td>
+                        <td>
+                            <span class="badge {% if edit.is_approved %}bg-success{% else %}bg-warning text-dark{% endif %}">
+                                {{ edit.approval_status }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge {% if edit.is_released %}bg-primary{% else %}bg-secondary{% endif %}">
+                                {{ edit.release_status }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% elif selected_namespace %}
+        <p class="text-muted mb-0">No stat edits found for this rider.</p>
+        {% else %}
+        <p class="text-muted mb-0">Select a namespace to view stat edits.</p>
         {% endif %}
     </div>
 </div>

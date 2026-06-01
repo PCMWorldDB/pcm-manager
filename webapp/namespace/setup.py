@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, text
 from sqlalchemy_utils import database_exists, create_database
 from webapp.models.ns.schema import (
-    NamespaceBase, NAMESPACE_TABLES, CDBCyclist,
+    NamespaceBase, NAMESPACE_TABLES, CDBCyclist, CDBTeam, CDBCountry, CDBDivision, CDBRegion,
     get_field_mapping, get_cdb_table_name
 )
 from datetime import datetime
@@ -183,6 +183,49 @@ class CDBImporter:
             self.pg_session.close()
         if self.pg_engine:
             self.pg_engine.dispose()
+
+    def import_mapped_table(self, table_type, model_class, batch_size=1000, boolean_fields=None):
+        """Import a mapped CDB table from SQLite to PostgreSQL."""
+        boolean_fields = set(boolean_fields or [])
+        mapping = get_field_mapping(self.pcm_version, table_type)
+        cdb_table_name = mapping['cdb_table_name']
+        field_map = mapping['fields']
+
+        cdb_fields = list(field_map.values())
+        query = f"SELECT {', '.join(cdb_fields)} FROM {cdb_table_name}"
+
+        logger.info(f"Importing from {cdb_table_name} using {self.pcm_version} mapping")
+
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute(query)
+
+        total_imported = 0
+        batch = []
+
+        for row in cursor:
+            row_data = {}
+            for internal_field, cdb_field in field_map.items():
+                value = row[cdb_field]
+                if internal_field in boolean_fields and value is not None:
+                    value = bool(value)
+                row_data[internal_field] = value
+
+            batch.append(model_class(**row_data))
+
+            if len(batch) >= batch_size:
+                self.pg_session.bulk_save_objects(batch)
+                self.pg_session.commit()
+                total_imported += len(batch)
+                logger.info(f"Imported {total_imported} {table_type} rows...")
+                batch = []
+
+        if batch:
+            self.pg_session.bulk_save_objects(batch)
+            self.pg_session.commit()
+            total_imported += len(batch)
+
+        logger.info(f"Total {table_type} rows imported: {total_imported}")
+        return total_imported
     
     def import_cyclists(self, batch_size=1000):
         """Import cyclist table from SQLite to PostgreSQL
@@ -195,53 +238,28 @@ class CDBImporter:
         Returns:
             Number of cyclists imported
         """
-        # Get field mapping for this PCM version
-        mapping = get_field_mapping(self.pcm_version, 'cyclist')
-        cdb_table_name = mapping['cdb_table_name']
-        field_map = mapping['fields']
-        
-        # Build SELECT query with CDB field names
-        cdb_fields = list(field_map.values())
-        query = f"SELECT {', '.join(cdb_fields)} FROM {cdb_table_name}"
-        
-        logger.info(f"Importing from {cdb_table_name} using {self.pcm_version} mapping")
-        
-        cursor = self.sqlite_conn.cursor()
-        cursor.execute(query)
-        
-        total_imported = 0
-        batch = []
-        
-        for row in cursor:
-            # Map CDB fields to internal model fields
-            cyclist_data = {}
-            for internal_field, cdb_field in field_map.items():
-                value = row[cdb_field]
-                # Special handling for boolean fields
-                if internal_field == 'is_locked' and value is not None:
-                    value = bool(value)
-                cyclist_data[internal_field] = value
-            
-            # Create cyclist object with internal field names
-            cyclist = CDBCyclist(**cyclist_data)
-            batch.append(cyclist)
-            
-            # Insert batch when it reaches batch_size
-            if len(batch) >= batch_size:
-                self.pg_session.bulk_save_objects(batch)
-                self.pg_session.commit()
-                total_imported += len(batch)
-                logger.info(f"Imported {total_imported} cyclists...")
-                batch = []
-        
-        # Insert remaining records
-        if batch:
-            self.pg_session.bulk_save_objects(batch)
-            self.pg_session.commit()
-            total_imported += len(batch)
-        
-        logger.info(f"Total cyclists imported: {total_imported}")
-        return total_imported
+        return self.import_mapped_table('cyclist', CDBCyclist, batch_size=batch_size)
+
+    def import_teams(self, batch_size=1000):
+        """Import team table from SQLite to PostgreSQL."""
+        return self.import_mapped_table('team', CDBTeam, batch_size=batch_size)
+
+    def import_countries(self, batch_size=1000):
+        """Import country lookup table from SQLite to PostgreSQL."""
+        return self.import_mapped_table('country', CDBCountry, batch_size=batch_size)
+
+    def import_divisions(self, batch_size=1000):
+        """Import division lookup table from SQLite to PostgreSQL."""
+        return self.import_mapped_table('division', CDBDivision, batch_size=batch_size)
+
+    def import_regions(self, batch_size=1000):
+        """Import region lookup table from SQLite to PostgreSQL."""
+        return self.import_mapped_table(
+            'region',
+            CDBRegion,
+            batch_size=batch_size,
+            boolean_fields={'is_europe'},
+        )
     
     def import_all_tables(self):
         """Import all supported tables
@@ -253,8 +271,19 @@ class CDBImporter:
         
         logger.info(f"Starting data import from CDB ({self.pcm_version})...")
         
-        # Import cyclists
-        logger.info("[1/1] Importing cyclists...")
+        logger.info("[1/5] Importing countries...")
+        stats['countries'] = self.import_countries()
+
+        logger.info("[2/5] Importing divisions...")
+        stats['divisions'] = self.import_divisions()
+
+        logger.info("[3/5] Importing regions...")
+        stats['regions'] = self.import_regions()
+
+        logger.info("[4/5] Importing teams...")
+        stats['teams'] = self.import_teams()
+
+        logger.info("[5/5] Importing cyclists...")
         stats['cyclists'] = self.import_cyclists()
         
         logger.info("Import complete!")

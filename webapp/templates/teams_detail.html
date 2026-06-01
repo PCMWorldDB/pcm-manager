@@ -199,7 +199,7 @@ document.addEventListener('DOMContentLoaded', function () {
         <p class="text-muted mb-0">Team detail and rider roster.</p>
     </div>
     <div>
-        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams', division=back_params.division) }}">Back to Team</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams') }}">Back to Teams</a>
     </div>
 </div>
 
@@ -208,20 +208,20 @@ document.addEventListener('DOMContentLoaded', function () {
         <h5 class="mb-3">Team Attributes</h5>
         <div class="meta-grid">
             <div>
-                <div class="meta-label">FC Team ID</div>
+                <div class="meta-label">CDB Team ID</div>
                 <div class="meta-value">{{ team.team_id }}</div>
             </div>
             <div>
-                <div class="meta-label">Nation</div>
-                <div class="meta-value">{{ team.nation_name or '-' }}</div>
+                <div class="meta-label">Country</div>
+                <div class="meta-value">{{ team.nation_name or ('#' ~ team.country_id if team.country_id else '-') }}</div>
             </div>
             <div>
                 <div class="meta-label">Division</div>
-                <div class="meta-value">{{ team.division or '-' }}</div>
+                <div class="meta-value">{{ team.division or ('#' ~ team.division_id if team.division_id else '-') }}</div>
             </div>
             <div>
-                <div class="meta-label">UCI Code</div>
-                <div class="meta-value">{{ team.uci_code or '-' }}</div>
+                <div class="meta-label">Abbreviation</div>
+                <div class="meta-value">{{ team.abbreviation or '-' }}</div>
             </div>
             <div>
                 <div class="meta-label">Ranking</div>
@@ -257,7 +257,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     {% set rider_stats = (rider_stats_map | default({})).get(rider.rider_id, {}) %}
                     <tr>
                         <td>
-                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id, team_id=team.team_id, division=back_params.division) }}">
+                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id, team_id=team.team_id) }}">
                                 {{ rider.name or ((rider.first_name or '') ~ ' ' ~ (rider.last_name or ''))|trim or ('Rider #' ~ rider.rider_id) }}
                             </a>
                         </td>

@@ -32,6 +32,7 @@ class CDBCyclist(NamespaceBase):
     first_name = Column(String(100))
     last_name = Column(String(100))
     first_last_name = Column(String(200))
+    pcs_rider_path = Column(String(500), index=True)
 
     #photo = Column(String(255))
     birth_date = Column(Integer)
@@ -58,18 +59,96 @@ class CDBCyclist(NamespaceBase):
         return f'<Cyclist {self.first_name} {self.last_name}>'
 
 
+class CDBTeam(NamespaceBase):
+    """Team table - stores team information imported from the CDB.
+
+    This is intentionally minimal until the CDB team schema is finalized.
+    """
+    __tablename__ = 'cdb_team'
+
+    id = Column(Integer, primary_key=True)
+    short_name = Column(String(255))
+    team_name = Column(String(255))
+    abbreviation = Column(String(20), index=True)
+    country_id = Column(Integer, index=True)
+    division_id = Column(Integer, index=True)
+    email_suffix = Column(String(255))
+    manager_general = Column(String(255))
+    current_evaluation = Column(Float)
+    budget = Column(Integer)
+    primary_color = Column(String(20))
+    secondary_color = Column(String(20))
+
+    def __repr__(self):
+        return f'<Team {self.team_name or self.id}>'
+
+
+class CDBCountry(NamespaceBase):
+    """Country lookup table imported from the CDB."""
+
+    __tablename__ = 'cdb_country'
+
+    id = Column(Integer, primary_key=True)
+    constant = Column(String(50), index=True)
+    continent_id = Column(Integer, index=True)
+    territory_id = Column(Integer, index=True)
+    flag_name = Column(String(100))
+    name_string_id = Column(Integer)
+    calendar = Column(Integer)
+    cyclist_world_championship_count = Column(Integer)
+    cyclist_world_championship_itt_count = Column(Integer)
+    cycling_popularity = Column(Integer)
+    training_structure = Column(Integer)
+
+    def __repr__(self):
+        return f'<Country {self.constant or self.id}>'
+
+
+class CDBDivision(NamespaceBase):
+    """Division lookup table imported from the CDB."""
+
+    __tablename__ = 'cdb_division'
+
+    id = Column(Integer, primary_key=True)
+    name_string_id = Column(Integer)
+    constant = Column(String(50), index=True)
+    race_wanted_ratio = Column(Float)
+
+    def __repr__(self):
+        return f'<Division {self.constant or self.id}>'
+
+
+class CDBRegion(NamespaceBase):
+    """Region lookup table imported from the CDB."""
+
+    __tablename__ = 'cdb_region'
+
+    id = Column(Integer, primary_key=True)
+    constant = Column(String(100), index=True)
+    name_string_id = Column(Integer)
+    country_id = Column(Integer, index=True)
+    climat_id = Column(Integer, index=True)
+    is_europe = Column(Boolean)
+    weight = Column(Integer)
+    position_x = Column(Integer)
+    position_y = Column(Integer)
+    training_structure = Column(Integer)
+    cycling_popularity = Column(Integer)
+
+    def __repr__(self):
+        return f'<Region {self.constant or self.id}>'
+
+
 class StatChange(NamespaceBase):
     """Stat changes captured from race/stage review and ad-hoc list workflows."""
 
     __tablename__ = 'stat_changes'
 
     id = Column(Integer, primary_key=True)
-    first_cycling_race_id = Column(Integer, nullable=True, index=True)
-    first_cycling_stage_id = Column(Integer, nullable=True, index=True)
+    race_result_id = Column(Integer, nullable=True, index=True)
     stat_list_id = Column(Integer, nullable=True, index=True)
     release_id = Column(Integer, nullable=True, index=True)
-    cyclist_pcm_id = Column(Integer, nullable=False, index=True)
-    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+    cdb_cyclist_id = Column(Integer, nullable=False, index=True)
     stat_name = Column(String(20), nullable=False, index=True)
     original_value = Column(Integer, nullable=False)
     final_value = Column(Integer, nullable=False)
@@ -79,32 +158,28 @@ class StatChange(NamespaceBase):
 
     __table_args__ = (
         UniqueConstraint(
-            'first_cycling_race_id',
-            'first_cycling_stage_id',
+            'race_result_id',
             'stat_list_id',
-            'cyclist_pcm_id',
-            'first_cycling_rider_id',
+            'cdb_cyclist_id',
             'stat_name',
             name='uq_stat_changes_scope',
         ),
         Index(
-            'idx_stat_changes_race_stage_rider',
-            'first_cycling_race_id',
-            'first_cycling_stage_id',
-            'first_cycling_rider_id',
+            'idx_stat_changes_race_result_rider',
+            'race_result_id',
+            'cdb_cyclist_id',
         ),
-        Index('idx_stat_changes_list_rider', 'stat_list_id', 'first_cycling_rider_id'),
+        Index('idx_stat_changes_list_rider', 'stat_list_id', 'cdb_cyclist_id'),
         Index('idx_stat_changes_release', 'release_id'),
     )
 
     def __repr__(self):
         return (
             '<StatChange '
-            f'race={self.first_cycling_race_id} '
-            f'stage={self.first_cycling_stage_id} '
+            f'race_result={self.race_result_id} '
             f'list={self.stat_list_id} '
             f'release={self.release_id} '
-            f'rider={self.first_cycling_rider_id} '
+            f'cdb_cyclist={self.cdb_cyclist_id} '
             f'stat={self.stat_name} '
             f'delta={self.delta_value}>'
         )
@@ -116,11 +191,9 @@ class StatChangeSnapshot(NamespaceBase):
     __tablename__ = 'stat_change_snapshot'
 
     id = Column(Integer, primary_key=True)
-    first_cycling_race_id = Column(Integer, nullable=True, index=True)
-    first_cycling_stage_id = Column(Integer, nullable=True, index=True)
+    race_result_id = Column(Integer, nullable=True, index=True)
     stat_list_id = Column(Integer, nullable=True, index=True)
-    cyclist_pcm_id = Column(Integer, nullable=False, index=True)
-    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+    cdb_cyclist_id = Column(Integer, nullable=False, index=True)
     stat_mo = Column(Integer, nullable=False)
     stat_mm = Column(Integer, nullable=False)
     stat_dh = Column(Integer, nullable=False)
@@ -142,29 +215,25 @@ class StatChangeSnapshot(NamespaceBase):
 
     __table_args__ = (
         UniqueConstraint(
-            'first_cycling_race_id',
-            'first_cycling_stage_id',
+            'race_result_id',
             'stat_list_id',
-            'cyclist_pcm_id',
-            'first_cycling_rider_id',
+            'cdb_cyclist_id',
             name='uq_stat_change_snapshot_scope_rider',
         ),
         Index(
-            'idx_stat_change_snapshot_race_stage_rider',
-            'first_cycling_race_id',
-            'first_cycling_stage_id',
-            'first_cycling_rider_id',
+            'idx_stat_change_snapshot_race_result_rider',
+            'race_result_id',
+            'cdb_cyclist_id',
         ),
-        Index('idx_stat_change_snapshot_list_rider', 'stat_list_id', 'first_cycling_rider_id'),
+        Index('idx_stat_change_snapshot_list_rider', 'stat_list_id', 'cdb_cyclist_id'),
     )
 
     def __repr__(self):
         return (
             '<StatChangeSnapshot '
-            f'race={self.first_cycling_race_id} '
-            f'stage={self.first_cycling_stage_id} '
+            f'race_result={self.race_result_id} '
             f'list={self.stat_list_id} '
-            f'rider={self.first_cycling_rider_id}>'
+            f'cdb_cyclist={self.cdb_cyclist_id}>'
         )
 
 
@@ -234,15 +303,19 @@ class StatListItem(NamespaceBase):
 
     id = Column(Integer, primary_key=True)
     stat_list_id = Column(Integer, nullable=False, index=True)
-    first_cycling_rider_id = Column(Integer, nullable=False, index=True)
+    cdb_cyclist_id = Column(Integer, nullable=False, index=True)
 
     __table_args__ = (
-        UniqueConstraint('stat_list_id', 'first_cycling_rider_id', name='uq_stat_list_items_list_rider'),
+        UniqueConstraint('stat_list_id', 'cdb_cyclist_id', name='uq_stat_list_items_list_rider'),
     )
 
 
 # List of all tables to create (in order)
 NAMESPACE_TABLES = [
+    CDBCountry,
+    CDBDivision,
+    CDBRegion,
+    CDBTeam,
     CDBCyclist,
     Release,
     ReleaseFile,

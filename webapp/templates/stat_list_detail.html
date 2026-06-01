@@ -210,7 +210,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-secondary conflict-resolution-btn"
-                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-rider-id="{{ conflict.cdb_cyclist_id }}"
                                     data-stat-name="{{ conflict.stat_code }}"
                                     data-resolution="their_edit"
                                     data-resolution-value="{{ conflict.current_value }}">
@@ -219,7 +219,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-primary conflict-resolution-btn ms-1"
-                                    data-rider-id="{{ conflict.first_cycling_rider_id }}"
+                                    data-rider-id="{{ conflict.cdb_cyclist_id }}"
                                     data-stat-name="{{ conflict.stat_code }}"
                                     data-resolution="your_edit"
                                     data-resolution-value="{{ conflict.proposed_value }}">
@@ -243,7 +243,7 @@ body.dark-mode .panel-card .border.bg-light {
                             <th style="width: 60px;">Actions</th>
                             <th>Rider</th>
                             <th>Team</th>
-                            {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                            {% for stat_key in stat_fields %}
                             <th class="stat-col">{{ stat_key|upper }}</th>
                             {% endfor %}
                         </tr>
@@ -257,14 +257,19 @@ body.dark-mode .panel-card .border.bg-light {
                                 <form method="post" action="{{ url_for('web.stats_editor_toggle_list_rider', list_id=stat_list.id) }}" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="rider_id" value="{{ row.rider_id }}">
+                                    <input type="hidden" name="cdb_cyclist_id" value="{{ row.cdb_cyclist_id }}">
                                     <input type="hidden" name="is_checked" value="0">
                                     <button type="submit" class="btn btn-sm btn-outline-danger">X</button>
                                 </form>
                             </td>
                             <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
-                                <a href="{{ url_for('web.rider_detail', rider_id=row.rider_id) }}" class="text-reset text-decoration-none">
+                                {% if row.rider_link_id %}
+                                <a href="{{ url_for('web.rider_detail', rider_id=row.rider_link_id) }}" class="text-reset text-decoration-none">
                                     {{ row.rider_name }}
                                 </a>
+                                {% else %}
+                                {{ row.rider_name }}
+                                {% endif %}
                             </td>
                             <td>
                                 {% if row.team_id %}
@@ -275,7 +280,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 {{ row.team_name }}
                                 {% endif %}
                             </td>
-                            {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                            {% for stat_key in stat_fields %}
                             {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                             {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
                             <td class="stat-cell stat-col stat-value" data-stat-value="{{ stat_value }}">
@@ -319,7 +324,7 @@ body.dark-mode .panel-card .border.bg-light {
                         <th style="width: 90px;"></th>
                         <th>Rider</th>
                         <th>Team</th>
-                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                        {% for stat_key in stat_fields %}
                         <th class="stat-col">{{ stat_key|upper }}</th>
                         {% endfor %}
                     </tr>
@@ -331,26 +336,19 @@ body.dark-mode .panel-card .border.bg-light {
                             <form method="post" action="{{ url_for('web.stats_editor_add_list_rider', list_id=stat_list.id) }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="rider_id" value="{{ rider.rider_id }}">
+                                <input type="hidden" name="cdb_cyclist_id" value="{{ rider.cdb_cyclist_id }}">
                                 <input type="hidden" name="list_search_rider" value="{{ list_search_rider or '' }}">
                                 <input type="hidden" name="list_search_team" value="{{ list_search_team or '' }}">
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
                             </form>
                         </td>
                         <td>
-                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}" class="text-reset text-decoration-none">
-                                {{ rider.name or ('Rider #' ~ rider.rider_id) }}
-                            </a>
+                            {{ rider.name or ('Rider #' ~ rider.rider_id) }}
                         </td>
                         <td>
-                            {% if rider.team_id %}
-                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}" class="text-reset text-decoration-none">
-                                {{ rider.team_name or '-' }}
-                            </a>
-                            {% else %}
                             {{ rider.team_name or '-' }}
-                            {% endif %}
                         </td>
-                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                        {% for stat_key in stat_fields %}
                         <td class="stat-cell stat-col stat-value" data-stat-value="{{ rider.stats[stat_key] if rider.stats and stat_key in rider.stats else '' }}">
                             {{ rider.stats[stat_key] if rider.stats and stat_key in rider.stats else '-' }}
                         </td>

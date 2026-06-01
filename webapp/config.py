@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-SITE_VERSION = 'v0.2.0'  # Update this as needed for new releases
+SITE_VERSION = 'v0.3.0'  # Update this as needed for new releases
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
