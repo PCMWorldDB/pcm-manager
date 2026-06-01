@@ -1,19 +1,21 @@
-"""ProCyclingStats parsing and FirstCycling rider matching."""
+"""ProCyclingStats parsing and namespace CDB rider matching."""
 import logging
 import re
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 try:
     from bs4 import BeautifulSoup
 except ImportError:  # pragma: no cover - exercised only when dependency is missing
     BeautifulSoup = None
 
+from sqlalchemy import create_engine, text
+
 from webapp.extensions import db
-from webapp.models.main.firstcycling import FirstCyclingRider
+from webapp.models.main.race_result_map import RaceResultMap
 from webapp.models.main.pcs import PcsRaceResult
 
 logger = logging.getLogger('pcs')
@@ -29,6 +31,7 @@ class PcsRaceResultRow:
 
     position: int | None
     rider_name: str
+    pcs_rider_path: str | None = None
     team_name: str | None = None
     age: int | None = None
     points: int | None = None
@@ -45,12 +48,12 @@ class PcsRaceResultParse:
 
 @dataclass
 class PcsRiderMatch:
-    """Result of matching one PCS rider name to a FirstCycling rider."""
+    """Result of matching one PCS rider to a namespace CDB cyclist."""
 
-    rider_id: int | None
+    cyclist_id: int | None
     method: str | None
     score: float | None
-    rider: FirstCyclingRider | None = None
+    cyclist: dict | None = None
 
 
 def _parse_int(value):
@@ -70,6 +73,20 @@ def _clean_text(value):
         return None
     text = re.sub(r'\s+', ' ', str(value)).strip()
     return text or None
+
+
+def _normalize_pcs_rider_path(value):
+    uri = _clean_text(value)
+    if not uri:
+        return None
+
+    absolute_uri = urljoin('https://www.procyclingstats.com', uri)
+    parsed = urlparse(absolute_uri)
+    path = parsed.path.rstrip('/')
+    if not path:
+        return None
+
+    return path.lower()
 
 
 def _title_from_slug(value):
@@ -111,21 +128,21 @@ def _name_variants(value):
     return [variant for variant in variants if variant]
 
 
-def _best_name_score(pcs_name, firstcycling_name):
+def _best_name_score(pcs_name, cyclist_name):
     pcs_variants = _name_variants(pcs_name)
-    fc_variants = _name_variants(firstcycling_name)
-    if not pcs_variants or not fc_variants:
+    cyclist_variants = _name_variants(cyclist_name)
+    if not pcs_variants or not cyclist_variants:
         return 0.0
 
     best_score = 0.0
     for pcs_variant in pcs_variants:
         pcs_tokens = set(pcs_variant.split())
-        for fc_variant in fc_variants:
-            fc_tokens = set(fc_variant.split())
-            sequence_score = SequenceMatcher(None, pcs_variant, fc_variant).ratio()
+        for cyclist_variant in cyclist_variants:
+            cyclist_tokens = set(cyclist_variant.split())
+            sequence_score = SequenceMatcher(None, pcs_variant, cyclist_variant).ratio()
             token_score = 0.0
-            if pcs_tokens and fc_tokens:
-                token_score = len(pcs_tokens & fc_tokens) / len(pcs_tokens | fc_tokens)
+            if pcs_tokens and cyclist_tokens:
+                token_score = len(pcs_tokens & cyclist_tokens) / len(pcs_tokens | cyclist_tokens)
             best_score = max(best_score, sequence_score, token_score)
     return best_score
 
@@ -250,6 +267,7 @@ def parse_pcs_race_results_html(html, source_url=None):
         if not rider_name:
             continue
 
+        pcs_rider_path = rider_link.get('href') if rider_link else None
         team_link = team_cell.select_one('a') if team_cell else None
 
         position_text = _clean_text(position_cell.get_text(' ', strip=True)) if position_cell else None
@@ -257,6 +275,7 @@ def parse_pcs_race_results_html(html, source_url=None):
         parsed_rows.append(PcsRaceResultRow(
             position=_parse_int(position_text),
             rider_name=rider_name,
+            pcs_rider_path=pcs_rider_path,
             team_name=_clean_text(team_link.get_text(' ', strip=True)) if team_link else None,
             age=_parse_int(age_cell.get_text(' ', strip=True)) if age_cell else None,
             points=_parse_int(points_cell.get_text(' ', strip=True)) if points_cell else None,
@@ -268,66 +287,97 @@ def parse_pcs_race_results_html(html, source_url=None):
 
 
 class PcsRiderMatcher:
-    """Match PCS rider names to FirstCycling riders."""
+    """Match PCS rider rows to namespace CDB cyclists."""
 
-    def __init__(self, db_session=None, fuzzy_threshold=0.84):
-        self.db_session = db_session or db.session
+    def __init__(self, namespace, fuzzy_threshold=0.84):
+        if namespace is None:
+            raise ValueError('namespace is required for PCS rider matching')
+        self.namespace = namespace
         self.fuzzy_threshold = fuzzy_threshold
+        self._cyclists = None
 
-    def match(self, pcs_name):
-        pcs_name = _clean_text(pcs_name)
-        if not pcs_name:
-            return PcsRiderMatch(rider_id=None, method=None, score=None)
+    def _load_cyclists(self):
+        if self._cyclists is not None:
+            return self._cyclists
 
-        exact_pcs_name = (
-            self.db_session.query(FirstCyclingRider)
-            .filter(FirstCyclingRider.pcs_name == pcs_name)
-            .order_by(FirstCyclingRider.rider_id.asc())
-            .first()
-        )
-        if exact_pcs_name:
-            return PcsRiderMatch(
-                rider_id=exact_pcs_name.rider_id,
-                method='pcs_name_exact',
-                score=1.0,
-                rider=exact_pcs_name,
-            )
+        engine = create_engine(self.namespace.build_connection_string())
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(text("""
+                    SELECT
+                        id,
+                        first_name,
+                        last_name,
+                        first_last_name,
+                        pcs_rider_path
+                    FROM cdb_cyclist
+                """)).mappings().all()
+        finally:
+            engine.dispose()
 
-        best_rider = None
+        self._cyclists = [dict(row) for row in rows]
+        return self._cyclists
+
+    def match(self, rider_name, pcs_rider_path=None):
+        rider_name = _clean_text(rider_name)
+        normalized_path = _normalize_pcs_rider_path(pcs_rider_path)
+        if not rider_name and not normalized_path:
+            return PcsRiderMatch(cyclist_id=None, method=None, score=None)
+
+        cyclists = self._load_cyclists()
+        if normalized_path:
+            for cyclist in cyclists:
+                cyclist_path = _normalize_pcs_rider_path(cyclist.get('pcs_rider_path'))
+                if cyclist_path and cyclist_path == normalized_path:
+                    return PcsRiderMatch(
+                        cyclist_id=cyclist['id'],
+                        method='pcs_rider_path_exact',
+                        score=1.0,
+                        cyclist=cyclist,
+                    )
+
+        if not rider_name:
+            return PcsRiderMatch(cyclist_id=None, method='unmatched', score=None)
+
+        best_cyclist = None
         best_score = 0.0
-        riders = (
-            self.db_session.query(FirstCyclingRider)
-            .filter(FirstCyclingRider.name.isnot(None))
-            .all()
-        )
-        for rider in riders:
-            score = _best_name_score(pcs_name, rider.name)
+        for cyclist in cyclists:
+            cyclist_name = _clean_text(cyclist.get('first_last_name'))
+            if not cyclist_name:
+                cyclist_name = _clean_text(' '.join(
+                    part for part in (cyclist.get('first_name'), cyclist.get('last_name')) if part
+                ))
+
+            score = _best_name_score(rider_name, cyclist_name)
             if score > best_score:
                 best_score = score
-                best_rider = rider
+                best_cyclist = cyclist
 
-        if best_rider and best_score >= self.fuzzy_threshold:
+        if best_cyclist and best_score >= self.fuzzy_threshold:
             return PcsRiderMatch(
-                rider_id=best_rider.rider_id,
-                method='firstcycling_name_fuzzy',
+                cyclist_id=best_cyclist['id'],
+                method='cdb_cyclist_name_fuzzy',
                 score=best_score,
-                rider=best_rider,
+                cyclist=best_cyclist,
             )
 
         return PcsRiderMatch(
-            rider_id=None,
+            cyclist_id=None,
             method='unmatched',
             score=best_score if best_score else None,
-            rider=best_rider,
+            cyclist=best_cyclist,
         )
 
 
 class PcsClient:
     """Persistence helper for parsed PCS race results."""
 
-    def __init__(self, db_session=None, fuzzy_threshold=0.84):
+    def __init__(self, namespace, db_session=None, fuzzy_threshold=0.84):
+        if namespace is None:
+            raise ValueError('namespace is required for PCS race result sync')
+        self.namespace = namespace
         self.db_session = db_session or db.session
-        self.matcher = PcsRiderMatcher(self.db_session, fuzzy_threshold=fuzzy_threshold)
+        self.matcher = PcsRiderMatcher(namespace, fuzzy_threshold=fuzzy_threshold)
 
     def sync_race_results_from_html(
         self,
@@ -339,26 +389,33 @@ class PcsClient:
         parsed = parse_pcs_race_results_html(html, source_url=source_url)
         deleted_existing = (
             self.db_session.query(PcsRaceResult)
-            .filter_by(race_name=parsed.race_name)
+            .filter_by(namespace_id=self.namespace.id, race_name=parsed.race_name)
             .delete(synchronize_session=False)
         )
 
         rows_to_insert = []
         matched = 0
         for parsed_row in parsed.rows:
-            match = self.matcher.match(parsed_row.rider_name)
-            if match.rider_id is not None:
+            match = self.matcher.match(parsed_row.rider_name, parsed_row.pcs_rider_path)
+            if match.cyclist_id is not None:
                 matched += 1
 
             row_payload = asdict(parsed_row)
-            rows_to_insert.append(PcsRaceResult(
+            row_payload.pop('pcs_rider_path', None)
+            pcs_result = PcsRaceResult(
+                namespace_id=self.namespace.id,
                 race_name=parsed.race_name,
-                matched_firstcycling_rider_id=match.rider_id,
+                matched_cdb_cyclist_id=match.cyclist_id,
                 match_method=match.method,
                 match_score=match.score,
                 last_synced_at=datetime.utcnow(),
                 **row_payload,
-            ))
+            )
+            self.db_session.add(pcs_result)
+            self.db_session.flush()
+            race_result_map = self._upsert_race_result_map(pcs_result)
+            pcs_result.race_result_id = race_result_map.race_result_id
+            rows_to_insert.append(pcs_result)
 
         if rows_to_insert:
             self.db_session.add_all(rows_to_insert)
@@ -373,6 +430,26 @@ class PcsClient:
             'unmatched': len(parsed.rows) - matched,
             'deleted_existing': deleted_existing,
         }
+
+    def _upsert_race_result_map(self, pcs_result):
+        race_result_map = (
+            self.db_session.query(RaceResultMap)
+            .filter_by(
+                provider='pcs',
+                external_race_id=str(pcs_result.id),
+                external_stage_id=None,
+            )
+            .first()
+        )
+        if race_result_map is None:
+            race_result_map = RaceResultMap(
+                provider='pcs',
+                external_race_id=str(pcs_result.id),
+                external_stage_id=None,
+            )
+            self.db_session.add(race_result_map)
+        self.db_session.flush()
+        return race_result_map
 
 
 __all__ = [

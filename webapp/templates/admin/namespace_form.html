@@ -17,7 +17,7 @@
                         <label for="{{ form.name.id }}" class="form-label">
                             {{ form.name.label.text }} <span class="text-danger">*</span>
                         </label>
-                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WorldDB 2024") }}
+                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WDB") }}
                         {% if form.name.errors %}
                             <div class="invalid-feedback">
                                 {{ form.name.errors[0] }}

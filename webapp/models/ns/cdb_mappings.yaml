@@ -1,8 +1,16 @@
 PCM_VERSION_MAPPINGS:
   PCM2025:
     cyclist: v1
+    team: v1
+    country: v1
+    division: v1
+    region: v1
   PCM2024:
     cyclist: v1
+    team: v1
+    country: v1
+    division: v1
+    region: v1
 
 CDB_TABLE_MAPPINGS:
   v1:
@@ -33,3 +41,53 @@ CDB_TABLE_MAPPINGS:
         stat_rec: charac_i_recuperation
         stat_cob: charac_i_cobble
         stat_att: charac_i_baroudeur
+    team:
+      cdb_table_name: DYN_team
+      fields:
+        id: IDteam
+        short_name: gene_sz_shortname
+        team_name: gene_sz_name
+        abbreviation: abbreviation
+        country_id: fkIDcountry
+        division_id: fkIDdivision
+        email_suffix: gene_sz_suffixeMail
+        manager_general: gene_sz_manager_general
+        current_evaluation: value_f_current_evaluation
+        budget: value_i_budget
+        primary_color: gene_sz_color
+        secondary_color: gene_sz_secondary_color
+    country:
+      cdb_table_name: STA_country
+      fields:
+        id: IDcountry
+        constant: CONSTANT
+        continent_id: fkIDcontinent
+        territory_id: fkIDterritory
+        flag_name: gene_sz_flag
+        name_string_id: gene_strID_country_name
+        calendar: gene_i_calendar
+        cyclist_world_championship_count: gene_i_num_cyclist_WC
+        cyclist_world_championship_itt_count: gene_i_num_cyclist_WC_ITT
+        cycling_popularity: value_i_cycling_popularity
+        training_structure: value_i_training_structure
+    division:
+      cdb_table_name: STA_division
+      fields:
+        id: IDdivision
+        name_string_id: gene_strID_name
+        constant: CONSTANT
+        race_wanted_ratio: value_f_ratioRaceWanted
+    region:
+      cdb_table_name: STA_region
+      fields:
+        id: IDregion
+        constant: CONSTANT
+        name_string_id: gene_strID_name
+        country_id: fkIDcountry
+        climat_id: fkIDclimat
+        is_europe: gene_b_europa
+        weight: gene_i_weight
+        position_x: gene_i_pos_x
+        position_y: gene_i_pos_y
+        training_structure: value_i_training_structure
+        cycling_popularity: value_i_cycling_popularity

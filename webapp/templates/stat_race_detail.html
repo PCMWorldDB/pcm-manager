@@ -519,8 +519,8 @@ body.dark-mode .stat-input-row {
                             {% endif %}
                         </td>
                         <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
-                            {% if result.rider_id is not none %}
-                            <a href="{{ url_for('web.rider_detail', rider_id=result.rider_id) }}" class="text-reset text-decoration-none">
+                            {% if row.rider_link_id %}
+                            <a href="{{ url_for('web.rider_detail', rider_id=row.rider_link_id) }}" class="text-reset text-decoration-none">
                                 {{ row.rider_name }}
                             </a>
                             {% else %}
@@ -543,7 +543,7 @@ body.dark-mode .stat-input-row {
                                 {{ result.overall_time or '-' }}
                             {% endif %}
                         </td>
-                        {% for stat_key in ['mo', 'mm', 'dh', 'hil', 'tt', 'prl', 'fla', 'spr', 'acc', 'end', 'res', 'rec', 'cob', 'att'] %}
+                        {% for stat_key in stat_fields %}
                         {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                         {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
                         <td class="stat-cell stat-col">

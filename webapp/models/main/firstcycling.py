@@ -148,7 +148,6 @@ class FirstCyclingRider(MainDBModel):
 
     rider_id = db.Column(db.Integer, nullable=False, unique=True, index=True)
     name = db.Column(db.String(255), nullable=True)
-    pcs_name = db.Column(db.String(255), nullable=True, index=True)
     first_name = db.Column(db.String(120), nullable=True)
     last_name = db.Column(db.String(120), nullable=True)
     gender = db.Column(db.String(20), nullable=True, index=True)

@@ -97,14 +97,6 @@ def initialize_database(log=None):
                 ADD COLUMN IF NOT EXISTS rider_ids JSONB
             """))
             conn.execute(text("""
-                ALTER TABLE firstcycling_riders
-                ADD COLUMN IF NOT EXISTS pcs_name VARCHAR(255)
-            """))
-            conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS ix_firstcycling_riders_pcs_name
-                ON firstcycling_riders (pcs_name)
-            """))
-            conn.execute(text("""
                 ALTER TABLE users
                 ALTER COLUMN password_hash DROP NOT NULL
             """))

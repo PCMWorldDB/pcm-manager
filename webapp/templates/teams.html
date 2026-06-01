@@ -7,9 +7,6 @@
         table-layout: fixed;
         width: 100%;
     }
-    .teams-table .col-uci-rank {
-        width: 90px;
-    }
     .teams-table .col-team-code {
         width: 72px;
     }
@@ -17,7 +14,7 @@
         width: calc(270px + 15ch);
     }
     .teams-table .col-division {
-        width: 80px;
+        width: 150px;
     }
     .teams-table .col-riders {
         width: 72px;
@@ -29,44 +26,101 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
+    .riders-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .riders-table .col-id {
+        width: 82px;
+    }
+    .riders-table .col-rider {
+        width: calc(260px + 12ch);
+    }
+    .riders-table .col-team {
+        width: calc(240px + 10ch);
+    }
+    .riders-table .col-country {
+        width: 130px;
+    }
+    .riders-table .col-birth {
+        width: 120px;
+    }
+    .riders-table .text-truncate-cell {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 {% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h2 class="mb-1">Teams</h2>
-        <p class="text-muted mb-0">Browse teams and open team rosters.</p>
+        <p class="text-muted mb-0">Browse teams and riders in the selected namespace.</p>
     </div>
 </div>
 
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_method">
+            <input type="hidden" name="method" value="teams">
+            <button class="nav-link {% if active_method == 'teams' %}active{% endif %}" type="submit">Teams</button>
+        </form>
+    </li>
+    <li class="nav-item">
+        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_method">
+            <input type="hidden" name="method" value="riders">
+            <button class="nav-link {% if active_method == 'riders' %}active{% endif %}" type="submit">Riders</button>
+        </form>
+    </li>
+</ul>
+
 {% if season_selected %}
+{% if active_method == 'teams' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="get" action="{{ url_for('web.teams') }}">
+        <form method="post" action="{{ url_for('web.teams') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="method" value="teams">
             <div class="section-block">
                 <h5 class="section-title">Filter Teams</h5>
                 <div class="row g-3">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label for="division" class="form-label">Division</label>
                         <select id="division" name="division" class="form-select">
                             <option value="">All divisions</option>
                             {% for division in division_options %}
-                            <option value="{{ division }}" {% if selected_division == division %}selected{% endif %}>{{ division }}</option>
+                            <option value="{{ division.value }}" {% if selected_filters.division == division.value %}selected{% endif %}>{{ division.label }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-8 d-flex align-items-end gap-2">
-                        <button class="btn btn-outline-primary" type="submit">Apply Filters</button>
-                        <a class="btn btn-outline-secondary" href="{{ url_for('web.teams') }}">Clear Filters</a>
+                    <div class="col-md-3">
+                        <label for="country" class="form-label">Country</label>
+                        <select id="country" name="country" class="form-select">
+                            <option value="">All countries</option>
+                            {% for country in country_options %}
+                            <option value="{{ country.value }}" {% if selected_filters.country == country.value %}selected{% endif %}>{{ country.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="team" class="form-label">Team</label>
+                        <input id="team" name="team" class="form-control" type="search" value="{{ selected_filters.team }}" placeholder="Search by team name">
+                    </div>
+                    <div class="col-lg-2 col-md-12 d-flex align-items-end gap-2 flex-wrap">
+                        <button class="btn btn-outline-primary" type="submit" name="action" value="apply_filters">Apply Filters</button>
+                        <button class="btn btn-outline-secondary" type="submit" name="action" value="clear_filters">Clear Filters</button>
                     </div>
                 </div>
             </div>
         </form>
     </div>
 </div>
-{% endif %}
 
-{% if season_selected %}
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Teams ({{ teams|length }})</h5>
@@ -75,7 +129,6 @@
         <div class="table-wrapper">
             <table class="table table-sm table-hover align-middle mb-0 teams-table">
                 <colgroup>
-                    <col class="col-uci-rank">
                     <col class="col-division">
                     <col class="col-team-code">
                     <col class="col-team-name">
@@ -84,29 +137,21 @@
                 </colgroup>
                 <thead>
                     <tr>
-                        <th class="sortable-col" data-sort-type="number">UCI Rank</th>
                         <th class="sortable-col" data-sort-type="text">Division</th>
-                        <th class="sortable-col" data-sort-type="text">Team Code</th>
+                        <th class="sortable-col" data-sort-type="text">Abbrev.</th>
                         <th class="sortable-col" data-sort-type="text">Team Name</th>
-                        <th class="sortable-col" data-sort-type="text">Nation</th>
+                        <th class="sortable-col" data-sort-type="text">Country</th>
                         <th class="sortable-col" data-sort-type="number">Riders</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for team in teams %}
                     <tr>
-                        <td data-sort-value="{{ team.ranking_rank if team.ranking_rank is not none else 9999 }}">
-                            {% if team.ranking_rank %}
-                                #{{ team.ranking_rank }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
                         <td data-sort-value="{{ team.division or '' }}">{{ team.division or '-' }}</td>
                         <td data-sort-value="{{ team.uci_code or '' }}">{{ team.uci_code or '-' }}</td>
                         <td class="team-name-cell" data-sort-value="{{ team.team_name or ('Team #' ~ team.team_id) }}">
                             <a
-                                href="{{ url_for('web.team_detail', team_id=team.team_id, division=selected_division) }}"
+                                href="{{ url_for('web.team_detail', team_id=team.team_id) }}"
                                 target="_blank"
                                 rel="noopener noreferrer">
                                 {{ team.team_name or ('Team #' ~ team.team_id) }}
@@ -174,10 +219,162 @@
             </table>
         </div>
         {% else %}
-        <p class="text-muted mb-0">No teams found for the selected division filter.</p>
+        <p class="text-muted mb-0">No teams found for the selected filters.</p>
         {% endif %}
     </div>
 </div>
+{% elif active_method == 'riders' %}
+<div class="panel-card card">
+    <div class="card-body">
+        <form method="post" action="{{ url_for('web.teams') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="method" value="riders">
+            <div class="section-block">
+                <h5 class="section-title">Filter Riders</h5>
+                <div class="row g-3">
+                    <div class="col-lg-3 col-md-6">
+                        <label for="q" class="form-label">Rider</label>
+                        <input id="q" name="q" class="form-control" type="search" value="{{ rider_filters.q }}" placeholder="Search by rider name or ID">
+                    </div>
+                    <div class="col-lg-2 col-md-6">
+                        <label for="rider_country" class="form-label">Country</label>
+                        <select id="rider_country" name="country" class="form-select">
+                            <option value="">All countries</option>
+                            {% for country in rider_country_options %}
+                            <option value="{{ country.value }}" {% if rider_filters.country == country.value %}selected{% endif %}>{{ country.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-lg-2 col-md-6">
+                        <label for="rider_division" class="form-label">Division</label>
+                        <select id="rider_division" name="division" class="form-select">
+                            <option value="">All divisions</option>
+                            {% for division in rider_division_options %}
+                            <option value="{{ division.value }}" {% if rider_filters.division == division.value %}selected{% endif %}>{{ division.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <label for="rider_team" class="form-label">Team</label>
+                        <input id="rider_team" name="team" class="form-control" type="search" value="{{ rider_filters.team }}" placeholder="Search by team name">
+                    </div>
+                    <div class="col-lg-2 col-md-6">
+                        <label for="per_page" class="form-label">Per page</label>
+                        <select id="per_page" name="per_page" class="form-select">
+                            {% for option in per_page_options %}
+                            <option value="{{ option }}" {% if rider_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 d-flex align-items-end gap-2 flex-wrap">
+                        <button class="btn btn-outline-primary" type="submit" name="action" value="apply_filters">Apply Filters</button>
+                        <button class="btn btn-outline-secondary" type="submit" name="action" value="clear_filters">Clear Filters</button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="panel-card card">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
+            <h5 class="mb-0">Riders ({{ rider_pagination.total }})</h5>
+            <div class="text-muted">
+                Showing {{ rider_pagination.start }}-{{ rider_pagination.end }} of {{ rider_pagination.total }}
+            </div>
+        </div>
+
+        {% if riders %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0 riders-table">
+                <colgroup>
+                    <col class="col-id">
+                    <col class="col-rider">
+                    <col class="col-team">
+                    <col class="col-country">
+                    <col class="col-birth">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>CDB ID</th>
+                        <th>Rider</th>
+                        <th>Team</th>
+                        <th>Country</th>
+                        <th>Birth Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rider in riders %}
+                    <tr>
+                        <td>{{ rider.cyclist_id }}</td>
+                        <td class="text-truncate-cell">
+                            <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}">
+                                {{ rider.name or ('Rider #' ~ rider.rider_id) }}
+                            </a>
+                        </td>
+                        <td class="text-truncate-cell">
+                            {% if rider.team_id %}
+                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}">
+                                {{ rider.team_name or ('Team #' ~ rider.team_id) }}
+                            </a>
+                            {% else %}
+                            {{ rider.team_name or '-' }}
+                            {% endif %}
+                        </td>
+                        <td>{{ rider.nation_name or '-' }}</td>
+                        <td>{{ rider.birth_date_display or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if rider_pagination.total_pages > 1 %}
+        <nav class="mt-3" aria-label="Rider result pages">
+            <ul class="pagination mb-0 flex-wrap">
+                <li class="page-item {% if not rider_pagination.has_prev %}disabled{% endif %}">
+                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="action" value="set_page">
+                        <input type="hidden" name="method" value="riders">
+                        <input type="hidden" name="page" value="{{ rider_pagination.prev_page }}">
+                        <button class="page-link" type="submit" {% if not rider_pagination.has_prev %}disabled{% endif %}>Previous</button>
+                    </form>
+                </li>
+                {% for page_number in range(1, rider_pagination.total_pages + 1) %}
+                    {% if page_number == 1 or page_number == rider_pagination.total_pages or (page_number >= rider_pagination.page - 2 and page_number <= rider_pagination.page + 2) %}
+                    <li class="page-item {% if page_number == rider_pagination.page %}active{% endif %}">
+                        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="set_page">
+                            <input type="hidden" name="method" value="riders">
+                            <input type="hidden" name="page" value="{{ page_number }}">
+                            <button class="page-link" type="submit">{{ page_number }}</button>
+                        </form>
+                    </li>
+                    {% elif page_number == rider_pagination.page - 3 or page_number == rider_pagination.page + 3 %}
+                    <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {% if not rider_pagination.has_next %}disabled{% endif %}">
+                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="action" value="set_page">
+                        <input type="hidden" name="method" value="riders">
+                        <input type="hidden" name="page" value="{{ rider_pagination.next_page }}">
+                        <button class="page-link" type="submit" {% if not rider_pagination.has_next %}disabled{% endif %}>Next</button>
+                    </form>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+        {% else %}
+        <p class="text-muted mb-0">No riders found for the selected filters.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 {% else %}
 <div class="alert alert-info">
     Select a namespace with Database Year and Gender to load team data.

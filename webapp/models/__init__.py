@@ -20,6 +20,7 @@ from webapp.models.main.firstcycling import (
     FirstCyclingTeam,
     FirstCyclingRider,
 )
+from webapp.models.main.race_result_map import RaceResultMap
 from webapp.models.main.pcs import PcsRaceResult
 
 
@@ -50,5 +51,6 @@ __all__ = [
     'FirstCyclingRaceResult',
     'FirstCyclingTeam',
     'FirstCyclingRider',
+    'RaceResultMap',
     'PcsRaceResult',
 ]
