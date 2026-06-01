@@ -12,7 +12,7 @@ from flask import current_app, has_app_context, has_request_context, url_for
 from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
-from webapp.models import DiscordSettings, DiscordWorkflowThread
+from webapp.models import DiscordSettings, DiscordWorkflowThread, RaceResultMap
 
 logger = logging.getLogger('discord')
 
@@ -194,27 +194,46 @@ def get_discord_settings_for_namespace_workflow(namespace, workflow):
     ).order_by(DiscordSettings.id.asc()).all()
 
 
-def _discord_scope_where_clause(first_cycling_race_id=None, first_cycling_stage_id=None, stat_list_id=None):
+def _firstcycling_race_result_map_ids(first_cycling_race_id=None, first_cycling_stage_id=None):
+    if first_cycling_race_id is None:
+        return []
+
+    query = RaceResultMap.query.filter_by(
+        provider='firstcycling',
+        external_race_id=str(first_cycling_race_id),
+    )
+    if first_cycling_stage_id is None:
+        query = query.filter(RaceResultMap.external_stage_id.is_(None))
+    else:
+        query = query.filter(RaceResultMap.external_stage_id == str(first_cycling_stage_id))
+
+    return [row.race_result_id for row in query.all()]
+
+
+def _discord_snapshot_scope_where_clause(race_result_ids=None, stat_list_id=None):
     if stat_list_id is not None:
         return (
             """
-            first_cycling_race_id IS NULL
-            AND first_cycling_stage_id IS NULL
+            race_result_id IS NULL
             AND stat_list_id = :list_id
             """,
             {'list_id': stat_list_id},
         )
 
+    normalized_race_result_ids = [
+        race_result_id
+        for race_result_id in (race_result_ids or [])
+        if race_result_id is not None
+    ]
+    if not normalized_race_result_ids:
+        return None, {}
+
     return (
         """
-        first_cycling_race_id = :race_id
-        AND first_cycling_stage_id IS NOT DISTINCT FROM :stage_id
+        race_result_id = ANY(:race_result_ids)
         AND stat_list_id IS NULL
         """,
-        {
-            'race_id': first_cycling_race_id,
-            'stage_id': first_cycling_stage_id,
-        },
+        {'race_result_ids': normalized_race_result_ids},
     )
 
 
@@ -226,6 +245,15 @@ def _load_namespace_discord_scope_state(
 ):
     if namespace is None:
         return None
+
+    race_result_ids = []
+    if stat_list_id is None:
+        race_result_ids = _firstcycling_race_result_map_ids(
+            first_cycling_race_id=first_cycling_race_id,
+            first_cycling_stage_id=first_cycling_stage_id,
+        )
+        if not race_result_ids:
+            return None
 
     connection_string = namespace.build_connection_string()
     engine = create_engine(connection_string)
@@ -244,7 +272,7 @@ def _load_namespace_discord_scope_state(
                     )
                 ).scalars()
             }
-            if 'id' not in columns:
+            if 'id' not in columns or 'race_result_id' not in columns or 'stat_list_id' not in columns:
                 return None
 
             selected_columns = ['id']
@@ -252,11 +280,12 @@ def _load_namespace_discord_scope_state(
                 if column_name in columns:
                     selected_columns.append(column_name)
 
-            where_clause, params = _discord_scope_where_clause(
-                first_cycling_race_id=first_cycling_race_id,
-                first_cycling_stage_id=first_cycling_stage_id,
+            where_clause, params = _discord_snapshot_scope_where_clause(
+                race_result_ids=race_result_ids,
                 stat_list_id=stat_list_id,
             )
+            if not where_clause:
+                return None
             row = conn.execute(
                 text(
                     f"""
@@ -292,6 +321,15 @@ def _update_namespace_discord_scope_thread(
     if namespace is None or not thread_id:
         return
 
+    race_result_ids = []
+    if stat_list_id is None:
+        race_result_ids = _firstcycling_race_result_map_ids(
+            first_cycling_race_id=first_cycling_race_id,
+            first_cycling_stage_id=first_cycling_stage_id,
+        )
+        if not race_result_ids:
+            return
+
     connection_string = namespace.build_connection_string()
     engine = create_engine(connection_string)
     try:
@@ -309,12 +347,16 @@ def _update_namespace_discord_scope_thread(
                     )
                 ).scalars()
             }
+            if 'race_result_id' not in columns or 'stat_list_id' not in columns:
+                return
+
             update_fields = []
-            where_clause, params = _discord_scope_where_clause(
-                first_cycling_race_id=first_cycling_race_id,
-                first_cycling_stage_id=first_cycling_stage_id,
+            where_clause, params = _discord_snapshot_scope_where_clause(
+                race_result_ids=race_result_ids,
                 stat_list_id=stat_list_id,
             )
+            if not where_clause:
+                return
             if 'discord_thread_id' in columns:
                 update_fields.append('discord_thread_id = :thread_id')
                 params['thread_id'] = str(thread_id)
@@ -479,14 +521,15 @@ def notify_discord_stat_scope_saved(
 
     sent_any = False
     for settings in settings_rows:
-        if not settings.channel_id or not settings.approver_role_id:
+        if not settings.channel_id:
             continue
 
         try:
-            mention = f'<@&{settings.approver_role_id}>'
+            mention = f'<@&{settings.approver_role_id}>' if settings.approver_role_id else None
+            approval_line = f'Awaiting approval by {mention}' if mention else 'Awaiting approval'
             save_message = (
                 f'💾 by {_format_discord_username(saved_by)}.\n'
-                f'Awaiting approval by {mention}'
+                f'{approval_line}'
             )
             workflow_thread = _load_discord_workflow_thread(
                 namespace,
@@ -663,11 +706,11 @@ def notify_discord_release_review_requested(namespace, release, release_url, ove
     release_link = _discord_markdown_link(release_label, release_url)
     sent_any = False
     for settings in settings_rows:
-        if not settings.channel_id or not settings.approver_role_id:
+        if not settings.channel_id:
             continue
         try:
-            mention = f'<@&{settings.approver_role_id}>'
-            content = f'Release Review Requested {mention} {release_link}'
+            mention = f'<@&{settings.approver_role_id}> ' if settings.approver_role_id else ''
+            content = f'Release Review Requested {mention}{release_link}'
             client.send_message_with_file(
                 settings.channel_id,
                 content,
