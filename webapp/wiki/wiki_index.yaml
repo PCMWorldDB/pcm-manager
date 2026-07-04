@@ -1,0 +1,37 @@
+sections:
+  - slug: admin
+    title: Admin
+    description: Administrative workflows for managing users, roles, and namespaces.
+    pages:
+      - slug: creating-a-new-namespace
+        title: Creating a New Namespace
+        summary: Create and provision a Namespace for one maintained CDB.
+        file: admin/creating-a-new-namespace.md
+      - slug: adding-a-user
+        title: Adding a User
+        summary: Invite a user and assign the access they need.
+        file: admin/adding-a-user.md
+      - slug: roles-and-user-access
+        title: Roles and User Access
+        summary: Understand role permissions and assign roles to users.
+        file: admin/roles-and-user-access.md
+      - slug: integrations-firstcycling
+        title: Integrations FirstCycling
+        summary: Sync race calendars, teams, riders, and results from FirstCycling.
+        file: admin/integrations/firstcycling.md
+      - slug: integrations-discord
+        title: Integrations Discord
+        summary: Configure Discord workflow targets for notifications and approvals.
+        file: admin/integrations/discord.md
+  - slug: basic-usage
+    title: Basic Usage
+    description: Day-to-day workflows for editors, validators, and release managers.
+    pages:
+      - slug: stats-editor-guide
+        title: Stats Editor Guide
+        summary: Find riders, enter stat deltas, and move edits through review.
+        file: basic-usage/stats-editor-guide.md
+      - slug: release-guide
+        title: Release Guide
+        summary: Create release packages and download generated artifacts.
+        file: basic-usage/release-guide.md

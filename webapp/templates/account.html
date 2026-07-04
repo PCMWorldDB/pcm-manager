@@ -7,7 +7,7 @@
     <div class="col-lg-8">
         <div class="card mb-3">
             <div class="card-header bg-primary text-white">
-                <h4 class="mb-0">👤 {{ user.username }}</h4>
+                <h4 class="mb-0">{{ user.username }}</h4>
             </div>
             <div class="card-body">
                 <div class="row g-3">
@@ -50,27 +50,13 @@
                 {% if user_roles %}
                     <div class="d-flex flex-wrap gap-2 mb-3">
                         {% for role in user_roles %}
-                            <span class="badge bg-secondary">{{ role.display_name or role.name }}</span>
+                            <a href="{{ url_for('web.admin_role_detail', role_id=role.id) }}" class="badge bg-secondary text-decoration-none">
+                                {{ role.display_name or role.name }}
+                            </a>
                         {% endfor %}
                     </div>
                 {% else %}
                     <p class="text-muted mb-3">No roles assigned.</p>
-                {% endif %}
-
-                <h6>Namespaces</h6>
-                {% if user_namespaces %}
-                    <div class="list-group mb-3">
-                        {% for namespace in user_namespaces %}
-                            <div class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>{{ namespace.name }}</span>
-                                <span class="text-muted small">{{ namespace.database_year or '-' }} · {{ namespace.gender or 'Men' }}</span>
-                            </div>
-                        {% endfor %}
-                    </div>
-                {% elif user.is_superadmin %}
-                    <p class="text-muted mb-3">Superadmin access includes all namespaces.</p>
-                {% else %}
-                    <p class="text-muted mb-3">No namespace access assigned.</p>
                 {% endif %}
 
                 <div class="d-flex gap-2">

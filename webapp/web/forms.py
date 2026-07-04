@@ -93,4 +93,4 @@ class NamespaceForm(FlaskForm):
         ('draft', 'Draft'),
         ('archived', 'Archived')
     ], default='draft')
-    submit = SubmitField('Save Namespace')
+    submit = SubmitField('Create Namespace')

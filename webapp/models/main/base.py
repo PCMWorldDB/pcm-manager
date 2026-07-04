@@ -128,8 +128,6 @@ class AuditAction:
     USER_DISCORD_UNLINKED = 'user_discord_unlinked'
     USER_ROLE_ADDED = 'user_role_added'
     USER_ROLE_REMOVED = 'user_role_removed'
-    USER_NAMESPACE_ACCESS_GRANTED = 'user_namespace_access_granted'
-    USER_NAMESPACE_ACCESS_REVOKED = 'user_namespace_access_revoked'
     NAMESPACE_CREATED = 'namespace_created'
     NAMESPACE_UPDATED = 'namespace_updated'
     NAMESPACE_DELETED = 'namespace_deleted'

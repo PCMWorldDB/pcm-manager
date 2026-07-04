@@ -10,7 +10,8 @@ from sqlalchemy.exc import OperationalError
 from flask import current_app
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
-from webapp.models import User, Role, Resource, Action, RolePermission, Namespace
+from webapp.models import User, Role, Namespace
+from webapp.rbac_seed import sync_rbac_metadata
 from webapp.config import (
     get_base_data_path,
     ensure_base_directories,
@@ -87,35 +88,6 @@ def initialize_database(log=None):
         # Step 1: Create tables
         log('\n1. Creating database tables...')
         db.create_all(bind_key='main')
-        with db.engine.begin() as conn:
-            conn.execute(text("""
-                ALTER TABLE namespaces
-                ADD COLUMN IF NOT EXISTS gender VARCHAR(20) NOT NULL DEFAULT 'Men'
-            """))
-            conn.execute(text("""
-                ALTER TABLE firstcycling_teams
-                ADD COLUMN IF NOT EXISTS rider_ids JSONB
-            """))
-            conn.execute(text("""
-                ALTER TABLE users
-                ALTER COLUMN password_hash DROP NOT NULL
-            """))
-            conn.execute(text("""
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0
-            """))
-            conn.execute(text("""
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMP
-            """))
-            conn.execute(text("""
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS discord_user_id VARCHAR(32)
-            """))
-            conn.execute(text("""
-                CREATE UNIQUE INDEX IF NOT EXISTS ix_users_discord_user_id
-                ON users (discord_user_id)
-            """))
 
         # Create association tables using raw SQL (to avoid FK resolution issues)
         from webapp.models.main.user import create_association_tables
@@ -144,7 +116,7 @@ def initialize_database(log=None):
             existing_user = User.query.filter_by(username=admin_username).first()
             if existing_user:
                 # Idempotent self-heal: ensure role assignment exists on reruns.
-                if admin_role and not existing_user.has_role('admin'):
+                if admin_role and not existing_user.roles.filter_by(id=admin_role.id).first():
                     existing_user.roles.append(admin_role)
                     db.session.commit()
                     log('   ✓ Existing admin user found; admin role reattached')
@@ -226,170 +198,8 @@ def _provision_main_database(log=None):
 
 
 def _seed_roles(log=None):
-    """Internal function to seed roles, resources, actions, and permissions"""
-    if log is None:
-        log = lambda _: None
-
-    # Create roles
-    roles_data = [
-        {'name': 'admin', 'display_name': 'Administrator', 
-         'description': 'Full system access', 'is_system_role': True},
-        {'name': 'release_manager', 'display_name': 'Releases',
-         'description': 'Can create namespaces and publish releases', 'is_system_role': True},
-        {'name': 'stat_editor', 'display_name': 'Stat Editor',
-         'description': 'Can edit rider/team/race statistics', 'is_system_role': True},
-        {'name': 'viewer', 'display_name': 'Viewer',
-         'description': 'Read-only access to data', 'is_system_role': True},
-    ]
-    
-    roles = {}
-    for role_data in roles_data:
-        role = Role.query.filter_by(name=role_data['name']).first()
-        if not role:
-            role = Role(**role_data)
-            db.session.add(role)
-            log(f'  Created role: {role.name}')
-        else:
-            updated_fields = []
-            for field_name in ('display_name', 'description', 'is_system_role'):
-                new_value = role_data[field_name]
-                if getattr(role, field_name) != new_value:
-                    setattr(role, field_name, new_value)
-                    updated_fields.append(field_name)
-
-            if updated_fields:
-                log(f"  Updated role: {role.name} ({', '.join(updated_fields)})")
-        roles[role.name] = role
-    
-    # Create resources
-    resources_data = [
-        {'name': 'users', 'app_panel': 'admin', 'description': 'User management'},
-        {'name': 'roles', 'app_panel': 'admin', 'description': 'Role management'},
-        {'name': 'namespaces', 'app_panel': 'admin', 'description': 'Namespace management'},
-        {'name': 'riders', 'app_panel': 'admin', 'description': 'Rider data'},
-        {'name': 'teams', 'app_panel': 'team_manager', 'description': 'Manage teams and rosters'},
-        {'name': 'races', 'app_panel': 'admin', 'description': 'Race data'},
-        {'name': 'stats', 'app_panel': 'stat_manager', 'description': 'Maintain rider stats from race results'},
-        {'name': 'photos', 'app_panel': 'photo_manager', 'description': 'Maintain rider photos'},
-        {'name': 'palmares', 'app_panel': 'palmares_manager', 'description': 'Maintain rider historical race results'},
-        {'name': 'releases', 'app_panel': 'release_manager', 'description': 'Manage database releases'},
-    ]
-    
-    resources = {}
-    for resource_data in resources_data:
-        resource = Resource.query.filter_by(name=resource_data['name']).first()
-        if not resource:
-            resource = Resource(**resource_data)
-            db.session.add(resource)
-            log(f'  Created resource: {resource.name}')
-        else:
-            updated_fields = []
-            for field_name in ('app_panel', 'description'):
-                new_value = resource_data[field_name]
-                if getattr(resource, field_name) != new_value:
-                    setattr(resource, field_name, new_value)
-                    updated_fields.append(field_name)
-
-            if updated_fields:
-                log(f"  Updated resource: {resource.name} ({', '.join(updated_fields)})")
-        resources[resource.name] = resource
-    
-    # Create actions
-    actions_data = [
-        {'name': 'create', 'description': 'Create new records'},
-        {'name': 'read', 'description': 'View/read records'},
-        {'name': 'update', 'description': 'Edit existing records'},
-        {'name': 'delete', 'description': 'Delete records'},
-        {'name': 'publish', 'description': 'Publish releases'},
-        {'name': 'download', 'description': 'Download files'},
-        {'name': 'import', 'description': 'Import data from external sources'},
-        {'name': 'export', 'description': 'Export data'},
-    ]
-    
-    actions = {}
-    for action_data in actions_data:
-        action = Action.query.filter_by(name=action_data['name']).first()
-        if not action:
-            action = Action(**action_data)
-            db.session.add(action)
-            log(f'  Created action: {action.name}')
-        else:
-            if action.description != action_data['description']:
-                action.description = action_data['description']
-                log(f'  Updated action: {action.name} (description)')
-        actions[action.name] = action
-    
-    db.session.commit()
-    
-    # Create permissions matrix
-    permissions_matrix = {
-        'admin': {
-            # Admin has all permissions on all resources
-            'users': ['create', 'read', 'update', 'delete'],
-            'roles': ['create', 'read', 'update', 'delete'],
-            'namespaces': ['create', 'read', 'update', 'delete'],
-            'riders': ['create', 'read', 'update', 'delete'],
-            'teams': ['create', 'read', 'update', 'delete'],
-            'races': ['create', 'read', 'update', 'delete'],
-            'stats': ['create', 'read', 'update', 'delete'],
-            'photos': ['create', 'read', 'update', 'delete'],
-            'palmares': ['create', 'read', 'update', 'delete', 'import'],
-            'releases': ['create', 'read', 'update', 'delete', 'publish', 'download', 'export'],
-        },
-        'release_manager': {
-            'namespaces': ['create', 'read'],
-            'riders': ['read'],
-            'teams': ['read'],
-            'races': ['read'],
-            'stats': ['read'],
-            'photos': ['read', 'create', 'update', 'delete'],
-            'palmares': ['read'],
-            'releases': ['create', 'read', 'update', 'publish', 'download', 'export'],
-        },
-        'stat_editor': {
-            'riders': ['read', 'update'],
-            'teams': ['read', 'update'],
-            'races': ['read', 'update'],
-            'stats': ['create', 'read', 'update'],
-            'photos': ['read', 'create', 'update'],
-            'palmares': ['create', 'read', 'update', 'import'],
-            'releases': ['read', 'download'],
-        },
-        'viewer': {
-            'riders': ['read'],
-            'teams': ['read'],
-            'races': ['read'],
-            'stats': ['read'],
-            'photos': ['read'],
-            'palmares': ['read'],
-            'releases': ['read', 'download'],
-        },
-    }
-    
-    for role_name, resource_actions in permissions_matrix.items():
-        role = roles[role_name]
-        for resource_name, action_names in resource_actions.items():
-            resource = resources[resource_name]
-            for action_name in action_names:
-                action = actions[action_name]
-                
-                # Check if permission already exists
-                existing = RolePermission.query.filter_by(
-                    role_id=role.id,
-                    resource_id=resource.id,
-                    action_id=action.id
-                ).first()
-                
-                if not existing:
-                    permission = RolePermission(
-                        role_id=role.id,
-                        resource_id=resource.id,
-                        action_id=action.id
-                    )
-                    db.session.add(permission)
-    
-    db.session.commit()
-    log('Roles, resources, actions, and permissions seeded successfully!')
+    """Internal compatibility wrapper for RBAC metadata synchronization."""
+    sync_rbac_metadata(log=log)
 
 
 @click.command('seed-roles')

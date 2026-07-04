@@ -436,10 +436,15 @@
             align-items: center;
             gap: 10px;
             text-align: left;
+            text-decoration: none;
         }
         .settings-btn:hover,
-        .user-btn:hover {
+        .settings-btn:focus,
+        .user-btn:hover,
+        .user-btn:focus {
             background: var(--brand-primary-soft);
+            color: #1f2937;
+            text-decoration: none;
         }
         body.dark-mode .settings-btn,
         body.dark-mode .user-btn {
@@ -447,8 +452,12 @@
             background: #374151;
         }
         body.dark-mode .settings-btn:hover,
-        body.dark-mode .user-btn:hover {
+        body.dark-mode .settings-btn:focus,
+        body.dark-mode .user-btn:hover,
+        body.dark-mode .user-btn:focus {
             background: #4b5563;
+            color: #f3f4f6;
+            text-decoration: none;
         }
         .dropdown-menu {
             min-width: 200px;
@@ -899,27 +908,67 @@
         </div>
         <div class="side-panel-footer">
             <ul class="side-panel-utility-list">
+                <li>
+                    <a class="settings-btn" href="{{ url_for('web.wiki') }}" title="Wiki">
+                        <span>📖</span>
+                        <span class="side-panel-label">Wiki</span>
+                    </a>
+                </li>
                 <li class="dropend settings-dropdown">
                     <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Settings">
                         <span>⚙️</span>
                         <span class="side-panel-label">Settings</span>
                     </button>
                     <ul class="dropdown-menu" aria-labelledby="settingsDropdown">
-                        {% if current_user.is_superadmin or current_user.has_role('admin') %}
+                        {% set can_access_users = current_user.is_superadmin
+                            or current_user.has_permission('users', 'create')
+                            or current_user.has_permission('users', 'read')
+                            or current_user.has_permission('users', 'update') %}
+                        {% set can_access_namespaces = current_user.is_superadmin
+                            or current_user.has_permission('namespaces', 'read')
+                            or current_user.has_permission('namespaces', 'create')
+                            or current_user.has_permission('namespaces', 'update')
+                            or current_user.has_permission('namespaces', 'delete') %}
+                        {% set can_access_integrations = current_user.is_superadmin
+                            or current_user.has_permission('integrations-firstcycling', 'read')
+                            or current_user.has_permission('integrations-discord', 'read') %}
+                        {% if can_access_users %}
                         <li>
                             <a class="dropdown-item" href="{{ url_for('web.admin_users') }}" style="color: inherit !important;">
-                                👥 Users
+                                👥 Users & Roles
                             </a>
                         </li>
+                        {% else %}
+                        <li>
+                            <span class="dropdown-item disabled" aria-disabled="true" title="Users & Roles locked">
+                                &#128101; Users & Roles <span class="ms-1">&#128274;</span>
+                            </span>
+                        </li>
+                        {% endif %}
+                        {% if can_access_namespaces %}
                         <li>
                             <a class="dropdown-item" href="{{ url_for('web.admin_namespaces') }}" style="color: inherit !important;">
                                 🗂️ Namespaces
                             </a>
                         </li>
+                        {% else %}
                         <li>
-                            <a class="dropdown-item" href="{{ url_for('web.admin_integrations', provider='firstcycling') }}" style="color: inherit !important;">
+                            <span class="dropdown-item disabled" aria-disabled="true" title="Namespaces locked">
+                                &#128450;&#65039; Namespaces <span class="ms-1">&#128274;</span>
+                            </span>
+                        </li>
+                        {% endif %}
+                        {% if can_access_integrations %}
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('web.admin_integrations', provider='firstcycling' if current_user.is_superadmin or current_user.has_permission('integrations-firstcycling', 'read') else 'discord') }}" style="color: inherit !important;">
                                 🔌 Integrations
                             </a>
+                        </li>
+                        {% else %}
+                        <li>
+                            <span class="dropdown-item disabled" aria-disabled="true" title="Integrations locked">
+                                &#128268; Integrations <span class="ms-1">&#128274;</span>
+                            </span>
                         </li>
                         {% endif %}
                     </ul>

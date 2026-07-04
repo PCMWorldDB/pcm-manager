@@ -164,6 +164,7 @@ class Config:
     PCM_VERSIONS = [
         ('PCM2024', 'PCM 2024'), 
         ('PCM2025', 'PCM 2025'),
+        ('PCM2026', 'PCM 2026'),
     ]
 
     SEASONS = [

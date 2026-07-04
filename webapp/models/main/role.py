@@ -10,7 +10,6 @@ class Role(MainDBModel):
     name = db.Column(db.String(50), unique=True, nullable=False, index=True)
     display_name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
-    is_system_role = db.Column(db.Boolean, default=False, nullable=False)
     
     # Relationships
     permissions = db.relationship('RolePermission', back_populates='role', cascade='all, delete-orphan')
@@ -58,7 +57,7 @@ class Resource(MainDBModel):
     __tablename__ = 'resources'
     
     name = db.Column(db.String(50), unique=True, nullable=False, index=True)
-    app_panel = db.Column(db.String(50), nullable=False)  # stat_manager, photo_manager, etc.
+    app_panel = db.Column(db.String(50), nullable=False)
     description = db.Column(db.Text)
     
     # Relationships
@@ -106,7 +105,6 @@ class RolePermission(MainDBModel):
             Role.name.label('role_name'),
             Role.display_name.label('role_display_name'),
             Resource.name.label('resource_name'),
-            Resource.app_panel.label('app_panel'),
             Action.name.label('action_name')
         ).join(Role, cls.role_id == Role.id
         ).join(Resource, cls.resource_id == Resource.id
