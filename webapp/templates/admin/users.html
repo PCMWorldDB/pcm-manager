@@ -4,12 +4,14 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="card">
+    <div class="card mb-3">
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
             <h4 class="mb-0">👥 Users</h4>
+            {% if can_create_users %}
             <a href="{{ url_for('web.admin_user_create') }}" class="btn btn-light btn-sm">
                 ➕ Create User
             </a>
+            {% endif %}
         </div>
         <div class="card-body">
             <div class="table-responsive">
@@ -28,14 +30,18 @@
                         {% for user in users %}
                         <tr>
                             <td>
-                                <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="text-decoration-none">
+                                {% if can_update_users %}
+                                    <a href="{{ url_for('web.admin_user_detail', user_id=user.id) }}" class="text-decoration-none">
+                                        <strong>{{ user.username }}</strong>
+                                    </a>
+                                {% else %}
                                     <strong>{{ user.username }}</strong>
-                                </a>
+                                {% endif %}
                             </td>
                             <td>
                                 {% if user.roles.count() > 0 %}
                                     {% for role in user.roles %}
-                                        <span class="badge bg-secondary">{{ role.display_name }}</span>
+                                        <a href="{{ url_for('web.admin_role_detail', role_id=role.id) }}" class="badge bg-secondary text-decoration-none">{{ role.display_name }}</a>
                                     {% endfor %}
                                 {% else %}
                                     <span class="text-muted">No roles</span>
@@ -73,6 +79,45 @@
                 {% if users|length == 0 %}
                 <div class="alert alert-info text-center">
                     No users found in the system.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-secondary text-white">
+            <h4 class="mb-0">Roles</h4>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Role</th>
+                            <th>Description</th>
+                            <th>Users</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for role in roles %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('web.admin_role_detail', role_id=role.id) }}" class="text-decoration-none">
+                                    <strong>{{ role.display_name }}</strong>
+                                </a>
+                                <br><small class="text-muted">{{ role.name }}</small>
+                            </td>
+                            <td>{{ role.description or '-' }}</td>
+                            <td>{{ role.get_user_count() }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                {% if roles|length == 0 %}
+                <div class="alert alert-info text-center">
+                    No roles found in the system.
                 </div>
                 {% endif %}
             </div>

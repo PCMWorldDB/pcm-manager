@@ -249,7 +249,7 @@ body.dark-mode .stat-input-row {
                 {% if selected_stage %}
                 <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                 {% endif %}
-                <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if result_state.is_future_race %}disabled{% endif %}>Get Result</button>
+                <button type="submit" class="btn btn-outline-primary get-result-btn get-result-submit" {% if not can_download_stats or result_state.is_future_race %}disabled{% if not can_download_stats %} title="Get Result locked"{% endif %}{% endif %}>Get Result{% if not can_download_stats %} &#128274;{% endif %}</button>
             </form>
             {% if result_state.is_future_race %}
             <div class="result-status-future mt-2 text-end">Available on race start date</div>
@@ -388,7 +388,7 @@ body.dark-mode .stat-input-row {
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                     {% endif %}
                     <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits</button>
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits{% if not can_update_stats %} &#128274;{% endif %}</button>
                 </form>
                 <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -398,12 +398,13 @@ body.dark-mode .stat-input-row {
                     <button
                         type="submit"
                         class="btn btn-success"
-                        {% if not selected_namespace
+                        {% if not can_approve_stats
+                            or not selected_namespace
                             or not scope_delta_status.unapproved_changes
                             or stat_conflicts
                             or (result_state.is_stage_race and selected_stage)
-                            or (result_state.is_stage_race and (not result_state.is_completed or not result_state.has_overall_result)) %}disabled{% endif %}>
-                        Approve
+                            or (result_state.is_stage_race and (not result_state.is_completed or not result_state.has_overall_result)) %}disabled{% if not can_approve_stats %} title="Approve locked"{% endif %}{% endif %}>
+                        Approve{% if not can_approve_stats %} &#128274;{% endif %}
                     </button>
                 </form>
             </div>
@@ -551,7 +552,7 @@ body.dark-mode .stat-input-row {
                             <div class="stat-input-row">
                                 <span class="delta-display" data-rider-id="{{ result.rider_id if result.rider_id is not none else '' }}" data-stat-name="{{ stat_key }}" style="visibility: hidden;">+0</span>
                                 <input
-                                    type="number"
+                                    type="{{ 'number' if can_update_stats else 'text' }}"
                                     class="form-control stat-input"
                                     data-rider-id="{{ result.rider_id if result.rider_id is not none else '' }}"
                                     data-stat-name="{{ stat_key }}"
@@ -560,7 +561,8 @@ body.dark-mode .stat-input-row {
                                     value="{{ stat_value }}"
                                     min="50"
                                     max="85"
-                                    step="1">
+                                    step="1"
+                                    {% if not can_update_stats %}disabled title="Editing locked"{% endif %}>
                             </div>
                             {% else %}
                             -
@@ -636,6 +638,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const saveHint = document.getElementById('save-stat-delta-hint');
     const changesInput = document.getElementById('stat-delta-changes-json');
     const conflictResolutions = new Map();
+    const canUpdateStats = {{ can_update_stats|tojson }};
 
     function updateDeltaDisplay(inputElement) {
         const riderId = inputElement.getAttribute('data-rider-id');
@@ -719,11 +722,17 @@ document.addEventListener('DOMContentLoaded', function () {
         const changes = collectStatChanges();
         changesInput.value = JSON.stringify(changes);
 
-        if (changes.length > 0) {
+        if (!canUpdateStats) {
+            saveButton.disabled = true;
+            saveHint.textContent = 'No edit permission.';
+            saveButton.title = 'Save Edits locked';
+        } else if (changes.length > 0) {
             saveButton.disabled = false;
+            saveButton.removeAttribute('title');
             saveHint.textContent = changes.length + ' change(s) pending.';
         } else {
             saveButton.disabled = true;
+            saveButton.removeAttribute('title');
             saveHint.textContent = 'No changes yet.';
         }
     }

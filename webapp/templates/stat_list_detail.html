@@ -169,15 +169,15 @@ body.dark-mode .panel-card .border.bg-light {
                 <form method="post" action="{{ url_for('web.stats_editor_save_list_stat_deltas', list_id=stat_list.id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits</button>
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits{% if not can_update_stats %} &#128274;{% endif %}</button>
                 </form>
                 <form method="post" action="{{ url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button
                         type="submit"
                         class="btn btn-success"
-                        {% if not selected_namespace or not scope_delta_status.unapproved_changes or stat_conflicts %}disabled{% endif %}>
-                        Approve
+                        {% if not can_approve_stats or not selected_namespace or not scope_delta_status.unapproved_changes or stat_conflicts %}disabled{% if not can_approve_stats %} title="Approve locked"{% endif %}{% endif %}>
+                        Approve{% if not can_approve_stats %} &#128274;{% endif %}
                     </button>
                 </form>
             </div>
@@ -287,7 +287,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 {% if stat_value is not none %}
                                 <div class="stat-input-row">
                                     <span class="delta-display" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" style="visibility: hidden;">+0</span>
-                                    <input type="number" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1">
+                                    <input type="{{ 'number' if can_update_stats else 'text' }}" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1" {% if not can_update_stats %}disabled title="Editing locked"{% endif %}>
                                 </div>
                                 {% else %}-{% endif %}
                             </td>
@@ -374,6 +374,7 @@ body.dark-mode .panel-card .border.bg-light {
     const saveButton = document.getElementById('save-stat-delta-btn');
     const changesInput = document.getElementById('stat-delta-changes-json');
     const hint = document.getElementById('save-stat-delta-hint');
+    const canUpdateStats = {{ can_update_stats|tojson }};
 
     function updateChangeDisplay(inputElement) {
         const riderId = inputElement.getAttribute('data-rider-id');
@@ -448,8 +449,15 @@ body.dark-mode .panel-card .border.bg-light {
         const changes = Array.from(changesByKey.values());
         changesInput.value = JSON.stringify(changes);
         const hasChanges = changes.length > 0;
-        saveButton.disabled = !hasChanges;
-        hint.textContent = hasChanges ? `${changes.length} pending change(s).` : 'No changes yet.';
+        saveButton.disabled = !canUpdateStats || !hasChanges;
+        if (!canUpdateStats) {
+            saveButton.title = 'Save Edits locked';
+        } else {
+            saveButton.removeAttribute('title');
+        }
+        hint.textContent = !canUpdateStats
+            ? 'No edit permission.'
+            : (hasChanges ? `${changes.length} pending change(s).` : 'No changes yet.');
     }
 
     document.querySelectorAll('.stat-input[data-rider-id]').forEach(function (inputElement) {

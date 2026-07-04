@@ -47,6 +47,7 @@ from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
 from webapp.tasks import run_external_sync_task
+from webapp.web.wiki_content import find_wiki_page, find_wiki_section, load_wiki_page_content, load_wiki_sections
 from functools import wraps
 
 # Get logger for this module
@@ -162,40 +163,172 @@ def _user_resources():
     return resources
 
 
-def _can_access_panel(panel_name):
+APP_PANELS = {
+    'stat_editor': {
+        'display_name': 'Stats Editor',
+        'description': 'Maintain rider stats from race results',
+        'endpoint': 'web.stats_editor',
+        'resources': ['stats'],
+        'required_permissions': [('stats', 'read')],
+    },
+    'team_manager': {
+        'display_name': 'Teams',
+        'description': 'Manage teams and rosters',
+        'endpoint': 'web.teams',
+        'resources': ['teams'],
+        'required_permissions': [('teams', 'read')],
+    },
+    'release_manager': {
+        'display_name': 'Releases',
+        'description': 'Manage database releases',
+        'endpoint': 'web.releases',
+        'resources': ['releases'],
+        'required_permissions': [('releases', 'read')],
+    },
+}
+
+
+def _has_any_permission(permission_pairs):
     if current_user.is_superadmin:
         return True
 
-    for resource in _user_resources():
-        if resource.app_panel == panel_name:
-            return True
+    return any(
+        current_user.has_permission(resource_name, action_name)
+        for resource_name, action_name in permission_pairs
+    )
+
+
+def _can_access_panel(panel_name):
+    panel = APP_PANELS.get(panel_name)
+    return bool(panel and _has_any_permission(panel['required_permissions']))
+
+
+def _can_approve_stats():
+    return current_user.is_superadmin or current_user.has_permission('stats', 'approve')
+
+
+def _can_create_stats():
+    return current_user.is_superadmin or current_user.has_permission('stats', 'create')
+
+
+def _can_update_stats():
+    return current_user.is_superadmin or current_user.has_permission('stats', 'update')
+
+
+def _can_download_stats():
+    return current_user.is_superadmin or current_user.has_permission('stats', 'download')
+
+
+def _can_approve_releases():
+    return current_user.is_superadmin or current_user.has_permission('releases', 'approve')
+
+
+def _can_publish_releases():
+    return current_user.is_superadmin or current_user.has_permission('releases', 'publish')
+
+
+def _can_update_releases():
+    return current_user.is_superadmin or current_user.has_permission('releases', 'update')
+
+
+def _can_access_firstcycling_integrations():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('integrations-firstcycling', 'read')
+    )
+
+
+def _can_run_firstcycling_integrations():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('integrations-firstcycling', 'download')
+    )
+
+
+def _can_update_discord_integrations():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('integrations-discord', 'update')
+    )
+
+
+def _can_access_discord_integrations():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('integrations-discord', 'read')
+    )
+
+
+def _can_access_integrations_provider(provider):
+    if provider == 'firstcycling':
+        return _can_access_firstcycling_integrations()
+    if provider == 'discord':
+        return _can_access_discord_integrations()
     return False
 
 
-def _get_panel_url(app_panel):
-    panel_routes = {
-        'stat_manager': 'web.stats_editor',
-        'release_manager': 'web.releases',
-        'team_manager': 'web.teams',
+def _integration_provider_access_map():
+    return {
+        'firstcycling': _can_access_firstcycling_integrations(),
+        'discord': _can_access_discord_integrations(),
     }
 
-    endpoint = panel_routes.get(app_panel)
+
+def _can_create_users():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('users', 'create')
+    )
+
+
+def _can_update_users():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('users', 'update')
+    )
+
+
+def _can_access_user_management():
+    return _can_create_users() or _can_update_users() or current_user.has_permission('users', 'read')
+
+
+def _can_read_roles():
+    return current_user.is_superadmin or current_user.has_permission('roles', 'read')
+
+
+def _can_access_namespace_management():
+    return (
+        current_user.is_superadmin
+        or current_user.has_permission('namespaces', 'read')
+        or current_user.has_permission('namespaces', 'create')
+        or current_user.has_permission('namespaces', 'update')
+        or current_user.has_permission('namespaces', 'delete')
+    )
+
+
+def _can_create_namespaces():
+    return current_user.is_superadmin or current_user.has_permission('namespaces', 'create')
+
+
+def _can_update_namespaces():
+    return current_user.is_superadmin or current_user.has_permission('namespaces', 'update')
+
+
+def _get_panel_url(panel_name):
+    panel = APP_PANELS.get(panel_name, {})
+    endpoint = panel.get('endpoint')
     if not endpoint:
         return None
     return url_for(endpoint)
 
 
-def _get_panel_display_name(app_panel):
+def _get_panel_display_name(panel_name):
     """Return user-facing panel name."""
-    names = {
-        'stat_manager': 'Stats Editor',
-        'team_manager': 'Teams',
-        'release_manager': 'Releases',
-    }
-    if app_panel in names:
-        return names[app_panel]
+    panel = APP_PANELS.get(panel_name)
+    if panel:
+        return panel['display_name']
 
-    default_name = app_panel.replace('_', ' ').title()
+    default_name = panel_name.replace('_', ' ').title()
     if default_name.endswith(' Manager'):
         default_name = default_name[:-8]
 
@@ -207,25 +340,10 @@ def _get_panel_display_name(app_panel):
 
 def _get_panel_menu_items():
     """Return all known app panels with access metadata for global navigation."""
-    all_panel_names = {
-        row[0]
-        for row in db.session.query(Resource.app_panel).distinct().all()
-        if row and row[0] and row[0] != 'admin'
-    }
-
-    if current_user.is_superadmin:
-        accessible_panels = set(all_panel_names)
-    else:
-        accessible_panels = {
-            resource.app_panel
-            for resource in _user_resources()
-            if resource.app_panel and resource.app_panel != 'admin'
-        }
-
     panel_items = []
-    for panel_name in sorted(all_panel_names):
+    for panel_name in sorted(APP_PANELS):
         panel_url = _get_panel_url(panel_name)
-        can_access = panel_name in accessible_panels
+        can_access = _can_access_panel(panel_name)
         panel_items.append({
             'name': panel_name,
             'display_name': _get_panel_display_name(panel_name),
@@ -242,13 +360,12 @@ def _get_accessible_namespaces():
     if not current_user.is_authenticated:
         return []
 
-    if current_user.is_superadmin:
-        return Namespace.query.filter_by(is_deleted=False).order_by(Namespace.name.asc()).all()
-
-    if hasattr(current_user, 'accessible_namespaces'):
-        return current_user.accessible_namespaces.order_by(Namespace.name.asc()).all()
-
-    return []
+    return (
+        Namespace.query
+        .filter_by(status='active', is_deleted=False, is_template=False)
+        .order_by(Namespace.name.asc())
+        .all()
+    )
 
 
 def _namespace_from_slug(available_namespaces, namespace_slug):
@@ -3521,12 +3638,24 @@ def inject_namespace_selector_context():
     }
 
 def admin_required(f):
-    """Decorator to require admin access"""
+    """Decorator to require namespace management access."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
             return redirect(url_for('web.login'))
-        if not (current_user.is_superadmin or current_user.has_role('admin')):
+        if not _can_access_namespace_management():
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def user_management_required(f):
+    """Decorator to require user management access."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for('web.login'))
+        if not _can_access_user_management():
             abort(403)
         return f(*args, **kwargs)
     return decorated_function
@@ -3851,13 +3980,36 @@ def logout():
 def account():
     """Current user account page."""
     user_roles = current_user.roles.all() if hasattr(current_user, 'roles') else []
-    user_namespaces = current_user.accessible_namespaces.all() if hasattr(current_user, 'accessible_namespaces') else []
 
     return render_template(
         'account.html',
         user=current_user,
         user_roles=user_roles,
-        user_namespaces=user_namespaces,
+    )
+
+
+@web_bp.route('/wiki')
+@web_bp.route('/wiki/<section_slug>')
+@web_bp.route('/wiki/<section_slug>/<path:page_path>')
+@login_required
+def wiki(section_slug=None, page_path=None):
+    """User and admin documentation."""
+    wiki_sections = load_wiki_sections()
+    selected_section = find_wiki_section(section_slug, wiki_sections) if section_slug else None
+    if section_slug and selected_section is None:
+        abort(404)
+
+    selected_page = find_wiki_page(selected_section, page_path) if page_path else None
+    if page_path and selected_page is None:
+        abort(404)
+    page_content = load_wiki_page_content(selected_page) if selected_page and selected_page.get('file') else None
+
+    return render_template(
+        'wiki.html',
+        wiki_sections=wiki_sections,
+        selected_section=selected_section,
+        selected_page=selected_page,
+        page_content=page_content,
     )
 
 
@@ -3885,36 +4037,19 @@ def dashboard():
 
     namespace_stats = _load_dashboard_namespace_stats(selected_namespace)
 
-    # Get all unique app panels the user has access to
-    app_panels = {}
-    resources = _user_resources()
-    
-    # Group by app_panel, excluding 'admin' panel
-    for resource in resources:
-        panel = resource.app_panel
-        # Skip admin panel - it's now in settings dropdown
-        if panel == 'admin':
+    apps = []
+    for panel_name, panel in APP_PANELS.items():
+        if not _can_access_panel(panel_name):
             continue
 
-        resource_description = (resource.description or '').strip()
-        fallback_description = f'Manage and view {panel.replace("_", " ")}'
-            
-        if panel not in app_panels:
-            app_panels[panel] = {
-                'name': panel,
-                'display_name': _get_panel_display_name(panel),
-                'description': resource_description or fallback_description,
-                'icon': get_app_icon(panel),
-                'url': _get_panel_url(panel),
-                'resources': []
-            }
-        elif resource_description and app_panels[panel]['description'] == fallback_description:
-            # Prefer seeded resource descriptions over generated fallback text.
-            app_panels[panel]['description'] = resource_description
-        app_panels[panel]['resources'].append(resource.name)
-    
-    # Convert to list for template
-    apps = list(app_panels.values())
+        apps.append({
+            'name': panel_name,
+            'display_name': panel['display_name'],
+            'description': panel['description'],
+            'icon': get_app_icon(panel_name),
+            'url': _get_panel_url(panel_name),
+            'resources': panel['resources'],
+        })
     
     return render_template(
         'dashboard.html',
@@ -3924,17 +4059,15 @@ def dashboard():
     )
 
 
-def get_app_icon(app_panel):
+def get_app_icon(panel_name):
     """Get icon emoji for app panel"""
     icons = {
         'admin': '⚙️',
-        'stat_manager': '📊',
+        'stat_editor': '📊',
         'team_manager': '👥',
-        'photo_manager': '📷',
-        'palmares_manager': '🏆',
         'release_manager': '📦',
     }
-    return icons.get(app_panel, '📁')
+    return icons.get(panel_name, '📁')
 
 
 @web_bp.route('/teams', methods=['GET', 'POST'])
@@ -4383,7 +4516,7 @@ def _save_team_panel_active_method(namespace, active_method):
 @login_required
 def stats_editor():
     """Stats editor panel with two methods: by race result and by ad-hoc list."""
-    if not _can_access_panel('stat_manager'):
+    if not _can_access_panel('stat_editor'):
         abort(403)
 
     available_namespaces = _get_accessible_namespaces()
@@ -4631,13 +4764,14 @@ def stats_editor():
         list_scope_status=list_scope_status,
         filter_choices=filter_choices,
         selected_filters=selected_filters,
+        can_create_stats=_can_create_stats(),
     )
 
 
 @web_bp.route('/stats-editor/lists/create', methods=['POST'])
 @login_required
 def stats_editor_create_list():
-    if not _can_access_panel('stat_manager'):
+    if not _can_create_stats():
         abort(403)
 
     list_name = (request.form.get('list_name', type=str) or '').strip()
@@ -4724,7 +4858,7 @@ def stats_editor_create_list():
 @web_bp.route('/stats-editor/lists/<int:list_id>/add-rider', methods=['POST'])
 @login_required
 def stats_editor_add_list_rider(list_id):
-    if not _can_access_panel('stat_manager'):
+    if not _can_access_panel('stat_editor'):
         abort(403)
 
     cdb_cyclist_id = request.form.get('cdb_cyclist_id', type=int)
@@ -4791,7 +4925,7 @@ def stats_editor_add_list_rider(list_id):
 @web_bp.route('/stats-editor/lists/<int:list_id>/toggle-rider', methods=['POST'])
 @login_required
 def stats_editor_toggle_list_rider(list_id):
-    if not _can_access_panel('stat_manager'):
+    if not _can_access_panel('stat_editor'):
         abort(403)
 
     cdb_cyclist_id = request.form.get('cdb_cyclist_id', type=int)
@@ -4888,7 +5022,7 @@ def stats_editor_toggle_list_rider(list_id):
 @web_bp.route('/stats-editor/lists/<int:list_id>')
 @login_required
 def stats_editor_list_detail(list_id):
-    if not _can_access_panel('stat_manager'):
+    if not _can_access_panel('stat_editor'):
         abort(403)
 
     available_namespaces = _get_accessible_namespaces()
@@ -5110,13 +5244,15 @@ def stats_editor_list_detail(list_id):
         scope_delta_status=scope_delta_status,
         stat_conflicts=stat_conflicts,
         stat_fields=STAT_DELTA_FIELDS,
+        can_approve_stats=_can_approve_stats(),
+        can_update_stats=_can_update_stats(),
     )
 
 
 @web_bp.route('/stats-editor/lists/<int:list_id>/save-stat-deltas', methods=['POST'])
 @login_required
 def stats_editor_save_list_stat_deltas(list_id):
-    if not _can_access_panel('stat_manager'):
+    if not _can_update_stats():
         abort(403)
 
     raw_changes = request.form.get('changes_json', type=str) or ''
@@ -5318,7 +5454,7 @@ def stats_editor_save_list_stat_deltas(list_id):
 @web_bp.route('/stats-editor/lists/<int:list_id>/approve-stat-deltas', methods=['POST'])
 @login_required
 def stats_editor_approve_list_stat_deltas(list_id):
-    if not _can_access_panel('stat_manager'):
+    if not _can_approve_stats():
         abort(403)
 
     available_namespaces = _get_accessible_namespaces()
@@ -5409,6 +5545,9 @@ def releases():
     selected_release_id = request.args.get('release_id', type=int)
 
     if request.method == 'POST' and active_tab == 'create':
+        if not current_user.has_permission('releases', 'create'):
+            abort(403)
+
         if selected_namespace is None:
             flash('Select a namespace before creating a release.', 'warning')
             return redirect(url_for('web.releases', tab='create'))
@@ -5490,6 +5629,9 @@ def releases():
 
     if request.method == 'POST' and active_tab == 'overview':
         if request.form.get('save_change_types'):
+            if not _can_update_releases():
+                abort(403)
+
             if selected_namespace is None:
                 flash('Select a namespace before editing release change types.', 'warning')
                 return redirect(url_for('web.releases', tab='overview', release_id=selected_release.id))
@@ -5507,6 +5649,9 @@ def releases():
             return redirect(url_for('web.releases', tab='overview', release_id=selected_release.id))
 
         if request.form.get('save_release_notes'):
+            if not _can_update_releases():
+                abort(403)
+
             selected_release.release_notes = (request.form.get('release_notes', type=str) or '').strip() or None
             try:
                 _update_namespace_release_fields(
@@ -5544,6 +5689,16 @@ def releases():
         if next_status not in allowed_transitions.get(current_status, set()):
             flash('Invalid release status transition.', 'warning')
             return redirect(url_for('web.releases', tab='overview', release_id=selected_release.id))
+
+        required_transition_actions = {
+            ('draft', 'review'): 'update',
+            ('review', 'draft'): 'update',
+            ('review', 'approved'): 'approve',
+            ('approved', 'published'): 'publish',
+        }
+        required_action = required_transition_actions.get((current_status, next_status))
+        if required_action and not current_user.has_permission('releases', required_action):
+            abort(403)
 
         review_build_result = None
         try:
@@ -5662,6 +5817,10 @@ def releases():
         stats_release_summary=stats_release_summary,
         stats_included_items=stats_included_items,
         release_files=release_files,
+        can_create_releases=current_user.has_permission('releases', 'create'),
+        can_update_releases=_can_update_releases(),
+        can_approve_releases=_can_approve_releases(),
+        can_publish_releases=_can_publish_releases(),
     )
 
 
@@ -5703,7 +5862,7 @@ def release_file_download(release_id, file_id):
 @login_required
 def stats_editor_race_detail(race_id, stage_id=None):
     """Race detail page with optional stage-specific view."""
-    if not _can_access_panel('stat_manager'):
+    if not _can_access_panel('stat_editor'):
         abort(403)
 
     race = FirstCyclingRace.query.options(
@@ -5909,6 +6068,9 @@ def stats_editor_race_detail(race_id, stage_id=None):
         stage_status_map=stage_status_map,
         selected_namespace=selected_namespace,
         stat_fields=STAT_DELTA_FIELDS,
+        can_approve_stats=_can_approve_stats(),
+        can_update_stats=_can_update_stats(),
+        can_download_stats=_can_download_stats(),
     )
 
 
@@ -5940,7 +6102,7 @@ def select_namespace():
 @login_required
 def stats_editor_get_result(race_id):
     """Fetch and persist race results for one race from FirstCycling."""
-    if not _can_access_panel('stat_manager'):
+    if not _can_download_stats():
         abort(403)
 
     race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
@@ -5981,7 +6143,7 @@ def stats_editor_get_result(race_id):
 @login_required
 def stats_editor_save_stat_deltas(race_id):
     """Persist edited stat deltas for this race into the selected namespace database."""
-    if not _can_access_panel('stat_manager'):
+    if not _can_update_stats():
         abort(403)
 
     race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
@@ -6219,7 +6381,7 @@ def stats_editor_save_stat_deltas(race_id):
 @login_required
 def stats_editor_approve_stat_deltas(race_id):
     """Mark saved stat deltas as approved for this race or selected stage scope."""
-    if not _can_access_panel('stat_manager'):
+    if not _can_approve_stats():
         abort(403)
 
     race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
@@ -6333,16 +6495,65 @@ def stats_editor_approve_stat_deltas(race_id):
 @admin_required
 def admin():
     """Admin panel home - redirect to users section"""
-    return redirect(url_for('web.admin_users'))
+    if _can_access_user_management():
+        return redirect(url_for('web.admin_users'))
+    return redirect(url_for('web.admin_namespaces'))
 
 
 @web_bp.route('/admin/users')
 @login_required
-@admin_required
+@user_management_required
 def admin_users():
     """Admin panel - Users"""
     users = User.query.order_by(User.created_at.desc()).all()
-    return render_template('admin/users.html', users=users, active_section='users')
+    roles = Role.query.order_by(Role.display_name.asc()).all()
+    return render_template(
+        'admin/users.html',
+        users=users,
+        roles=roles,
+        can_create_users=_can_create_users(),
+        can_update_users=_can_update_users(),
+        active_section='users',
+    )
+
+
+@web_bp.route('/admin/roles/<int:role_id>')
+@login_required
+def admin_role_detail(role_id):
+    """Admin panel - View role permissions and assigned users."""
+    if not _can_read_roles():
+        abort(403)
+
+    role = Role.query.get_or_404(role_id)
+    assigned_users = role.users.order_by(User.username.asc()).all() if hasattr(role, 'users') else []
+
+    permissions_by_resource = {}
+    for permission in role.permissions:
+        resource = permission.resource
+        action = permission.action
+        if resource is None or action is None:
+            continue
+
+        resource_entry = permissions_by_resource.setdefault(resource.name, {
+            'resource': resource,
+            'actions': [],
+        })
+        resource_entry['actions'].append(action)
+
+    permission_groups = sorted(
+        permissions_by_resource.values(),
+        key=lambda item: item['resource'].name or '',
+    )
+    for group in permission_groups:
+        group['actions'] = sorted(group['actions'], key=lambda action: action.name or '')
+
+    return render_template(
+        'admin/role_detail.html',
+        role=role,
+        assigned_users=assigned_users,
+        permission_groups=permission_groups,
+        active_section='users',
+    )
 
 
 @web_bp.route('/admin/namespaces')
@@ -6356,16 +6567,19 @@ def admin_namespaces():
 
 @web_bp.route('/admin/integrations')
 @login_required
-@admin_required
 def admin_integrations_index():
     """Redirect integrations index to the default provider view."""
     query_params = request.args.to_dict()
-    return redirect(url_for('web.admin_integrations', provider='firstcycling', **query_params))
+    provider_access = _integration_provider_access_map()
+    if provider_access.get('firstcycling'):
+        return redirect(url_for('web.admin_integrations', provider='firstcycling', **query_params))
+    if provider_access.get('discord'):
+        return redirect(url_for('web.admin_integrations', provider='discord', **query_params))
+    abort(403)
 
 
 @web_bp.route('/admin/integrations/<provider>', methods=['GET', 'POST'])
 @login_required
-@admin_required
 def admin_integrations(provider='firstcycling'):
     """Admin panel - integration controls and history."""
     requested_provider = (request.args.get('provider') or '').strip().lower()
@@ -6375,6 +6589,8 @@ def admin_integrations(provider='firstcycling'):
     provider = (provider or 'firstcycling').strip().lower()
     if provider not in INTEGRATION_PROVIDER_LABELS:
         abort(404)
+    if not _can_access_integrations_provider(provider):
+        abort(403)
 
     sync_view = (request.args.get('sync_view') or 'all').strip()
 
@@ -6393,6 +6609,9 @@ def admin_integrations(provider='firstcycling'):
     )
 
     if request.method == 'POST' and provider == 'discord':
+        if not _can_update_discord_integrations():
+            abort(403)
+
         if selected_namespace is None:
             flash('Select a namespace before saving Discord settings.', 'warning')
             return redirect(url_for('web.admin_integrations', provider='discord'))
@@ -6491,9 +6710,12 @@ def admin_integrations(provider='firstcycling'):
         active_section='integrations',
         active_provider=provider,
         integration_providers=INTEGRATION_PROVIDER_LABELS,
+        integration_provider_access=_integration_provider_access_map(),
         active_sync_view=sync_view,
         sync_views=EXTERNAL_SYNC_TYPE_LABELS,
         run_sync_types=EXTERNAL_SYNC_RUN_TYPES,
+        can_run_firstcycling_integrations=_can_run_firstcycling_integrations(),
+        can_update_discord_integrations=_can_update_discord_integrations(),
         sync_history=sync_history,
         configured_seasons=configured_seasons,
         selected_season=selected_season,
@@ -6515,7 +6737,6 @@ def admin_integrations(provider='firstcycling'):
 @web_bp.route('/admin/external-sync')
 @web_bp.route('/admin/external-sync/<provider>')
 @login_required
-@admin_required
 def admin_external_sync_redirect(provider='firstcycling'):
     """Redirect legacy external sync URLs to integrations URLs."""
     query_params = request.args.to_dict()
@@ -6525,13 +6746,14 @@ def admin_external_sync_redirect(provider='firstcycling'):
 @web_bp.route('/admin/integrations/run', methods=['POST'])
 @web_bp.route('/admin/external-sync/run', methods=['POST'])
 @login_required
-@admin_required
 def admin_integrations_run():
     """Queue one external sync type job and write execution history."""
     provider = (request.form.get('provider') or 'firstcycling').strip().lower()
     if provider != 'firstcycling':
         flash('This integration provider is scaffolded but not runnable yet.', 'info')
         return redirect(url_for('web.admin_integrations', provider=provider))
+    if not _can_run_firstcycling_integrations():
+        abort(403)
 
     sync_type = (request.form.get('sync_type') or '').strip()
     if sync_type not in EXTERNAL_SYNC_RUN_TYPES:
@@ -6724,12 +6946,8 @@ def admin_namespace_detail(namespace_id):
     """Admin panel - View and manage namespace details"""
     namespace = Namespace.query.get_or_404(namespace_id)
     
-    # Get all users who have access to this namespace
-    users_with_access = namespace.authorized_users.all() if hasattr(namespace, 'authorized_users') else []
-    
     return render_template('admin/namespace_detail.html',
                          namespace=namespace,
-                         users_with_access=users_with_access,
                          active_section='namespaces')
 
 
@@ -6738,6 +6956,9 @@ def admin_namespace_detail(namespace_id):
 @admin_required
 def admin_namespace_create():
     """Admin panel - Create new namespace"""
+    if not _can_create_namespaces():
+        abort(403)
+
     form = NamespaceForm()
     
     # Populate PCM version choices from config
@@ -6916,6 +7137,9 @@ def admin_namespace_create():
 @admin_required
 def admin_namespace_update_status(namespace_id):
     """Admin panel - Update namespace status"""
+    if not _can_update_namespaces():
+        abort(403)
+
     namespace = Namespace.query.get_or_404(namespace_id)
     new_status = request.form.get('status')
     
@@ -6935,9 +7159,12 @@ def admin_namespace_update_status(namespace_id):
 
 @web_bp.route('/admin/users/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_create():
     """Admin panel - Create new user"""
+    if not _can_create_users():
+        abort(403)
+
     form = UserCreateForm()
     
     if form.validate_on_submit():
@@ -6979,35 +7206,35 @@ def admin_user_create():
 
 @web_bp.route('/admin/user/<int:user_id>')
 @login_required
-@admin_required
+@user_management_required
 def admin_user_detail(user_id):
     """Admin panel - View and manage user details"""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
     
     # Get all roles for assignment
     all_roles = Role.query.order_by(Role.display_name).all()
-    
-    # Get all namespaces for assignment
-    all_namespaces = Namespace.query.order_by(Namespace.name).all()
-    
-    # Get user's current roles and namespaces
+
+    # Get user's current roles
     user_roles = user.roles.all() if hasattr(user, 'roles') else []
-    user_namespaces = user.accessible_namespaces.all() if hasattr(user, 'accessible_namespaces') else []
     
     return render_template('admin/user_detail.html', 
                          user=user, 
                          all_roles=all_roles,
-                         all_namespaces=all_namespaces,
                          user_roles=user_roles,
-                         user_namespaces=user_namespaces,
                          active_section='users')
 
 
 @web_bp.route('/admin/user/<int:user_id>/toggle-status', methods=['POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_toggle_status(user_id):
     """Admin panel - Toggle user active status"""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
     
     # Prevent deactivating yourself
@@ -7025,10 +7252,16 @@ def admin_user_toggle_status(user_id):
 
 @web_bp.route('/admin/user/<int:user_id>/reset-password', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_reset_password(user_id):
     """Admin panel - Issue a one-time user password reset link."""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
+    if user.is_superadmin:
+        abort(403)
+
     form = AdminPasswordResetForm()
     reset_url = None
 
@@ -7058,9 +7291,12 @@ def admin_user_reset_password(user_id):
 
 @web_bp.route('/admin/user/<int:user_id>/discord-id', methods=['POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_update_discord_id(user_id):
     """Admin panel - update a user's Discord identity binding."""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
     discord_user_id = (request.form.get('discord_user_id') or '').strip() or None
 
@@ -7099,10 +7335,16 @@ def admin_user_update_discord_id(user_id):
 
 @web_bp.route('/admin/user/<int:user_id>/add-role', methods=['POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_add_role(user_id):
     """Admin panel - Add role to user"""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
+    if user.is_superadmin:
+        abort(403)
+
     role_id = request.form.get('role_id')
     
     if not role_id:
@@ -7136,9 +7378,12 @@ def admin_user_add_role(user_id):
 
 @web_bp.route('/admin/user/<int:user_id>/remove-role/<int:role_id>', methods=['POST'])
 @login_required
-@admin_required
+@user_management_required
 def admin_user_remove_role(user_id, role_id):
     """Admin panel - Remove role from user"""
+    if not _can_update_users():
+        abort(403)
+
     user = User.query.get_or_404(user_id)
     role = Role.query.get_or_404(role_id)
     
@@ -7160,73 +7405,6 @@ def admin_user_remove_role(user_id, role_id):
         flash(f'Role "{role.display_name}" removed from user "{user.username}"', 'success')
     else:
         flash(f'User does not have the "{role.display_name}" role', 'warning')
-    
-    return redirect(url_for('web.admin_user_detail', user_id=user_id))
-
-
-@web_bp.route('/admin/user/<int:user_id>/add-namespace', methods=['POST'])
-@login_required
-@admin_required
-def admin_user_add_namespace(user_id):
-    """Admin panel - Grant namespace access to user"""
-    user = User.query.get_or_404(user_id)
-    namespace_id = request.form.get('namespace_id')
-    
-    if not namespace_id:
-        flash('No namespace selected', 'error')
-        return redirect(url_for('web.admin_user_detail', user_id=user_id))
-    
-    namespace = Namespace.query.get_or_404(namespace_id)
-    
-    # Check if user already has access
-    if user.accessible_namespaces.filter_by(id=namespace.id).first():
-        flash(f'User already has access to "{namespace.name}"', 'warning')
-    else:
-        user.accessible_namespaces.append(namespace)
-        
-        # Log namespace access granted
-        AuditLog.log_action(
-            action=AuditAction.USER_NAMESPACE_ACCESS_GRANTED,
-            user=current_user,
-            resource_type='user',
-            resource_id=user.id,
-            resource_name=user.username,
-            details={'namespace': namespace.name, 'namespace_id': namespace.id},
-            ip_address=request.remote_addr
-        )
-        
-        db.session.commit()
-        flash(f'Access to namespace "{namespace.name}" granted to user "{user.username}"', 'success')
-    
-    return redirect(url_for('web.admin_user_detail', user_id=user_id))
-
-
-@web_bp.route('/admin/user/<int:user_id>/remove-namespace/<int:namespace_id>', methods=['POST'])
-@login_required
-@admin_required
-def admin_user_remove_namespace(user_id, namespace_id):
-    """Admin panel - Revoke namespace access from user"""
-    user = User.query.get_or_404(user_id)
-    namespace = Namespace.query.get_or_404(namespace_id)
-    
-    if user.accessible_namespaces.filter_by(id=namespace.id).first():
-        user.accessible_namespaces.remove(namespace)
-        
-        # Log namespace access revoked
-        AuditLog.log_action(
-            action=AuditAction.USER_NAMESPACE_ACCESS_REVOKED,
-            user=current_user,
-            resource_type='user',
-            resource_id=user.id,
-            resource_name=user.username,
-            details={'namespace': namespace.name, 'namespace_id': namespace.id},
-            ip_address=request.remote_addr
-        )
-        
-        db.session.commit()
-        flash(f'Access to namespace "{namespace.name}" revoked from user "{user.username}"', 'success')
-    else:
-        flash(f'User does not have access to "{namespace.name}"', 'warning')
     
     return redirect(url_for('web.admin_user_detail', user_id=user_id))
 

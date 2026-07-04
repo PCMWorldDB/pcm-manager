@@ -1,4 +1,10 @@
 PCM_VERSION_MAPPINGS:
+  PCM2026:
+    cyclist: v1
+    team: v1
+    country: v1
+    division: v1
+    region: v1
   PCM2025:
     cyclist: v1
     team: v1

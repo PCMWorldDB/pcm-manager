@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+
+{% set page_title = selected_page.title if selected_page else selected_section.title if selected_section else 'Wiki' %}
+{% block title %}{{ page_title }} - WDB Wiki{% endblock %}
+
+{% block styles %}
+.wiki-shell {
+    max-width: 1040px;
+    margin: 0 auto 48px;
+}
+.wiki-header {
+    margin-bottom: 24px;
+}
+.wiki-eyebrow {
+    color: #6b7280;
+    font-size: 0.84rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+}
+.wiki-header h2 {
+    color: #1f2937;
+    font-size: 1.9rem;
+    margin-bottom: 8px;
+}
+.wiki-header p {
+    color: #6b7280;
+    max-width: 760px;
+    margin-bottom: 0;
+}
+.wiki-layout {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+}
+.wiki-nav {
+    position: sticky;
+    top: 20px;
+}
+.wiki-nav-title {
+    color: #4b5563;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+}
+.wiki-nav-group {
+    margin-bottom: 14px;
+}
+.wiki-nav-parent,
+.wiki-nav-child,
+.wiki-nav-grandchild {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+}
+.wiki-nav-parent {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+    font-weight: 700;
+    padding: 9px 11px;
+}
+.wiki-nav-child,
+.wiki-nav-grandchild {
+    border-left: 2px solid #d1d5db;
+    color: #4b5563;
+    padding: 7px 0 7px 12px;
+}
+.wiki-nav-child {
+    margin-left: 12px;
+}
+.wiki-nav-grandchild {
+    margin-left: 28px;
+}
+.wiki-nav-parent:hover,
+.wiki-nav-child:hover,
+.wiki-nav-grandchild:hover,
+.wiki-nav-parent.active,
+.wiki-nav-child.active,
+.wiki-nav-grandchild.active {
+    color: var(--brand-primary);
+}
+.wiki-nav-parent.active {
+    border-color: var(--brand-primary-border);
+    background: var(--brand-primary-soft);
+}
+.wiki-nav-child.active,
+.wiki-nav-grandchild.active {
+    border-left-color: var(--brand-primary);
+    font-weight: 700;
+}
+.wiki-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+.wiki-card {
+    display: block;
+    height: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+.wiki-card h3,
+.wiki-card h4 {
+    color: #111827;
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+}
+.wiki-card p {
+    color: #6b7280;
+    margin-bottom: 0;
+}
+.wiki-page h3 {
+    color: #1f2937;
+    font-size: 1.2rem;
+    margin: 22px 0 12px;
+}
+.wiki-page h2 {
+    color: #1f2937;
+    font-size: 1.4rem;
+    margin: 0 0 14px;
+}
+.wiki-page ol,
+.wiki-page ul {
+    padding-left: 1.4rem;
+}
+.wiki-page li {
+    margin-bottom: 8px;
+}
+.wiki-note {
+    border-left: 3px solid var(--brand-primary);
+    padding: 10px 14px;
+    background: #f8f9fa;
+    color: #4b5563;
+    margin-top: 18px;
+}
+.wiki-breadcrumbs {
+    color: #6b7280;
+    font-size: 0.92rem;
+    margin-bottom: 16px;
+}
+.wiki-breadcrumbs a {
+    color: inherit;
+}
+body.dark-mode .wiki-eyebrow,
+body.dark-mode .wiki-header p,
+body.dark-mode .wiki-nav-title,
+body.dark-mode .wiki-nav-child,
+body.dark-mode .wiki-nav-grandchild,
+body.dark-mode .wiki-card p,
+body.dark-mode .wiki-breadcrumbs {
+    color: #d1d5db;
+}
+body.dark-mode .wiki-header h2,
+body.dark-mode .wiki-card h3,
+body.dark-mode .wiki-card h4,
+body.dark-mode .wiki-page h2,
+body.dark-mode .wiki-page h3 {
+    color: #f9fafb;
+}
+body.dark-mode .wiki-nav-parent {
+    background: #374151;
+    border-color: #4b5563;
+}
+body.dark-mode .wiki-nav-parent.active {
+    background: #4b5563;
+    border-color: #6b7280;
+}
+body.dark-mode .wiki-note {
+    background: #232a36;
+    color: #d1d5db;
+    border-left-color: var(--brand-primary-border);
+}
+@media (max-width: 800px) {
+    .wiki-layout {
+        grid-template-columns: 1fr;
+    }
+    .wiki-nav {
+        position: static;
+    }
+}
+{% endblock %}
+
+{% block content %}
+<div class="wiki-shell">
+    <div class="wiki-header">
+        <div class="wiki-eyebrow">WorldDB Online Wiki</div>
+        <h2>{{ page_title }}</h2>
+        {% if selected_page %}
+        <p>{{ selected_page.summary }}</p>
+        {% elif selected_section %}
+        <p>{{ selected_section.description }}</p>
+        {% else %}
+        <p>User and admin documentation for common WorldDB Online workflows.</p>
+        {% endif %}
+    </div>
+
+    <div class="wiki-layout">
+        <nav class="wiki-nav" aria-label="Wiki navigation">
+            <p class="wiki-nav-title">Pages</p>
+            {% for section in wiki_sections %}
+            <div class="wiki-nav-group">
+                <a class="wiki-nav-parent {% if selected_section and selected_section.slug == section.slug and not selected_page %}active{% endif %}" href="{{ url_for('web.wiki', section_slug=section.slug) }}">{{ section.title }}</a>
+                {% for page in section.pages %}
+                <a class="wiki-nav-child {% if selected_page and selected_page.path == page.path %}active{% endif %}" href="{{ url_for('web.wiki', section_slug=section.slug, page_path=page.path) }}">{{ page.title }}</a>
+                    {% for child_page in page.pages or [] %}
+                    <a class="wiki-nav-grandchild {% if selected_page and selected_page.path == child_page.path %}active{% endif %}" href="{{ url_for('web.wiki', section_slug=section.slug, page_path=child_page.path) }}">{{ child_page.title }}</a>
+                    {% endfor %}
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </nav>
+
+        <main>
+            <div class="wiki-breadcrumbs">
+                <a href="{{ url_for('web.wiki') }}">Wiki</a>
+                {% if selected_section %} / <a href="{{ url_for('web.wiki', section_slug=selected_section.slug) }}">{{ selected_section.title }}</a>{% endif %}
+                {% if selected_page %} / {{ selected_page.title }}{% endif %}
+            </div>
+
+            {% if selected_page %}
+                {% if page_content %}
+            <article class="card panel-card wiki-page">
+                <div class="card-body">
+                    {{ page_content }}
+                </div>
+            </article>
+                {% else %}
+            <div class="wiki-grid">
+                {% for page in selected_page.pages or [] %}
+                <a class="card panel-card wiki-card" href="{{ url_for('web.wiki', section_slug=selected_section.slug, page_path=page.path) }}">
+                    <div class="card-body">
+                        <h3>{{ page.title }}</h3>
+                        <p>{{ page.summary }}</p>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+                {% endif %}
+            {% elif selected_section %}
+            <div class="wiki-grid">
+                {% for page in selected_section.pages %}
+                <a class="card panel-card wiki-card" href="{{ url_for('web.wiki', section_slug=selected_section.slug, page_path=page.path) }}">
+                    <div class="card-body">
+                        <h3>{{ page.title }}</h3>
+                        <p>{{ page.summary }}</p>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="wiki-grid">
+                {% for section in wiki_sections %}
+                <a class="card panel-card wiki-card" href="{{ url_for('web.wiki', section_slug=section.slug) }}">
+                    <div class="card-body">
+                        <h3>{{ section.title }}</h3>
+                        <p>{{ section.description }}</p>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </main>
+    </div>
+</div>
+{% endblock %}

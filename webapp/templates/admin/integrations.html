@@ -2,8 +2,39 @@
 
 {% block title %}Admin - Integrations{% endblock %}
 
+{% block styles %}
+    body.dark-mode .admin-integrations .bg-light {
+        background: #1f2937 !important;
+        color: #e5e7eb;
+    }
+
+    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active),
+    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active) {
+        color: #d1d5db;
+    }
+
+    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active):hover,
+    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active):focus,
+    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):hover,
+    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):focus {
+        background: #374151;
+        border-color: #4b5563;
+        color: #ffffff;
+    }
+
+    body.dark-mode .admin-integrations .nav-tabs {
+        border-bottom-color: #4b5563;
+    }
+
+    body.dark-mode .admin-integrations .nav-tabs .nav-link.active {
+        background: #374151;
+        border-color: #4b5563 #4b5563 #374151;
+        color: #ffffff;
+    }
+{% endblock %}
+
 {% block content %}
-<div class="container mt-4">
+<div class="container mt-4 admin-integrations">
     <div class="card mb-3">
         <div class="card-header bg-primary text-white">
             <h4 class="mb-0">🔌 Integrations</h4>
@@ -11,12 +42,14 @@
         <div class="card-body">
             <ul class="nav nav-pills gap-2 mb-4">
                 {% for provider_key, provider_label in integration_providers.items() %}
+                {% if integration_provider_access.get(provider_key) %}
                 <li class="nav-item">
                     <a class="nav-link {% if active_provider == provider_key %}active{% endif %}"
                        href="{{ url_for('web.admin_integrations', provider=provider_key) }}">
                         {{ provider_label }}
                     </a>
                 </li>
+                {% endif %}
                 {% endfor %}
             </ul>
 
@@ -112,10 +145,13 @@
                                     </div>
                                 </div>
                                 {% endif %}
-                                <button type="submit" class="btn btn-primary">
-                                    Start Sync - {{ sync_type_display(active_sync_view) }}
+                                <button type="submit" class="btn btn-primary" {% if not can_run_firstcycling_integrations %}disabled title="Start Sync locked"{% endif %}>
+                                    Start Sync - {{ sync_type_display(active_sync_view) }}{% if not can_run_firstcycling_integrations %} &#128274;{% endif %}
                                 </button>
                             </form>
+                            {% if not can_run_firstcycling_integrations %}
+                            <div class="text-muted small mb-2">You do not have permission to run FirstCycling syncs.</div>
+                            {% endif %}
                         {% else %}
                             <div class="alert alert-danger mb-0">
                                 Select a valid season to run this sync.
@@ -251,9 +287,9 @@
                                                 <input name="approver_role_id" type="text" class="form-control form-control-sm" value="{{ setting.approver_role_id or '' }}" placeholder="Role ID">
                                             </td>
                                             <td class="text-nowrap">
-                                                <button type="submit" name="action" value="save" class="btn btn-sm btn-primary">Save</button>
-                                                <button type="submit" name="action" value="test" class="btn btn-sm btn-outline-primary">Test</button>
-                                                <button type="submit" name="action" value="delete" class="btn btn-sm btn-outline-danger">Delete</button>
+                                                <button type="submit" name="action" value="save" class="btn btn-sm btn-primary" {% if not can_update_discord_integrations %}disabled title="Save locked"{% endif %}>Save{% if not can_update_discord_integrations %} &#128274;{% endif %}</button>
+                                                <button type="submit" name="action" value="test" class="btn btn-sm btn-outline-primary" {% if not can_update_discord_integrations %}disabled title="Test locked"{% endif %}>Test{% if not can_update_discord_integrations %} &#128274;{% endif %}</button>
+                                                <button type="submit" name="action" value="delete" class="btn btn-sm btn-outline-danger" {% if not can_update_discord_integrations %}disabled title="Delete locked"{% endif %}>Delete{% if not can_update_discord_integrations %} &#128274;{% endif %}</button>
                                             </td>
                                         </form>
                                     </tr>
@@ -294,8 +330,8 @@
                                     <input id="approver_role_id" name="approver_role_id" type="text" class="form-control" placeholder="Discord role ID for mentions">
                                 </div>
                                 <div class="col-12">
-                                    <button type="submit" name="action" value="save" class="btn btn-primary">Add Workflow Target</button>
-                                    <button type="submit" name="action" value="test" class="btn btn-outline-primary ms-2">Test</button>
+                                    <button type="submit" name="action" value="save" class="btn btn-primary" {% if not can_update_discord_integrations %}disabled title="Add Workflow Target locked"{% endif %}>Add Workflow Target{% if not can_update_discord_integrations %} &#128274;{% endif %}</button>
+                                    <button type="submit" name="action" value="test" class="btn btn-outline-primary ms-2" {% if not can_update_discord_integrations %}disabled title="Test locked"{% endif %}>Test{% if not can_update_discord_integrations %} &#128274;{% endif %}</button>
                                 </div>
                             </div>
                         </form>
