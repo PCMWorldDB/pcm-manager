@@ -468,20 +468,9 @@ body.dark-mode .stat-input-row {
                         <th class="sortable-col" data-sort-type="text">Rider</th>
                         <th class="sortable-col" data-sort-type="text">Team</th>
                         <th>Time</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">MO</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">MM</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">DH</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">HIL</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">TT</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">PRL</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">FLA</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">SPR</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">ACC</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">END</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">RES</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">REC</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">COB</th>
-                        <th class="stat-col sortable-col" data-sort-type="number">ATT</th>
+                        {% for stat_key in stat_fields %}
+                        <th class="stat-col sortable-col" data-sort-type="number">{{ stat_key|upper }}</th>
+                        {% endfor %}
                     </tr>
                 </thead>
                 <tbody>
