@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     libpq-dev \
     curl \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
