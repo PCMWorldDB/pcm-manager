@@ -4350,7 +4350,6 @@ def rider_detail(rider_id):
 
 STATS_EDITOR_FILTER_FIELDS = (
     'race_name',
-    'category',
     'classification',
     'nation',
     'start_date_from',
@@ -4366,7 +4365,6 @@ def _stats_editor_session_key(namespace):
 def _default_stats_editor_race_filters():
     return {
         'race_name': '',
-        'category': 'ME',
         'classification': '',
         'nation': '',
         'start_date_from': '',
@@ -4546,7 +4544,6 @@ def stats_editor():
         'unapproved_changes': 0,
     }
     filter_choices = {
-        'categories': [],
         'classifications': [],
         'nations': [],
     }
@@ -4565,10 +4562,6 @@ def stats_editor():
             gender=selected_gender,
         )
 
-        filter_choices['categories'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.category).distinct().order_by(FirstCyclingRace.category).all()
-            if value
-        ]
         filter_choices['classifications'] = [
             value for (value,) in base_query.with_entities(FirstCyclingRace.classification).distinct().order_by(FirstCyclingRace.classification).all()
             if value
@@ -4577,17 +4570,6 @@ def stats_editor():
             value for (value,) in base_query.with_entities(FirstCyclingRace.nation_name).distinct().order_by(FirstCyclingRace.nation_name).all()
             if value
         ]
-
-        if selected_filters['category']:
-            default_category_match = next(
-                (
-                    value
-                    for value in filter_choices['categories']
-                    if value.strip().lower() == selected_filters['category'].strip().lower()
-                ),
-                None,
-            )
-            selected_filters['category'] = default_category_match or ''
 
         if selected_filters['classification']:
             wanted = selected_filters['classification'].replace(' ', '').strip().lower()
@@ -4605,8 +4587,6 @@ def stats_editor():
 
         if selected_filters['race_name']:
             query = query.filter(FirstCyclingRace.name.ilike(f"%{selected_filters['race_name']}%"))
-        if selected_filters['category']:
-            query = query.filter(FirstCyclingRace.category == selected_filters['category'])
         if selected_filters['classification']:
             query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
         if selected_filters['nation']:
