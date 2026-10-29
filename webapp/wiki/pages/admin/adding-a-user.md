@@ -1,4 +1,4 @@
-## Steps
+## Adding a User
 
 1. Open Settings, then select Users & Roles.
 2. Select Create User.

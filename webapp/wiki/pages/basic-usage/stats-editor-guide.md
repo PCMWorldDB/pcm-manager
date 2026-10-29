@@ -1,6 +1,10 @@
-## Steps
+## Stats Editor Guide
 
-Riders can be selected for editing by selecting a race result or creating a rider list
+Rider Stats can be edited with two methods:
+
+1. From a Race Result
+2. Individually by adding riders to a list 
+
 
 1. Open Stats Editor.
 2. Use race results or stat lists to find riders that need updates.
@@ -14,4 +18,4 @@ If configured a new discord thread will be started once changes are saved alerti
 
 ## Edits for Multi-Day Races
 
-Tours and multi-day races are not edited per-stage but only once at the completion of the tour. 
+For multi-day races, stat edits throughout the event are cummulative and commited only once the race has concluded.
