@@ -200,7 +200,7 @@
                         </td>
                         <td data-sort-value="{{ (race.nation_name or '')|lower }}">{{ race.nation_name or '-' }}</td>
                         <td data-sort-value="{{ (race.category or '')|lower }}">{{ race.category or '-' }}</td>
-                        <td data-sort-value="{{ (race.classification_label or '')|lower }}">{{ race.classification_label or '-' }}</td>
+                        <td data-sort-value="{{ (race.classification or '')|lower }}">{{ race.classification or '-' }}</td>
                     </tr>
 
                     {% if has_stages %}

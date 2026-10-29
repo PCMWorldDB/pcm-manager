@@ -23,6 +23,32 @@
                         {% endif %}
                     </div>
                     <div class="col-md-6">
+                        <h6>Roles</h6>
+                        {% if user_roles %}
+                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                {% for role in user_roles %}
+                                    <a href="{{ url_for('web.admin_role_detail', role_id=role.id) }}" class="badge bg-secondary text-decoration-none">
+                                        {{ role.display_name or role.name }}
+                                    </a>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <p class="text-muted mb-3">No roles assigned.</p>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Appearance</h6>
+                        <button type="button" class="dark-mode-toggle" id="darkModeToggle" role="switch" aria-checked="false">
+                            <span>Dark Mode</span>
+                            <span class="toggle-switch" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="my-4">
+
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
                         <h6>Last Login</h6>
                         {% if user.last_login %}
                             {{ user.last_login.strftime('%Y-%m-%d %H:%M UTC') }}
@@ -34,6 +60,9 @@
                         <h6>Created</h6>
                         {{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '-' }}
                     </div>
+                </div>
+
+                <div class="row g-3 mb-4">
                     <div class="col-md-6">
                         <h6>Discord Recovery</h6>
                         {% if user.discord_user_id %}
@@ -44,25 +73,11 @@
                     </div>
                 </div>
 
-                <hr>
-
-                <h6>Roles</h6>
-                {% if user_roles %}
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        {% for role in user_roles %}
-                            <a href="{{ url_for('web.admin_role_detail', role_id=role.id) }}" class="badge bg-secondary text-decoration-none">
-                                {{ role.display_name or role.name }}
-                            </a>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    <p class="text-muted mb-3">No roles assigned.</p>
-                {% endif %}
-
-                <div class="d-flex gap-2">
+                <div class="d-flex flex-wrap gap-2 mb-4">
                     <a href="{{ url_for('web.change_password') }}" class="btn btn-primary">Change Password</a>
-                    <a href="{{ url_for('web.dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+                    <a href="{{ url_for('web.logout') }}" class="btn btn-outline-danger">Logout</a>
                 </div>
+
             </div>
         </div>
     </div>

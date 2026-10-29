@@ -39,7 +39,7 @@ from webapp.integrations.discord import (
     notify_discord_stat_list_saved,
     test_discord_channel_permissions,
 )
-from webapp.integrations.firstcycling import FirstCyclingClient, FirstCyclingAPIError
+from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.models.main.firstcycling import FirstCyclingRaceStage
 from webapp.models.ns.schema import get_field_mapping
@@ -4367,7 +4367,7 @@ def _default_stats_editor_race_filters():
     return {
         'race_name': '',
         'category': 'ME',
-        'classification': 'WorldTour',
+        'classification': '',
         'nation': '',
         'start_date_from': '',
         'start_date_to': '',
@@ -4570,7 +4570,7 @@ def stats_editor():
             if value
         ]
         filter_choices['classifications'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.classification_label).distinct().order_by(FirstCyclingRace.classification_label).all()
+            value for (value,) in base_query.with_entities(FirstCyclingRace.classification).distinct().order_by(FirstCyclingRace.classification).all()
             if value
         ]
         filter_choices['nations'] = [
@@ -4608,7 +4608,7 @@ def stats_editor():
         if selected_filters['category']:
             query = query.filter(FirstCyclingRace.category == selected_filters['category'])
         if selected_filters['classification']:
-            query = query.filter(FirstCyclingRace.classification_label == selected_filters['classification'])
+            query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
         if selected_filters['nation']:
             query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation'])
 
@@ -6045,6 +6045,13 @@ def stats_editor_race_detail(race_id, stage_id=None):
     )
 
 
+@web_bp.route('/namespaces')
+@login_required
+def namespaces():
+    """List the namespaces the current user can select."""
+    return render_template('namespaces.html')
+
+
 @web_bp.route('/namespace/select', methods=['POST'])
 @login_required
 def select_namespace():
@@ -6461,14 +6468,24 @@ def stats_editor_approve_stat_deltas(race_id):
 
 # ==================== Admin Panel Routes ====================
 
+@web_bp.route('/settings')
+@login_required
+def settings():
+    """Central directory of administration and configuration options."""
+    return render_template(
+        'settings.html',
+        can_manage_users=_can_access_user_management(),
+        can_manage_namespaces=_can_access_namespace_management(),
+        provider_access=_integration_provider_access_map(),
+    )
+
+
 @web_bp.route('/admin')
 @login_required
 @admin_required
 def admin():
-    """Admin panel home - redirect to users section"""
-    if _can_access_user_management():
-        return redirect(url_for('web.admin_users'))
-    return redirect(url_for('web.admin_namespaces'))
+    """Keep the legacy admin entry point linked to Settings."""
+    return redirect(url_for('web.settings'))
 
 
 @web_bp.route('/admin/users')

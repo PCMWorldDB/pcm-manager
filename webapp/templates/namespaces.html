@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Namespaces{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10">
+        <h2 class="mb-2">Namespaces</h2>
+        <p class="text-muted mb-4">Choose the CDB namespace to use across WorldDB.</p>
+        {% if available_namespaces %}
+        <div class="list-group">
+            {% for namespace in available_namespaces %}
+            <div class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-3 py-3">
+                <div>
+                    <h5 class="mb-1">{{ namespace.name }}</h5>
+                    <p class="text-muted mb-1">{{ namespace.pcm_version or 'PCM version not set' }} &middot; {{ namespace.database_year or 'Year not set' }} &middot; {{ namespace.gender or 'Men' }}</p>
+                    {% if namespace.description %}
+                    <p class="mb-0">{{ namespace.description }}</p>
+                    {% endif %}
+                </div>
+                {% if selected_namespace and selected_namespace.id == namespace.id %}
+                <span class="badge bg-success">Selected</span>
+                {% else %}
+                <form method="post" action="{{ url_for('web.select_namespace') }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="namespace_id" value="{{ namespace.id }}">
+                    <input type="hidden" name="next" value="{{ url_for('web.namespaces') }}">
+                    <button type="submit" class="btn btn-outline-primary" aria-label="Select {{ namespace.name }}">Select</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="alert alert-info">No namespaces are available for your account.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

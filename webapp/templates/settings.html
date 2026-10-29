@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+{% macro settings_item(title, description, endpoint, allowed, provider=none) %}
+    {% if allowed %}
+    <a href="{{ url_for(endpoint, provider=provider) if provider else url_for(endpoint) }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3 py-3">
+        <div>
+            <h6 class="mb-1">{{ title }}</h6>
+            <p class="mb-0 text-muted">{{ description }}</p>
+        </div>
+        <span aria-hidden="true">&rarr;</span>
+    </a>
+    {% else %}
+    <div class="list-group-item d-flex justify-content-between align-items-center gap-3 py-3">
+        <div>
+            <h6 class="mb-1">{{ title }}</h6>
+            <p class="mb-0 text-muted">{{ description }}</p>
+        </div>
+        <span class="badge bg-secondary">Locked</span>
+    </div>
+    {% endif %}
+{% endmacro %}
+
+<div class="row justify-content-center">
+    <div class="col-xl-10">
+        <h2 class="mb-2">Settings</h2>
+        <p class="text-muted mb-4">Manage users, namespaces, and integrations. Access depends on your assigned permissions.</p>
+
+        <section class="card mb-4" aria-labelledby="administration-heading">
+            <div class="card-header">
+                <h5 class="mb-0" id="administration-heading">Administration</h5>
+            </div>
+            <div class="list-group list-group-flush">
+                {{ settings_item('Users & Roles', 'Manage user access, account status, and role assignments. Review role permissions.', 'web.admin_users', can_manage_users) }}
+                {{ settings_item('Namespaces', 'Manage maintained CDB instances, create namespaces, and update their status.', 'web.admin_namespaces', can_manage_namespaces) }}
+            </div>
+        </section>
+
+        <section class="card mb-4" aria-labelledby="integrations-heading">
+            <div class="card-header">
+                <h5 class="mb-0" id="integrations-heading">Integrations</h5>
+            </div>
+            <div class="list-group list-group-flush">
+                {{ settings_item('FirstCycling', 'Run synchronization tasks and review task status and history.', 'web.admin_integrations', provider_access.get('firstcycling'), 'firstcycling') }}
+                {{ settings_item('Discord', 'Configure namespace workflow channels and approver roles, and review integration activity.', 'web.admin_integrations', provider_access.get('discord'), 'discord') }}
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

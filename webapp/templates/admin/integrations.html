@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Admin - Integrations{% endblock %}
+{% block title %}{{ integration_providers.get(active_provider, 'Integration') }} - Settings{% endblock %}
 
 {% block styles %}
     body.dark-mode .admin-integrations .bg-light {
@@ -8,13 +8,10 @@
         color: #e5e7eb;
     }
 
-    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active),
     body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active) {
         color: #d1d5db;
     }
 
-    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active):hover,
-    body.dark-mode .admin-integrations .nav-pills .nav-link:not(.active):focus,
     body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):hover,
     body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):focus {
         background: #374151;
@@ -37,22 +34,9 @@
 <div class="container mt-4 admin-integrations">
     <div class="card mb-3">
         <div class="card-header bg-primary text-white">
-            <h4 class="mb-0">🔌 Integrations</h4>
+            <h4 class="mb-0">{{ integration_providers.get(active_provider, 'Integration') }}</h4>
         </div>
         <div class="card-body">
-            <ul class="nav nav-pills gap-2 mb-4">
-                {% for provider_key, provider_label in integration_providers.items() %}
-                {% if integration_provider_access.get(provider_key) %}
-                <li class="nav-item">
-                    <a class="nav-link {% if active_provider == provider_key %}active{% endif %}"
-                       href="{{ url_for('web.admin_integrations', provider=provider_key) }}">
-                        {{ provider_label }}
-                    </a>
-                </li>
-                {% endif %}
-                {% endfor %}
-            </ul>
-
             {% if active_provider == 'firstcycling' %}
                 {% set selected_year = selected_season.year if selected_season else None %}
                 {% set selected_gender = selected_season.gender if selected_season else None %}
