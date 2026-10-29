@@ -55,7 +55,37 @@ Create separate active branch rulesets under **Settings → Rules → Rulesets**
 
 Leave **Restrict updates** disabled so normal pull request merges are allowed. Leave linear history, signed commits, and required deployments disabled unless the project deliberately adopts those requirements. Requiring linear history would conflict with the merge-commit promotion described above.
 
-The current image build workflow runs after pushes, not on pull requests. Do not select those image builds as required pre-merge checks; add suitable pull request checks first. With zero required approvals, a solo maintainer can still merge their own pull requests.
+The image publishing workflow runs after pushes. Use the checks from `.github/workflows/pr-checks.yml` as required pre-merge checks on both branches: **Python checks**, **PostgreSQL regression tests**, **Container build**, **Secret scan**, and **Dependency audit**. Run the workflow once so GitHub can offer these names in the ruleset settings. With zero required approvals, a solo maintainer can still merge their own pull requests.
+
+## Automated checks
+
+PR checks run on GitHub-hosted Ubuntu runners using `pull_request`, read-only repository permissions, and checkout without persisted credentials. They use disposable PostgreSQL 15 databases and synthetic fixtures, with no production secrets, external API calls, image publishing, or home lab runners. Keep contributor code out of privileged `pull_request_target` workflows. See [GitHub's security guidance](https://docs.github.com/en/actions/reference/security/secure-use).
+
+The checks include Python compilation, selected Ruff correctness rules, PostgreSQL regression tests, a build of the production Dockerfile, a redacted Gitleaks scan of Git history, and pip-audit of resolved application requirements. Findings fail their respective jobs; there is no vulnerability suppression baseline. Existing dependency vulnerabilities must be addressed before making Dependency audit a required passing check. Dependabot opens weekly dependency and Actions updates.
+
+To run the Python checks locally with Python 3.11:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m compileall -q webapp wsgi.py tests
+ruff check webapp wsgi.py tests
+python -m pip_audit -r requirements.txt --strict --progress-spinner off
+```
+
+For regression tests, start a **disposable** PostgreSQL server with a user allowed to create databases and install `pg_trgm`. Do not use an existing development or production server. The suite initializes the `main` schema in `worlddb_test`, creates temporary namespace databases, and writes release files under a temporary directory. It deliberately does not read `.env`. Set the dedicated test variable before running:
+
+```bash
+export WORLDDB_TEST_DATABASE_URL=postgresql://worlddb_test:ci-only-password@localhost:5432/worlddb_test
+python -m pytest
+```
+
+In PowerShell, use `$env:WORLDDB_TEST_DATABASE_URL = 'postgresql://worlddb_test:ci-only-password@localhost:5432/worlddb_test'`. The database name must be `worlddb_test`; missing configuration fails rather than silently skipping integration tests. Destroy the disposable server when finished.
+
+The initial suite protects startup/schema seeding, anonymous and authenticated direct-action permissions, editor approval restrictions, reads from separate namespace databases containing overlapping rider IDs, rejection of the wrong namespace connection, release artifact contents, preservation of untouched SQLite data, and rollback on invalid CDB updates. Release tests mock database selection and artifact metadata persistence while generating real files. They do not yet cover the full CDB import round trip, release status transitions, or all mutation routes. Extend these tests when changing those paths.
+
+The current rider SQL artifact is a MySQL `dyn_cyclist` table dump, including table replacement statements; it is not yet standalone rider-stat update SQL. The tests preserve the existing format. Changing that behavior needs a separate domain change.
+
+The active CDB mappings are in `webapp/integrations/cdb/cdb_mappings.yaml` (the older `webapp/models/ns/cdb_mappings.yaml` path no longer exists).
 
 ## Project-specific review
 
