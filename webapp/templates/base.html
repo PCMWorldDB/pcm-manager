@@ -81,7 +81,7 @@
                                 /* Sortable column indicators (light & dark mode) */
                                 th.sortable-col {
                                     cursor: pointer;
-                                    user-select: none;
+                                    user-select: none; border: 1px solid var(--brand-primary-border); border-radius: 8px; background: transparent; color: inherit; font: inherit; gap: 16px;
                                     white-space: nowrap;
                                     position: relative;
                                 }
@@ -335,6 +335,11 @@
         }
         body.has-side-panel {
             padding-left: 48px;
+            --header-height: 86px;
+        }
+        body.has-side-panel .header {
+            margin-left: -48px;
+            width: calc(100% + 48px);
         }
         .header {
             background-color: var(--brand-primary);
@@ -345,7 +350,7 @@
             color: white;
             padding: 0;
             margin-bottom: 20px;
-            height: 86px;
+            height: var(--header-height, 86px);
             overflow: hidden;
         }
         .header .container {
@@ -505,7 +510,7 @@
             justify-content: space-between;
             padding: 8px 16px;
             cursor: pointer;
-            user-select: none;
+            user-select: none; border: 1px solid var(--brand-primary-border); border-radius: 8px; background: transparent; color: inherit; font: inherit; gap: 16px;
         }
         
         .dark-mode-toggle:hover {
@@ -591,10 +596,10 @@
 
         .side-panel {
             position: fixed;
-            top: 0;
+            top: var(--header-height, 86px);
             left: 0;
             width: 48px;
-            height: 100vh;
+            height: calc(100vh - var(--header-height, 86px));
             background: #f2f4f7;
             border-right: 1px solid #d1d5db;
             transition: width 0.22s ease, box-shadow 0.22s ease;
@@ -607,66 +612,6 @@
             background: #1f2937;
             border-right-color: #4b5563;
         }
-        .side-panel:hover,
-        .side-panel.open {
-            width: min(240px, calc(100vw - 24px));
-            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
-        }
-        .side-panel-header {
-            display: flex;
-            justify-content: flex-start;
-            align-items: center;
-            gap: 12px;
-            min-height: 55px;
-            padding: 6px;
-        }
-        .side-panel .hamburger-btn {
-            width: 36px;
-            height: 36px;
-            flex: 0 0 36px;
-            padding: 0 7px;
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            align-items: stretch;
-        }
-        .side-panel .hamburger-btn span {
-            background: #1f2937;
-            opacity: 1;
-        }
-        .side-panel .hamburger-btn:hover {
-            background: var(--brand-primary-soft);
-        }
-        body.dark-mode .side-panel .hamburger-btn {
-            background: #374151;
-            border-color: #4b5563;
-        }
-        body.dark-mode .side-panel .hamburger-btn span {
-            background: #f9fafb;
-        }
-        body.dark-mode .side-panel .hamburger-btn:hover {
-            background: #4b5563;
-        }
-        .side-panel-title {
-            font-size: 1rem;
-            font-weight: 700;
-            margin: 0;
-            opacity: 0;
-            white-space: nowrap;
-            transition: opacity 0.16s ease;
-        }
-        .side-panel:hover .side-panel-title,
-        .side-panel.open .side-panel-title,
-        .side-panel:hover .side-panel-label,
-        .side-panel.open .side-panel-label,
-        .side-panel:hover .side-panel-section-label,
-        .side-panel.open .side-panel-section-label,
-        .side-panel:hover .namespace-selector,
-        .side-panel.open .namespace-selector,
-        .side-panel:hover .namespace-empty,
-        .side-panel.open .namespace-empty {
-            opacity: 1;
-            pointer-events: auto;
-        }
         .side-panel-content {
             padding: 6px;
             overflow-y: auto;
@@ -674,62 +619,22 @@
             flex: 1;
         }
         .side-panel-section {
-            margin-bottom: 18px;
-        }
-        .side-panel:not(:hover):not(.open) .side-panel-section {
             margin-bottom: 8px;
         }
-        .side-panel-section-label {
-            font-size: 0.78rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #6b7280;
-            margin-bottom: 8px;
-            font-weight: 700;
-            opacity: 0;
-            white-space: nowrap;
-            transition: opacity 0.16s ease;
+        .namespace-navigation {
+            padding-bottom: 8px;
+            border-bottom: 1px solid #d1d5db;
         }
-        .side-panel:not(:hover):not(.open) .side-panel-section-label {
-            display: none;
+        body.dark-mode .namespace-navigation {
+            border-bottom-color: #4b5563;
         }
-        body.dark-mode .side-panel-section-label {
-            color: #9ca3af;
+        .namespace-icon {
+            width: 18px;
+            height: 18px;
+            border: 2px solid #000;
         }
-        .side-panel .namespace-selector .form-select {
-            font-size: 0.92rem;
-        }
-        .namespace-selector,
-        .namespace-empty {
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.16s ease;
-        }
-        .namespace-collapsed-tile {
-            width: 36px;
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-        }
-        .namespace-collapsed-tile img {
-            width: 24px;
-            height: 24px;
-            object-fit: contain;
-        }
-        body.dark-mode .namespace-collapsed-tile {
-            background: #374151;
-            border-color: #4b5563;
-        }
-        .side-panel:not(:hover):not(.open) .namespace-collapsed-tile {
-            transform: translateY(6px);
-        }
-        .side-panel:hover .namespace-collapsed-tile,
-        .side-panel.open .namespace-collapsed-tile {
-            display: none;
+        body.dark-mode .namespace-icon {
+            border-color: #fff;
         }
         .panel-menu-list {
             list-style: none;
@@ -792,17 +697,17 @@
             background: #2b3443;
             border-color: #4b5563;
         }
-        .side-panel:not(:hover):not(.open) .panel-menu-link,
-        .side-panel:not(:hover):not(.open) .panel-menu-disabled,
-        .side-panel:not(:hover):not(.open) .settings-btn,
-        .side-panel:not(:hover):not(.open) .user-btn {
+        .side-panel .panel-menu-link,
+        .side-panel .panel-menu-disabled,
+        .side-panel .settings-btn,
+        .side-panel .user-btn {
             width: 36px;
             justify-content: center;
             gap: 0;
             padding-left: 0;
             padding-right: 0;
         }
-        .side-panel:not(:hover):not(.open) .side-panel-label {
+        .side-panel .side-panel-label {
             display: none;
         }
         .side-panel-label {
@@ -815,7 +720,7 @@
             margin-left: auto;
             font-size: 0.8rem;
         }
-        .side-panel:not(:hover):not(.open) .panel-lock {
+        .side-panel .panel-lock {
             display: none;
         }
         .side-panel-footer {
@@ -851,51 +756,24 @@
     </div>
 
     <aside class="side-panel" id="sidePanel" aria-label="Primary navigation">
-        <div class="side-panel-header">
-            <button class="hamburger-btn" type="button" id="menuToggleBtn" aria-label="Toggle menu" aria-controls="sidePanel" aria-expanded="false">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
-            <h2 class="side-panel-title">Navigation</h2>
-        </div>
         <div class="side-panel-content">
-            <div class="side-panel-section">
-                <div class="side-panel-section-label">Database</div>
-                <div class="namespace-collapsed-tile" title="{{ selected_namespace.name if selected_namespace else 'Namespace' }}">
-                    <img src="{{ url_for('static', filename='images/wdbo_favicon.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" alt="">
-                </div>
-                {% if available_namespaces %}
-                <form method="post" action="{{ url_for('web.select_namespace') }}" class="namespace-selector mb-0">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
-                    <select name="namespace_id" class="form-select" onchange="this.form.submit()">
-                        {% for namespace in available_namespaces %}
-                        <option value="{{ namespace.id }}" {% if selected_namespace and selected_namespace.id == namespace.id %}selected{% endif %}>
-                            {{ namespace.name }} - {{ namespace.database_year or '-' }} - {{ namespace.gender or 'Men' }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </form>
-                {% else %}
-                <div class="panel-menu-disabled namespace-empty">
-                    <span>🗄️</span>
-                    <span class="side-panel-label">No namespace available</span>
-                </div>
-                {% endif %}
+            <div class="side-panel-section namespace-navigation">
+                <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespaces" aria-label="Namespaces">
+                    <span class="namespace-icon" aria-hidden="true"></span>
+                    <span class="side-panel-label">Namespaces</span>
+                </a>
             </div>
-
             <div class="side-panel-section">
                 <ul class="panel-menu-list">
                     {% for panel in panel_menu_items %}
                     <li>
                         {% if panel.is_clickable %}
-                        <a class="panel-menu-link" href="{{ panel.url }}" title="{{ panel.display_name }}">
+                        <a class="panel-menu-link" href="{{ panel.url }}" title="{{ panel.display_name }}" aria-label="{{ panel.display_name }}">
                             <span>{{ panel.icon }}</span>
                             <span class="side-panel-label">{{ panel.display_name }}</span>
                         </a>
                         {% else %}
-                        <span class="panel-menu-disabled" aria-disabled="true" title="{{ panel.display_name }}">
+                        <span class="panel-menu-disabled" aria-disabled="true" title="{{ panel.display_name }}" aria-label="{{ panel.display_name }}">
                             <span>{{ panel.icon }}</span>
                             <span class="side-panel-label">{{ panel.display_name }}</span>
                             <span class="panel-lock">🔒</span>
@@ -909,100 +787,22 @@
         <div class="side-panel-footer">
             <ul class="side-panel-utility-list">
                 <li>
-                    <a class="settings-btn" href="{{ url_for('web.wiki') }}" title="Wiki">
+                    <a class="settings-btn" href="{{ url_for('web.wiki') }}" title="Wiki" aria-label="Wiki">
                         <span>📖</span>
                         <span class="side-panel-label">Wiki</span>
                     </a>
                 </li>
-                <li class="dropend settings-dropdown">
-                    <button class="settings-btn" type="button" id="settingsDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Settings">
-                        <span>⚙️</span>
+                <li>
+                    <a class="settings-btn" href="{{ url_for('web.settings') }}" title="Settings" aria-label="Settings">
+                        <span>&#9881;&#65039;</span>
                         <span class="side-panel-label">Settings</span>
-                    </button>
-                    <ul class="dropdown-menu" aria-labelledby="settingsDropdown">
-                        {% set can_access_users = current_user.is_superadmin
-                            or current_user.has_permission('users', 'create')
-                            or current_user.has_permission('users', 'read')
-                            or current_user.has_permission('users', 'update') %}
-                        {% set can_access_namespaces = current_user.is_superadmin
-                            or current_user.has_permission('namespaces', 'read')
-                            or current_user.has_permission('namespaces', 'create')
-                            or current_user.has_permission('namespaces', 'update')
-                            or current_user.has_permission('namespaces', 'delete') %}
-                        {% set can_access_integrations = current_user.is_superadmin
-                            or current_user.has_permission('integrations-firstcycling', 'read')
-                            or current_user.has_permission('integrations-discord', 'read') %}
-                        {% if can_access_users %}
-                        <li>
-                            <a class="dropdown-item" href="{{ url_for('web.admin_users') }}" style="color: inherit !important;">
-                                👥 Users & Roles
-                            </a>
-                        </li>
-                        {% else %}
-                        <li>
-                            <span class="dropdown-item disabled" aria-disabled="true" title="Users & Roles locked">
-                                &#128101; Users & Roles <span class="ms-1">&#128274;</span>
-                            </span>
-                        </li>
-                        {% endif %}
-                        {% if can_access_namespaces %}
-                        <li>
-                            <a class="dropdown-item" href="{{ url_for('web.admin_namespaces') }}" style="color: inherit !important;">
-                                🗂️ Namespaces
-                            </a>
-                        </li>
-                        {% else %}
-                        <li>
-                            <span class="dropdown-item disabled" aria-disabled="true" title="Namespaces locked">
-                                &#128450;&#65039; Namespaces <span class="ms-1">&#128274;</span>
-                            </span>
-                        </li>
-                        {% endif %}
-                        {% if can_access_integrations %}
-                        <li>
-                            <a class="dropdown-item" href="{{ url_for('web.admin_integrations', provider='firstcycling' if current_user.is_superadmin or current_user.has_permission('integrations-firstcycling', 'read') else 'discord') }}" style="color: inherit !important;">
-                                🔌 Integrations
-                            </a>
-                        </li>
-                        {% else %}
-                        <li>
-                            <span class="dropdown-item disabled" aria-disabled="true" title="Integrations locked">
-                                &#128268; Integrations <span class="ms-1">&#128274;</span>
-                            </span>
-                        </li>
-                        {% endif %}
-                    </ul>
+                    </a>
                 </li>
-                <li class="dropend settings-dropdown">
-                    <button class="user-btn" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="User">
-                        <span>👤</span>
+                <li>
+                    <a class="user-btn" href="{{ url_for('web.account') }}" title="Account" aria-label="Account">
+                        <span>&#128100;</span>
                         <span class="side-panel-label">Account</span>
-                    </button>
-                    <ul class="dropdown-menu" aria-labelledby="userDropdown">
-                        <li>
-                            <a class="dropdown-item username" href="{{ url_for('web.account') }}" style="color: inherit !important;">
-                                {{ current_user.username }}
-                            </a>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <div class="dark-mode-toggle" id="darkModeToggle">
-                                <span>🌙 Dark Mode</span>
-                                <div class="toggle-switch"></div>
-                            </div>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <a class="dropdown-item" href="{{ url_for('web.change_password') }}" style="color: inherit !important;">
-                                🔑 Change Password
-                            </a>
-                        </li>
-                        <li>
-                            <a class="dropdown-item" href="{{ url_for('web.logout') }}" style="color: inherit !important;">
-                                🚪 Logout
-                            </a>
-                        </li>
-                    </ul>
+                    </a>
                 </li>
             </ul>
         </div>
@@ -1042,11 +842,13 @@
             // Dark mode toggle handler
             const darkModeToggle = document.getElementById('darkModeToggle');
             if (darkModeToggle) {
+                darkModeToggle.setAttribute('aria-checked', document.body.classList.contains('dark-mode') ? 'true' : 'false');
                 darkModeToggle.addEventListener('click', function(e) {
                     e.preventDefault();
-                    e.stopPropagation(); // Prevent dropdown from closing
+
                     
                     document.body.classList.toggle('dark-mode');
+                    darkModeToggle.setAttribute('aria-checked', document.body.classList.contains('dark-mode') ? 'true' : 'false');
                     
                     // Save preference
                     if (document.body.classList.contains('dark-mode')) {
@@ -1057,27 +859,6 @@
                 });
             }
 
-            const menuToggleBtn = document.getElementById('menuToggleBtn');
-            const sidePanel = document.getElementById('sidePanel');
-
-            function setMenuOpen(isOpen) {
-                if (!sidePanel || !menuToggleBtn) {
-                    return;
-                }
-                sidePanel.classList.toggle('open', isOpen);
-                menuToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-            }
-
-            if (menuToggleBtn) {
-                menuToggleBtn.addEventListener('click', function() {
-                    setMenuOpen(!sidePanel.classList.contains('open'));
-                });
-            }
-            document.addEventListener('keydown', function(event) {
-                if (event.key === 'Escape') {
-                    setMenuOpen(false);
-                }
-            });
         });
     </script>
     {% block scripts %}{% endblock %}
