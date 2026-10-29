@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import secrets
 import urllib.error
 import urllib.parse
@@ -30,6 +29,7 @@ from webapp.web.forms import (
     UserCreateForm,
 )
 from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, ExternalSyncLog, RaceResultMap
+from webapp.integrations.cdb import apply_updates_to_sqlite as _apply_release_updates_to_sqlite
 from webapp.integrations.discord import (
     load_namespace_stat_list_name,
     notify_discord_race_stat_approved,
@@ -2711,35 +2711,6 @@ def _load_release_stat_updates(namespace, release_id):
         'id_column': cyclist_id_column,
         'updates': updates,
     }
-
-
-def _apply_release_updates_to_sqlite(sqlite_file_path, table_name, id_column, updates):
-    """Apply stat updates to the copied SQLite CDB file."""
-    if not updates:
-        return 0
-
-    grouped_updates = {}
-    for (cyclist_pcm_id, stat_column), final_value in updates.items():
-        grouped_updates.setdefault(stat_column, []).append((final_value, cyclist_pcm_id))
-
-    applied_values = 0
-    connection = sqlite3.connect(sqlite_file_path)
-    try:
-        cursor = connection.cursor()
-        for stat_column, pairs in grouped_updates.items():
-            cursor.executemany(
-                f'UPDATE "{table_name}" SET "{stat_column}" = ? WHERE "{id_column}" = ?',
-                pairs,
-            )
-            applied_values += len(pairs)
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-    return applied_values
 
 
 def _mysql_dump_value(value, quote=True):
