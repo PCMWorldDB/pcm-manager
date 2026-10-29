@@ -1,4 +1,4 @@
-﻿# Integrations
+# Integrations
 
 Each external integration lives in its own Python package:
 
@@ -12,15 +12,15 @@ integrations/
     __init__.py
     README.md
   firstcycling/
-    __init__.py
+    api.py
     README.md
   pcs/
     __init__.py
     README.md
 ```
 
-The existing implementation lives in each package's `__init__.py`, preserving
-imports such as `from webapp.integrations.firstcycling import FirstCyclingClient`.
+FirstCycling exposes its client and API error through `firstcycling/api.py`:
+`from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError`.
 Additional Python modules, Markdown documentation, YAML mappings, and other
 resources can live beside it as needed.
 
