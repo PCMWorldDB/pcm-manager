@@ -80,6 +80,10 @@ body > .container {
     background-color: #ffffff;
     position: relative;
 }
+.stat-input-row.has-stat-delta {
+    border-color: #f5f500;
+    box-shadow: inset 0 0 0 2px #f5f500;
+}
 .delta-display {
     min-width: 26px;
     text-align: center;
@@ -121,6 +125,10 @@ body.dark-mode .table a {
 body.dark-mode .stat-input-row {
     background-color: #111827;
     border-color: #4b5563;
+}
+body.dark-mode .stat-input-row.has-stat-delta {
+    border-color: #fbbf24;
+    box-shadow: inset 0 0 0 2px #fbbf24;
 }
 
 /* Dark mode for new bordered sections */
@@ -383,13 +391,15 @@ body.dark-mode .panel-card .border.bg-light {
         const originalValue = Number(inputElement.getAttribute('data-original-value'));
         const savedValue = Number(inputElement.getAttribute('data-saved-value'));
         const currentValue = Number(inputElement.value);
-        const deltaNode = inputElement.closest('.stat-input-row').querySelector('.delta-display');
+        const statInputRow = inputElement.closest('.stat-input-row');
+        const deltaNode = statInputRow.querySelector('.delta-display');
 
         if (!Number.isFinite(currentValue) || !Number.isFinite(originalValue)) {
             changedValues.delete(key);
             deltaNode.style.visibility = 'hidden';
             deltaNode.textContent = '+0';
             deltaNode.style.color = '#6c757d';
+            statInputRow.classList.remove('has-stat-delta');
             return;
         }
 
@@ -413,12 +423,14 @@ body.dark-mode .panel-card .border.bg-light {
             deltaNode.style.visibility = 'hidden';
             deltaNode.textContent = '+0';
             deltaNode.style.color = '#6c757d';
+            statInputRow.classList.remove('has-stat-delta');
             return;
         }
 
         deltaNode.style.visibility = 'visible';
         deltaNode.textContent = `${delta > 0 ? '+' : ''}${delta}`;
         deltaNode.style.color = delta > 0 ? '#198754' : '#dc3545';
+        statInputRow.classList.add('has-stat-delta');
     }
 
     function refreshFormState() {
