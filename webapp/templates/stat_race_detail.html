@@ -102,6 +102,10 @@ body > .container {
     background-color: #ffffff;
     position: relative;
 }
+.stat-input-row.has-stat-delta {
+    border-color: #f59f00;
+    box-shadow: inset 0 0 0 2px #f59f00;
+}
 .stat-col {
     width: 72px;
     max-width: 72px;
@@ -190,6 +194,10 @@ body.dark-mode .race-title-link {
 body.dark-mode .stat-input-row {
     background-color: #111827;
     border-color: #4b5563;
+}
+body.dark-mode .stat-input-row.has-stat-delta {
+    border-color: #fbbf24;
+    box-shadow: inset 0 0 0 2px #fbbf24;
 }
 @media (max-width: 992px) {
     .detail-grid {
@@ -634,10 +642,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const statName = inputElement.getAttribute('data-stat-name');
         const selector = '.delta-display[data-rider-id="' + riderId + '"][data-stat-name="' + statName + '"]';
         const deltaElement = document.querySelector(selector);
+        const statInputRow = inputElement.closest('.stat-input-row');
 
         const originalValue = parseIntValue(inputElement.getAttribute('data-original-value'));
         const currentValue = parseIntValue(inputElement.value);
         if (!deltaElement || originalValue === null || currentValue === null) {
+            if (statInputRow) {
+                statInputRow.classList.remove('has-stat-delta');
+            }
             return;
         }
 
@@ -646,12 +658,18 @@ document.addEventListener('DOMContentLoaded', function () {
             deltaElement.style.visibility = 'hidden';
             deltaElement.textContent = '+0';
             deltaElement.style.color = '#6c757d';
+            if (statInputRow) {
+                statInputRow.classList.remove('has-stat-delta');
+            }
             return;
         }
 
         deltaElement.style.visibility = 'visible';
         deltaElement.textContent = (deltaValue > 0 ? '+' : '') + String(deltaValue);
         deltaElement.style.color = deltaValue > 0 ? '#198754' : '#dc3545';
+        if (statInputRow) {
+            statInputRow.classList.add('has-stat-delta');
+        }
     }
 
     function collectStatChanges() {
