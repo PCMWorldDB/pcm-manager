@@ -8,9 +8,8 @@ field mappings. Namespace PostgreSQL models remain in `webapp/models/ns`.
 
 - `cdb_mappings.yaml`: authoritative PCM version, table, and field mappings,
   moved from `webapp/models/ns/cdb_mappings.yaml` without changing its contents.
-- `mappings.py`: mapping loaders and version lookup functions.
-- `inspect.py`: table inspection, rider lookup, and the inspection CLI.
-- `database.py`: transactional SQLite updates used by release generation.
+- `api.py`: mapping loaders, version lookups, table inspection, rider lookup,
+  the inspection CLI, and transactional SQLite updates used by release generation.
 
 ## Mapping and inspection usage
 

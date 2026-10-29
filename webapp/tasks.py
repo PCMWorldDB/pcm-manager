@@ -3,7 +3,7 @@ import json
 import logging
 
 from webapp.extensions import celery, db
-from webapp.integrations.firstcycling import FirstCyclingClient
+from webapp.integrations.firstcycling.api import FirstCyclingClient
 from webapp.models import ExternalSyncLog
 
 SYNC_TYPE_RACE = 'fc_race_calendar'

@@ -17,7 +17,7 @@ results, teams, and riders into the main database. Background sync jobs in
 Run persistence methods inside the configured Flask application context:
 
 ```python
-from webapp.integrations.firstcycling import FirstCyclingClient
+from webapp.integrations.firstcycling.api import FirstCyclingClient
 
 client = FirstCyclingClient()
 client.sync_race_calendar(season_year=2026, gender='Men')
