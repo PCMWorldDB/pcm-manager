@@ -46,7 +46,7 @@ from webapp.models.ns.schema import get_field_mapping
 from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
-from webapp.tasks import run_external_sync_task
+from webapp.worker import run_external_sync_task
 from webapp.web.wiki_content import find_wiki_page, find_wiki_section, load_wiki_page_content, load_wiki_sections
 from functools import wraps
 
