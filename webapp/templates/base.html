@@ -596,10 +596,12 @@
 
         .side-panel {
             position: fixed;
-            top: var(--header-height, 86px);
+            top: 0;
             left: 0;
             width: 48px;
-            height: calc(100vh - var(--header-height, 86px));
+            height: 100vh;
+            box-sizing: border-box;
+            padding-top: var(--header-height, 86px);
             background: #f2f4f7;
             border-right: 1px solid #d1d5db;
             transition: width 0.22s ease, box-shadow 0.22s ease;

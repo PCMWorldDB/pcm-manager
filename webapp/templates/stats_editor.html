@@ -15,9 +15,6 @@
     .filter-item-compact {
         width: 125px;
     }
-    .filter-item-category {
-        width: 100px;
-    }
     .filter-item-classification {
         width: 170px;
     }
@@ -78,15 +75,6 @@
                 <div class="filter-item filter-item-name">
                     <label class="form-label" for="race_name">Race Name</label>
                     <input id="race_name" name="race_name" type="text" class="form-control" placeholder="Search race name" value="{{ selected_filters.race_name }}">
-                </div>
-                <div class="filter-item filter-item-category">
-                    <label class="form-label" for="category">Category</label>
-                    <select id="category" name="category" class="form-select">
-                        <option value="">All</option>
-                        {% for value in filter_choices.categories %}
-                        <option value="{{ value }}" {% if selected_filters.category == value %}selected{% endif %}>{{ value }}</option>
-                        {% endfor %}
-                    </select>
                 </div>
                 <div class="filter-item filter-item-classification">
                     <label class="form-label" for="classification">Classification</label>
