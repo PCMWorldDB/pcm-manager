@@ -1,0 +1,29 @@
+# Listed owners must have write access to this repository.
+# Enable "Require review from Code Owners" in branch protection or a ruleset.
+
+# Authentication, permissions, and database boundaries
+/webapp/security.py             @benvneal88
+/webapp/rbac_seed.py            @benvneal88
+/webapp/models/main/            @benvneal88
+/webapp/namespace/              @benvneal88
+
+# CDB schema, imports, and exports
+/webapp/models/ns/              @benvneal88
+/webapp/integrations/cdb/       @benvneal88
+/migrations/                   @benvneal88
+
+# Approval workflows and application initialization
+/webapp/web/routes.py           @benvneal88
+/webapp/web/forms.py            @benvneal88
+/webapp/config.py               @benvneal88
+/webapp/extensions.py           @benvneal88
+/webapp/__init__.py             @benvneal88
+/webapp/cli.py                  @benvneal88
+
+# Infrastructure and ownership policy
+/.github/                      @benvneal88
+/docker/                       @benvneal88
+/docker-compose*.yml           @benvneal88
+/requirements.txt              @benvneal88
+/.gitignore                    @benvneal88
+/.dockerignore                 @benvneal88
