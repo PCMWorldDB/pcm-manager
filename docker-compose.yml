@@ -87,7 +87,7 @@ services:
       context: .
       dockerfile: docker/webapp/Dockerfile
     container_name: worker
-    command: celery -A webapp.celery_worker:celery worker --loglevel=info
+    command: celery -A webapp.worker:celery worker --loglevel=info
     environment:
       <<: *common-env
     volumes:

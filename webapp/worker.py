@@ -1,8 +1,9 @@
-"""Background task definitions."""
+"""Celery worker entrypoint and background task definitions."""
 import json
 import logging
 
-from webapp.extensions import celery, db
+from webapp import create_app
+from webapp.extensions import celery as _celery, db
 from webapp.integrations.firstcycling.api import FirstCyclingClient
 from webapp.models import ExternalSyncLog
 
@@ -25,7 +26,7 @@ def _update_sync_log(log_id, **updates):
     return log
 
 
-@celery.task(name='webapp.tasks.run_external_sync')
+@_celery.task(name='webapp.tasks.run_external_sync')
 def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None, start_date=None, end_date=None):
     """Run one external sync type in the background and update status log."""
     try:
@@ -167,3 +168,13 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             failed_count=1,
         )
         raise
+
+
+def __getattr__(name):
+    """Initialize Flask only when the Celery CLI loads the worker app."""
+    if name == 'celery':
+        create_app()
+        # Cache the configured app so subsequent lookups do not recreate Flask.
+        globals()['celery'] = _celery
+        return _celery
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
