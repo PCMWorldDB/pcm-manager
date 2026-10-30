@@ -50,6 +50,11 @@ ROLES = [
 
 RESOURCES = [
     {
+        'name': 'audit_logs',
+        'description': 'View application audit history',
+        'supported_actions': ['read'],
+    },
+    {
         'name': 'users',
         'description': 'User management',
         'supported_actions': ['create', 'read', 'update', 'delete'],
@@ -107,6 +112,7 @@ ACTIONS = [
 
 ROLE_PERMISSIONS = {
     'admin': {
+        'audit_logs': ['read'],
         'users': ['create', 'read', 'update', 'delete'],
         'roles': ['create', 'read', 'update', 'delete'],
         'namespaces': ['create', 'read', 'update', 'delete'],

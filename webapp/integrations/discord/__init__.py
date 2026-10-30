@@ -132,6 +132,14 @@ class DiscordClient:
             },
         )
 
+    def create_thread_from_message(self, channel_id, message_id, thread_name):
+        """Use the submission message itself as the thread starter."""
+        return self._request(
+            'POST',
+            f'/channels/{channel_id}/messages/{message_id}/threads',
+            {'name': thread_name[:100], 'auto_archive_duration': 10080},
+        )
+
     def send_message(self, channel_reference, content):
         """Send a message to a Discord channel or thread."""
         if not channel_reference:
@@ -240,9 +248,8 @@ def _firstcycling_race_result_map_ids(first_cycling_race_id=None, first_cycling_
         provider='firstcycling',
         external_race_id=str(first_cycling_race_id),
     )
-    if first_cycling_stage_id is None:
-        query = query.filter(RaceResultMap.external_stage_id.is_(None))
-    else:
+    # Overall submissions review the entire race, including every stage.
+    if first_cycling_stage_id is not None:
         query = query.filter(RaceResultMap.external_stage_id == str(first_cycling_stage_id))
 
     return [row.race_result_id for row in query.all()]
@@ -560,6 +567,7 @@ def _load_stat_approval_image_rows(
                     f"""
                     SELECT
                         s.cdb_cyclist_id,
+                        s.race_result_id,
                         COALESCE(
                             NULLIF(c.first_last_name, ''),
                             NULLIF(CONCAT_WS(' ', c.first_name, c.last_name), ''),
@@ -568,15 +576,16 @@ def _load_stat_approval_image_rows(
                         COALESCE(t.team_name, t.short_name, '-') AS team_name,
                         {snapshot_select}
                     FROM stat_change_snapshot s
-                    JOIN (
-                        SELECT DISTINCT cdb_cyclist_id
-                        FROM stat_changes
-                        WHERE {where_clause}
-                    ) changed ON changed.cdb_cyclist_id = s.cdb_cyclist_id
                     LEFT JOIN cdb_cyclist c ON c.id = s.cdb_cyclist_id
                     LEFT JOIN cdb_team t ON t.id = c.team_id
                     WHERE {where_clause}
-                    ORDER BY rider_name ASC, s.cdb_cyclist_id ASC
+                      AND EXISTS (
+                          SELECT 1 FROM stat_changes changes
+                          WHERE changes.cdb_cyclist_id = s.cdb_cyclist_id
+                            AND changes.race_result_id IS NOT DISTINCT FROM s.race_result_id
+                            AND changes.stat_list_id IS NOT DISTINCT FROM s.stat_list_id
+                      )
+                    ORDER BY rider_name ASC, s.cdb_cyclist_id ASC, s.id ASC
                     """
                 ),
                 params,
@@ -585,7 +594,7 @@ def _load_stat_approval_image_rows(
             stat_change_rows = conn.execute(
                 text(
                     f"""
-                    SELECT cdb_cyclist_id, stat_name, final_value, delta_value
+                    SELECT race_result_id, cdb_cyclist_id, stat_name, original_value, final_value, delta_value
                     FROM stat_changes
                     WHERE {where_clause}
                     ORDER BY id ASC
@@ -602,14 +611,21 @@ def _load_stat_approval_image_rows(
         stat_name = (change.get('stat_name') or '').strip().lower()
         if rider_id is None or stat_name not in STAT_APPROVAL_IMAGE_FIELDS:
             continue
-        changes_by_rider.setdefault(rider_id, {})[stat_name] = {
-            'final_value': change.get('final_value'),
-            'delta_value': change.get('delta_value'),
-        }
+        combined = changes_by_rider.setdefault(rider_id, {}).setdefault(stat_name, {
+            'original_value': change.get('original_value'),
+            'delta_value': 0,
+        })
+        combined['delta_value'] += change.get('delta_value') or 0
+        original = combined['original_value']
+        combined['final_value'] = original + combined['delta_value'] if original is not None else None
 
     rows = []
+    seen_riders = set()
     for row in changed_rows:
         rider_id = row.get('cdb_cyclist_id')
+        if rider_id in seen_riders:
+            continue
+        seen_riders.add(rider_id)
         changes = changes_by_rider.get(rider_id) or {}
         stats = {}
         for stat_name, column_name in STAT_APPROVAL_IMAGE_COLUMNS.items():
@@ -617,9 +633,10 @@ def _load_stat_approval_image_rows(
         for stat_name, change in changes.items():
             if change.get('final_value') is not None:
                 stats[stat_name] = change.get('final_value')
+        rider_name = row.get('rider_name') or f'Rider #{rider_id}'
         rows.append({
             'cdb_cyclist_id': rider_id,
-            'rider_name': row.get('rider_name') or f'Rider #{rider_id}',
+            'rider_name': rider_name,
             'team_name': row.get('team_name') or '-',
             'stats': stats,
             'changes': changes,
@@ -1036,33 +1053,35 @@ def notify_discord_stat_scope_saved(
                 sent_any = True
                 continue
 
-            thread_payload = client.create_thread(settings.channel_id, f'Stat Edits: {scope_title}')
-            thread_id = thread_payload.get('id')
-            if not thread_id:
-                raise DiscordIntegrationError('Discord did not return a thread ID.')
-
-            thread_url = _discord_thread_url(thread_payload)
-            namespace_label = f'Namespace: {namespace.slug or namespace.name or namespace.id}'
+            namespace_label = str(namespace.slug or namespace.name or namespace.id)
             namespace_link = _discord_markdown_link(namespace_label, _namespace_dashboard_url(namespace))
-            scope_prefix = 'List' if stat_list_id is not None else 'Race'
-            scope_label = f'{scope_prefix}: {scope_title}'
+            scope_label = scope_title
             if stat_list_id is None and race_date is not None:
                 scope_label = f'{_format_discord_date(race_date)} - {scope_title}'
             scope_link = _discord_markdown_link(scope_label, review_url)
             initial_message = (
-                f'{namespace_link}\n'
-                f'{scope_link}'
+                f'{namespace_link}: {scope_link}\n'
+                f'{save_message}'
             )
-            client.send_message(thread_id, initial_message)
             if approval_image_path:
-                client.send_message_with_file(
-                    thread_id,
-                    save_message,
+                starter = client.send_message_with_file(
+                    settings.channel_id,
+                    initial_message,
                     approval_image_path,
                     file_name='stat-approval.png',
                 )
             else:
-                client.send_message(thread_id, save_message)
+                starter = client.send_message(settings.channel_id, initial_message)
+            message_id = starter.get('id')
+            if not message_id:
+                raise DiscordIntegrationError('Discord did not return a starter message ID.')
+            thread_payload = client.create_thread_from_message(
+                settings.channel_id, message_id, f'Stat Edits: {scope_title}',
+            )
+            thread_id = thread_payload.get('id')
+            if not thread_id:
+                raise DiscordIntegrationError('Discord did not return a thread ID.')
+            thread_url = _discord_thread_url(thread_payload)
             _save_discord_workflow_thread(
                 namespace,
                 settings,

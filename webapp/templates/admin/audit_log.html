@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Admin - Audit Log{% endblock %}
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="mb-0">Audit Log</h2>
+        <a href="{{ url_for('web.settings') }}" class="btn btn-outline-secondary">Back to Settings</a>
+    </div>
+    <p class="text-muted">Application activity across all namespaces. Times are shown in UTC.</p>
+    <form method="get" class="card card-body mb-3">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="audit-action" class="form-label">Action type</label>
+                <select id="audit-action" name="action" class="form-select" onchange="this.form.submit()">
+                    <option value="">All actions</option>
+                    {% if selected_action and selected_action not in actions %}<option selected value="{{ selected_action }}">{{ selected_action }}</option>{% endif %}
+                    {% for action in actions %}<option value="{{ action }}" {% if action == selected_action %}selected{% endif %}>{{ action }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="audit-user" class="form-label">User</label>
+                <select id="audit-user" name="user" class="form-select" onchange="this.form.submit()">
+                    <option value="">All users</option>
+                    {% if selected_user and selected_user not in usernames %}<option selected value="{{ selected_user }}">{{ selected_user }}</option>{% endif %}
+                    {% for username in usernames %}<option value="{{ username }}" {% if username == selected_user %}selected{% endif %}>{{ username }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4 d-flex gap-2">
+                <a href="{{ url_for('web.admin_audit_log') }}" class="btn btn-outline-secondary">Reset</a>
+            </div>
+        </div>
+    </form>
+    <div class="card">
+        <div class="card-header">{{ entries.total }} matching {{ 'entry' if entries.total == 1 else 'entries' }}</div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead><tr><th scope="col">ID</th><th scope="col">Time (UTC)</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Resource</th><th scope="col">IP address</th><th scope="col">Details</th></tr></thead>
+                <tbody>
+                    {% for entry in entries.items %}
+                    <tr>
+                        <td>{{ entry.id }}</td>
+                        <td class="text-nowrap">{{ entry.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>{{ entry.username }}</td>
+                        <td>{{ entry.action }}</td>
+                        <td>{{ entry.resource_type or '—' }}{% if entry.resource_id is not none %} #{{ entry.resource_id }}{% endif %}{% if entry.resource_name %}<div class="text-muted">{{ entry.resource_name }}</div>{% endif %}</td>
+                        <td>{{ entry.ip_address or '—' }}</td>
+                        <td><details><summary>View details</summary><pre class="text-wrap mb-2">{{ entry.details | tojson(indent=2) }}</pre><strong>User agent:</strong> {{ entry.user_agent or '—' }}</details></td>
+                    </tr>
+                    {% else %}<tr><td colspan="7" class="text-center text-muted py-4">No audit entries match these filters.</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% if entries.pages > 1 %}
+    <nav aria-label="Audit log pages" class="d-flex justify-content-between align-items-center mt-3">
+        <div>{% if entries.has_prev %}<a class="btn btn-outline-secondary" href="{{ url_for('web.admin_audit_log', page=entries.prev_num, action=selected_action, user=selected_user) }}">Previous</a>{% endif %}</div>
+        <span>Page {{ entries.page }} of {{ entries.pages }}</span>
+        <div>{% if entries.has_next %}<a class="btn btn-outline-secondary" href="{{ url_for('web.admin_audit_log', page=entries.next_num, action=selected_action, user=selected_user) }}">Next</a>{% endif %}</div>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

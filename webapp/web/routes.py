@@ -6683,7 +6683,34 @@ def settings():
         'settings.html',
         can_manage_users=_can_access_user_management(),
         can_manage_namespaces=_can_access_namespace_management(),
+        can_read_audit_logs=current_user.has_permission('audit_logs', 'read'),
         provider_access=_integration_provider_access_map(),
+    )
+
+
+@web_bp.route('/admin/audit-log')
+@login_required
+def admin_audit_log():
+    """Read shared audit history with action and recorded-username filters."""
+    if not current_user.has_permission('audit_logs', 'read'):
+        abort(403)
+
+    selected_action = request.args.get('action', '').strip()
+    selected_user = request.args.get('user', '').strip()
+    page = max(1, request.args.get('page', 1, type=int))
+    query = AuditLog.query
+    if selected_action:
+        query = query.filter(AuditLog.action == selected_action)
+    if selected_user:
+        query = query.filter(AuditLog.username == selected_user)
+    entries = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).paginate(
+        page=page, per_page=50, error_out=False,
+    )
+    return render_template(
+        'admin/audit_log.html', entries=entries,
+        actions=[row[0] for row in db.session.query(AuditLog.action).distinct().order_by(AuditLog.action)],
+        usernames=[row[0] for row in db.session.query(AuditLog.username).distinct().order_by(AuditLog.username)],
+        selected_action=selected_action, selected_user=selected_user,
     )
 
 
