@@ -316,13 +316,13 @@ body.dark-mode .stat-input-row.has-stat-delta {
 {% if stage_rows %}
 <div class="panel-card card" id="stage-selection">
     <div class="card-body">
-        <h5 class="mb-3">Stages ({{ stage_rows|length }})</h5>
+        <h5 class="mb-3">Results ({{ stage_rows|length + 1 }})</h5>
         <div class="table-wrapper">
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
                         <th>Status</th>
-                        <th>Stage Name</th>
+                        <th>Result</th>
                         <th>Date</th>
                         <th>Profile</th>
                         <th>Distance (km)</th>
@@ -357,6 +357,31 @@ body.dark-mode .stat-input-row.has-stat-delta {
                         <td>{{ stage.stage_distance_km if stage.stage_distance_km is not none else '-' }}</td>
                     </tr>
                     {% endfor %}
+                    <tr {% if not selected_stage %}class="table-primary"{% endif %}>
+                        <td class="text-nowrap">
+                            {% if result_state.has_overall_result %}
+                            <span title="Overall result downloaded">⬇️</span>
+                            {% endif %}
+                            {% if overall_delta_status.total_changes > 0 %}
+                            <span title="Edits Saved">✏️</span>
+                            {% if overall_delta_status.unapproved_changes == 0 %}
+                            <span class="ms-1 text-success" title="Approved">☑</span>
+                            {% else %}
+                            <span class="ms-1" title="Approval pending">⏳</span>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a
+                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}#stage-selection"
+                                class="text-decoration-none">
+                                Overall result
+                            </a>
+                        </td>
+                        <td>{{ race.end_date or race.start_date or '-' }}</td>
+                        <td>{{ race.profile or '-' }}</td>
+                        <td>{{ race.distance_km if race.distance_km is not none else '-' }}</td>
+                    </tr>
                 </tbody>
             </table>
         </div>
@@ -376,14 +401,23 @@ body.dark-mode .stat-input-row.has-stat-delta {
             </h5>
             <div class="d-flex align-items-center gap-2 ms-3">
                 <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
+                {% if can_update_stats %}
                 <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_id=race.race_id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     {% if selected_stage %}
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
                     {% endif %}
                     <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits{% if not can_update_stats %} &#128274;{% endif %}</button>
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save{% if not can_update_stats %} &#128274;{% endif %}</button>
                 </form>
+                {% if not selected_stage %}
+                <form method="post" action="{{ url_for('web.stats_editor_submit_for_approval', race_id=race.race_id) }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-success" {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>Submit for Approval</button>
+                </form>
+                {% endif %}
+                {% endif %}
+                {% if can_approve_stats %}
                 <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     {% if selected_stage %}
@@ -395,12 +429,14 @@ body.dark-mode .stat-input-row.has-stat-delta {
                         {% if not can_approve_stats
                             or not selected_namespace
                             or not scope_delta_status.unapproved_changes
+                            or not is_submitted_for_approval
                             or stat_conflicts
                             or (result_state.is_stage_race and selected_stage)
                             or (result_state.is_stage_race and (not result_state.is_completed or not result_state.has_overall_result)) %}disabled{% if not can_approve_stats %} title="Approve locked"{% endif %}{% endif %}>
                         Approve{% if not can_approve_stats %} &#128274;{% endif %}
                     </button>
                 </form>
+                {% endif %}
             </div>
         </div>
         {% if result_rows %}
@@ -767,13 +803,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function refreshSaveState() {
         applyResultFilters();
+        if (!saveButton || !changesInput) return;
         const changes = collectStatChanges();
         changesInput.value = JSON.stringify(changes);
 
         if (!canUpdateStats) {
             saveButton.disabled = true;
             saveHint.textContent = 'No edit permission.';
-            saveButton.title = 'Save Edits locked';
+            saveButton.title = 'Save locked';
         } else if (changes.length > 0) {
             saveButton.disabled = false;
             saveButton.removeAttribute('title');
