@@ -179,10 +179,8 @@ body.dark-mode .lifecycle-arrow {
 </div>
 
 {% if active_tab != 'catalog' and selected_release %}
-<div class="panel-card card">
-    <div class="card-body">
-        <div class="d-flex flex-wrap align-items-end justify-content-between gap-3">
-            <ul class="nav nav-pills">
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-3">
+            <ul class="nav nav-tabs flex-grow-1">
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'overview' %}active{% endif %} {% if not selected_release %}disabled{% endif %}" href="{{ url_for('web.releases', tab='overview', release_id=selected_release_id) if selected_release else '#' }}">Overview</a>
                 </li>
@@ -213,8 +211,6 @@ body.dark-mode .lifecycle-arrow {
                 </select>
             </form>
             {% endif %}
-        </div>
-    </div>
 </div>
 {% endif %}
 
@@ -246,7 +242,7 @@ body.dark-mode .lifecycle-arrow {
 <div class="panel-card card">
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="mb-0">Existing Releases</h5>
+            <h5 class="mb-0">Releases</h5>
             <a class="btn btn-primary {% if not can_create_releases %}disabled{% endif %}" href="{{ url_for('web.releases', tab='create') }}" {% if not can_create_releases %}aria-disabled="true" title="Create Release locked"{% endif %}>Create Release{% if not can_create_releases %} &#128274;{% endif %}</a>
         </div>
         {% if releases %}
@@ -254,27 +250,23 @@ body.dark-mode .lifecycle-arrow {
             <table class="table table-sm table-striped align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Version</th>
                         <th>Name</th>
-                        <th>Type</th>
                         <th>Status</th>
+                        <th>Type</th>
+                        <th>Version</th>
                         <th>Created</th>
-                        <th style="width: 110px;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for release in releases %}
                     <tr>
                         <td>
-                            <a href="{{ url_for('web.releases', tab='overview', release_id=release.id) }}"><strong>{{ release.version }}</strong></a>
+                            <a href="{{ url_for('web.releases', tab='overview', release_id=release.id) }}"><strong>{{ release.release_name or '-' }}</strong></a>
                         </td>
-                        <td>{{ release.release_name or '-' }}</td>
-                        <td>{{ release.release_type or '-' }}</td>
                         <td>{{ release.status or '-' }}</td>
+                        <td>{{ release.release_type or '-' }}</td>
+                        <td>{{ release.version }}</td>
                         <td>{{ release.created_at or '-' }}</td>
-                        <td>
-                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('web.releases', tab='overview', release_id=release.id) }}">Open</a>
-                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -343,10 +335,10 @@ body.dark-mode .lifecycle-arrow {
         {% set lifecycle_steps = ['draft', 'review', 'approved', 'published'] %}
         {% set lifecycle_labels = {'draft': 'Draft', 'review': 'Review', 'approved': 'Approve', 'published': 'Publish'} %}
         {% set lifecycle_descriptions = {
-            'draft': 'add changes to cdb',
-            'review': 'create cdb for validation',
-            'approved': 'mark cdb as valid',
-            'published': 'distribute the cdb release'
+            'draft': 'select changes to make',
+            'review': 'create release files for review',
+            'approved': 'approve release files',
+            'published': 'distribute release files'
         } %}
         {% set current_status = (selected_release.status or 'draft')|lower %}
         {% set allowed_targets = {

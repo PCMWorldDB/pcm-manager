@@ -844,16 +844,16 @@ def _render_stat_approval_image(rows, scope_title, include_race_columns=False):
                 draw.rectangle((x1, y, x2, y + row_height), fill=fill, outline=palette['border'])
                 draw.text(((x1 + x2) / 2, y + row_height / 2), '-', font=font_regular, fill=text_fill, anchor='mm')
             else:
-                split_x = x1 + (30 * render_scale)
-                draw.rectangle((x1, y, split_x, y + row_height), fill=palette['background'], outline=palette['border'])
-                draw.rectangle((split_x, y, x2, y + row_height), fill=fill, outline=palette['border'])
+                split_x = x2 - (30 * render_scale)
+                draw.rectangle((x1, y, split_x, y + row_height), fill=fill, outline=palette['border'])
+                draw.rectangle((split_x, y, x2, y + row_height), fill=palette['background'], outline=palette['border'])
                 draw.line((split_x, y, split_x, y + row_height), fill=palette['border'])
                 if has_delta:
                     delta = change.get('delta_value')
                     delta_text = f'+{delta}' if delta > 0 else str(delta)
                     delta_fill = '#198754' if delta > 0 else '#dc3545'
-                    draw.text(((x1 + split_x) / 2, y + row_height / 2), delta_text, font=font_bold, fill=delta_fill, anchor='mm')
-                draw.text(((split_x + x2) / 2, y + row_height / 2), str(value), font=font_regular, fill=text_fill, anchor='mm')
+                    draw.text(((split_x + x2) / 2, y + row_height / 2), delta_text, font=font_bold, fill=delta_fill, anchor='mm')
+                draw.text(((x1 + split_x) / 2, y + row_height / 2), str(value), font=font_regular, fill=text_fill, anchor='mm')
                 if has_delta:
                     draw.rectangle(
                         (x1, y, x2, y + row_height),

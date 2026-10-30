@@ -374,6 +374,8 @@ body.dark-mode .panel-card .border.bg-light {
 {% endblock %}
 
 {% block scripts %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/stat_input_controls.css', v=4) }}">
+<script src="{{ url_for('static', filename='js/stat_input_controls.js') }}"></script>
 <script>
 (function () {
     const changedValues = new Map();
