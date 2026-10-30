@@ -1,0 +1,66 @@
+.stat-input-row .stat-input {
+    order: 1;
+    flex: 0 0 24px;
+    width: 24px;
+    min-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+.stat-input-row.has-stat-delta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 2px solid #f59f00;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 1;
+}
+body.dark-mode .stat-input-row.has-stat-delta::after {
+    border-color: #fbbf24;
+}
+.stat-input-row .stat-input::-webkit-inner-spin-button,
+.stat-input-row .stat-input::-webkit-outer-spin-button {
+    display: none;
+    -webkit-appearance: none;
+    width: 0;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    pointer-events: none;
+}
+.stat-input-row .delta-display {
+    order: 2;
+    flex: 0 0 22px;
+    min-width: 22px;
+}
+.stat-step-controls {
+    order: 3;
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 13px;
+}
+.stat-step-controls button {
+    border: 1px solid #adb5bd;
+    padding: 0;
+    width: 13px;
+    height: 11px;
+    background: #e9ecef;
+    color: #212529;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 9px;
+    cursor: pointer;
+}
+.stat-step-controls button:hover {
+    background: var(--brand-primary-soft);
+}
+body.dark-mode .stat-step-controls button {
+    background: #374151;
+    color: #ffffff;
+    border-color: #6b7280;
+}
+body.dark-mode .stat-step-controls button:hover {
+    background: #4b5563;
+}

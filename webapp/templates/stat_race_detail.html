@@ -133,12 +133,6 @@ body > .container {
     background-color: var(--brand-primary-soft);
     box-shadow: none;
 }
-.stat-input::-webkit-outer-spin-button,
-.stat-input::-webkit-inner-spin-button {
-    width: 10px;
-    margin: 0;
-    padding: 0;
-}
 /* Conditional coloring for stat values */
 .stat-input.range-low {
     background-color: #6c757d !important;
@@ -328,10 +322,10 @@ body.dark-mode .stat-input-row.has-stat-delta {
                 <thead>
                     <tr>
                         <th>Status</th>
-                        <th>Date</th>
                         <th>Stage Name</th>
-                        <th>Distance (km)</th>
+                        <th>Date</th>
                         <th>Profile</th>
+                        <th>Distance (km)</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -351,7 +345,6 @@ body.dark-mode .stat-input-row.has-stat-delta {
                             <span class="ms-1" title="Approval pending">⏳</span>
                             {% endif %}
                         </td>
-                        <td>{{ stage.stage_date or '-' }}</td>
                         <td>
                             <a
                                 href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id) }}#stage-selection"
@@ -359,8 +352,9 @@ body.dark-mode .stat-input-row.has-stat-delta {
                                 Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
                         </td>
-                        <td>{{ stage.stage_distance_km if stage.stage_distance_km is not none else '-' }}</td>
+                        <td>{{ stage.stage_date or '-' }}</td>
                         <td>{{ stage.stage_profile or '-' }}</td>
+                        <td>{{ stage.stage_distance_km if stage.stage_distance_km is not none else '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -587,6 +581,8 @@ body.dark-mode .stat-input-row.has-stat-delta {
 {% endblock %}
 
 {% block scripts %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/stat_input_controls.css', v=4) }}">
+<script src="{{ url_for('static', filename='js/stat_input_controls.js') }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const rangeClasses = [

@@ -9,7 +9,8 @@ field mappings. Namespace PostgreSQL models remain in `webapp/models/ns`.
 - `cdb_mappings.yaml`: authoritative PCM version, table, and field mappings,
   moved from `webapp/models/ns/cdb_mappings.yaml` without changing its contents.
 - `api.py`: mapping loaders, version lookups, table inspection, rider lookup,
-  the inspection CLI, and transactional SQLite updates used by release generation.
+  and transactional SQLite updates used by release generation.
+- `cli.py`: command-line arguments and output for table inspection and rider lookup.
 
 ## Mapping and inspection usage
 
@@ -32,13 +33,12 @@ inspection script, rather than adapting its SQL to each PCM mapping version.
 ## Command line
 
 ```shell
-python scripts/inspect_cdb_table.py /path/to/database.cdb --table DYN_team
-python scripts/inspect_cdb_table.py /path/to/database.cdb --rider "Smith"
-python -m webapp.integrations.cdb /path/to/database.cdb --rider-id 123
+python -m webapp.integrations.cdb.cli /path/to/database.cdb --table DYN_team
+python -m webapp.integrations.cdb.cli /path/to/database.cdb --rider "Smith"
+python -m webapp.integrations.cdb.cli /path/to/database.cdb --rider-id 123
 ```
 
-The inspection CLI opens existing files read-only. The script in `scripts/`
-delegates to the integration and retains its original options.
+The inspection CLI opens existing files read-only.
 
 ## Updates
 
