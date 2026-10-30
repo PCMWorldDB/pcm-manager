@@ -20,6 +20,7 @@ def test_startup_initializes_postgres_and_roles(app, client):
     "/admin/namespaces/create",
     "/stats-editor/races/999/approve-stat-deltas",
     "/stats-editor/lists/999/approve-stat-deltas",
+    "/stats-editor/lists/999/submit-for-approval",
 ])
 def test_anonymous_cannot_post_protected_actions(client, path):
     response = client.post(path)

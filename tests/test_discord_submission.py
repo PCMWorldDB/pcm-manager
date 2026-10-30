@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from flask import Flask
 from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
@@ -14,13 +15,15 @@ from webapp.models import RaceResultMap
 
 @pytest.mark.parametrize('existing', [False, True])
 @pytest.mark.parametrize('has_image', [False, True])
-def test_submission_sends_one_message(app, monkeypatch, tmp_path, existing, has_image):
+def test_submission_sends_one_message(monkeypatch, tmp_path, existing, has_image):
+    app = Flask(__name__)
     image = tmp_path / 'approval.png'
     image.write_bytes(b'image')
     namespace = SimpleNamespace(id=1, slug='pcm2026', name='PCM 2026')
     settings = SimpleNamespace(id=1, channel_id='channel', approver_role_id='approvers')
     client = Mock(bot_token='synthetic-token')
-    client.create_thread_from_message.return_value = {'id': 'starter-message'}
+    client.create_thread.return_value = {'id': 'new-thread'}
+    client.submission_message_reference.return_value = ('channel', 'existing-thread')
     client.send_message.return_value = {'id': 'starter-message'}
     client.send_message_with_file.return_value = {'id': 'starter-message'}
     monkeypatch.setattr(discord, 'DiscordClient', lambda: client)
@@ -41,14 +44,18 @@ def test_submission_sends_one_message(app, monkeypatch, tmp_path, existing, has_
     other = client.send_message if has_image else client.send_message_with_file
     other.assert_not_called()
     channel, message = sender.call_args.args[:2]
-    assert channel == ('existing-thread' if existing else 'channel')
+    assert channel == ('existing-thread' if existing else 'new-thread')
     assert 'Awaiting approval' in message
+    assert 'Submitted by editor\n' in message
     if existing:
+        client.remove_reaction.assert_called_once_with('channel', 'existing-thread', '\u2705')
         client.create_thread_from_message.assert_not_called()
         store.assert_not_called()
     else:
-        client.create_thread_from_message.assert_called_once_with('channel', 'starter-message', 'Stat Edits: Tour Test')
-        client.create_thread.assert_not_called()
+        client.remove_reaction.assert_not_called()
+        client.create_thread.assert_called_once_with('channel', 'Stat Edits: Tour Test')
+        assert sender.call_args.kwargs['silent'] is True
+        client.create_thread_from_message.assert_not_called()
         store.assert_called_once()
         header = message.splitlines()[0]
         assert header.startswith('[pcm2026](')
@@ -118,4 +125,3 @@ def test_image_includes_overall_and_stage_edits(app, monkeypatch):
                 db.session.delete(mapping)
             db.session.execute(text(f'DROP SCHEMA {schema} CASCADE'))
             db.session.commit()
-

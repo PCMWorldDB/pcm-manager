@@ -116,6 +116,7 @@ class AuditAction:
     """Constants for audit log actions."""
     RACE_STATS_SAVED = 'race_stats_saved'
     RACE_STATS_SUBMITTED = 'race_stats_submitted'
+    STAT_LIST_SUBMITTED = 'stat_list_submitted'
     RACE_STATS_APPROVED = 'race_stats_approved'
     RELEASE_CREATED = 'release_created'
     RELEASE_STATUS_CHANGED = 'release_status_changed'
