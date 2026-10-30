@@ -6,6 +6,7 @@ import mimetypes
 import os
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -140,7 +141,7 @@ class DiscordClient:
             {'name': thread_name[:100], 'auto_archive_duration': 10080},
         )
 
-    def send_message(self, channel_reference, content):
+    def send_message(self, channel_reference, content, silent=False):
         """Send a message to a Discord channel or thread."""
         if not channel_reference:
             raise DiscordIntegrationError('Discord channel or thread ID is required.')
@@ -151,10 +152,11 @@ class DiscordClient:
             {
                 'content': content,
                 'allowed_mentions': {'parse': ['roles']},
+                **({'flags': 4096} if silent else {}),
             },
         )
 
-    def send_message_with_file(self, channel_reference, content, file_path, file_name=None):
+    def send_message_with_file(self, channel_reference, content, file_path, file_name=None, silent=False):
         """Send a message with one file attachment to a Discord channel."""
         if not channel_reference:
             raise DiscordIntegrationError('Discord channel ID is required.')
@@ -168,6 +170,7 @@ class DiscordClient:
         payload = json.dumps({
             'content': content,
             'allowed_mentions': {'parse': ['roles']},
+            **({'flags': 4096} if silent else {}),
         }).encode('utf-8')
         with open(file_path, 'rb') as handle:
             file_bytes = handle.read()
@@ -209,6 +212,36 @@ class DiscordClient:
             raise DiscordIntegrationError(f'Discord API connection failed: {err.reason}') from err
 
         return json.loads(response_body) if response_body else {}
+
+    def submission_message_reference(self, parent_channel_id, thread_id):
+        """Locate the channel's thread-created notice, never an in-thread reply."""
+        notices = self._request(
+            'GET', f'/channels/{parent_channel_id}/messages?around={thread_id}&limit=100',
+        )
+        for message in notices:
+            reference = message.get('message_reference') or {}
+            if message.get('type') == 18 and str(reference.get('channel_id')) == str(thread_id):
+                return parent_channel_id, message['id']
+
+        # Older threads created from a message may have no system notice.
+        messages = self._request('GET', f'/channels/{thread_id}/messages?after=0&limit=1')
+        if messages and messages[0].get('type') == 21:
+            return parent_channel_id, thread_id
+        raise DiscordIntegrationError('Discord thread-created notice was not found in the parent channel.')
+
+    def add_reaction(self, channel_id, message_id, emoji):
+        """React as the bot to a message, including a thread's starter message."""
+        encoded_emoji = urllib.parse.quote(emoji, safe='')
+        return self._request(
+            'PUT', f'/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me',
+        )
+
+    def remove_reaction(self, channel_id, message_id, emoji):
+        """Remove the bot's reaction when a new review is requested."""
+        encoded_emoji = urllib.parse.quote(emoji, safe='')
+        return self._request(
+            'DELETE', f'/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me',
+        )
 
     def archive_thread(self, thread_id):
         """Archive a Discord thread."""
@@ -1029,7 +1062,7 @@ def notify_discord_stat_scope_saved(
             mention = f'<@&{settings.approver_role_id}>' if settings.approver_role_id else None
             approval_line = f'Awaiting approval by {mention}' if mention else 'Awaiting approval'
             save_message = (
-                f'💾 by {_format_discord_username(saved_by)}.\n'
+                f'Submitted by {_format_discord_username(saved_by)}\n'
                 f'{approval_line}'
             )
             workflow_thread = _load_discord_workflow_thread(
@@ -1050,6 +1083,13 @@ def notify_discord_stat_scope_saved(
                     )
                 else:
                     client.send_message(workflow_thread.thread_id, save_message)
+                try:
+                    reaction_channel, reaction_message = client.submission_message_reference(
+                        settings.channel_id, workflow_thread.thread_id,
+                    )
+                    client.remove_reaction(reaction_channel, reaction_message, '\u2705')
+                except Exception:
+                    logger.exception('Failed to clear Discord approval reaction for thread %s', workflow_thread.thread_id)
                 sent_any = True
                 continue
 
@@ -1063,24 +1103,20 @@ def notify_discord_stat_scope_saved(
                 f'{namespace_link}: {scope_link}\n'
                 f'{save_message}'
             )
-            if approval_image_path:
-                starter = client.send_message_with_file(
-                    settings.channel_id,
-                    initial_message,
-                    approval_image_path,
-                    file_name='stat-approval.png',
-                )
-            else:
-                starter = client.send_message(settings.channel_id, initial_message)
-            message_id = starter.get('id')
-            if not message_id:
-                raise DiscordIntegrationError('Discord did not return a starter message ID.')
-            thread_payload = client.create_thread_from_message(
-                settings.channel_id, message_id, f'Stat Edits: {scope_title}',
-            )
+            thread_payload = client.create_thread(settings.channel_id, f'Stat Edits: {scope_title}')
             thread_id = thread_payload.get('id')
             if not thread_id:
                 raise DiscordIntegrationError('Discord did not return a thread ID.')
+            if approval_image_path:
+                client.send_message_with_file(
+                    thread_id,
+                    initial_message,
+                    approval_image_path,
+                    file_name='stat-approval.png',
+                    silent=True,
+                )
+            else:
+                client.send_message(thread_id, initial_message, silent=True)
             thread_url = _discord_thread_url(thread_payload)
             _save_discord_workflow_thread(
                 namespace,
@@ -1190,6 +1226,13 @@ def _post_discord_scope_message(
 
             client.send_message(workflow_thread.thread_id, content)
             if archive_thread:
+                try:
+                    reaction_channel, reaction_message = client.submission_message_reference(
+                        settings.channel_id, workflow_thread.thread_id,
+                    )
+                    client.add_reaction(reaction_channel, reaction_message, '\u2705')
+                except Exception:
+                    logger.exception('Failed to add Discord approval reaction for thread %s', workflow_thread.thread_id)
                 client.archive_thread(workflow_thread.thread_id)
             sent_any = True
         except Exception:

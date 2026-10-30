@@ -31,7 +31,6 @@ from webapp.web.forms import (
 from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, ExternalSyncLog, RaceResultMap
 from webapp.integrations.cdb import apply_updates_to_sqlite as _apply_release_updates_to_sqlite
 from webapp.integrations.discord import (
-    load_namespace_stat_list_name,
     notify_discord_race_stat_approved,
     notify_discord_race_stat_saved,
     notify_discord_release_review_requested,
@@ -5269,6 +5268,7 @@ def stats_editor_list_detail(list_id):
     return render_template(
         'stat_list_detail.html',
         stat_list=list_row,
+        is_submitted_for_approval=_list_is_submitted_for_approval(selected_namespace, list_id),
         rows=rows,
         list_search_rider=list_search_rider,
         list_search_team=list_search_team,
@@ -5456,21 +5456,6 @@ def stats_editor_save_list_stat_deltas(list_id):
 
         if saved_count > 0:
             flash(f'Saved {saved_count} stat change(s).', 'success')
-            try:
-                list_name = load_namespace_stat_list_name(selected_namespace, list_id)
-                review_url = url_for('web.stats_editor_list_detail', list_id=list_id, _external=True)
-                if notify_discord_stat_list_saved(
-                    selected_namespace,
-                    list_id,
-                    list_name,
-                    review_url,
-                    saved_count,
-                    saved_by=current_user.username,
-                ):
-                    flash('Discord approval thread notified.', 'success')
-            except Exception:
-                logger.exception('Failed to send Discord notification for stat list %s', list_id)
-                flash('Saved stat changes, but Discord notification failed.', 'warning')
         else:
             flash('No stat changes were saved.', 'info')
         if skipped_count > 0:
@@ -5483,6 +5468,91 @@ def stats_editor_save_list_stat_deltas(list_id):
         engine.dispose()
 
     return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+
+
+def _list_pending_submission_fingerprint(conn, list_id):
+    rows = conn.execute(text("""
+        SELECT row_to_json(changes)::text
+        FROM stat_changes AS changes
+        WHERE race_result_id IS NULL AND stat_list_id = :list_id
+          AND is_approved = FALSE
+        ORDER BY id
+    """), {'list_id': list_id}).scalars().all()
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest() if rows else None
+
+
+def _list_submission_matches(namespace, list_id, fingerprint):
+    if not fingerprint or namespace is None:
+        return False
+    submission = AuditLog.query.filter_by(
+        action=AuditAction.STAT_LIST_SUBMITTED,
+        resource_type=f'namespace:{namespace.id}:stat_list', resource_id=list_id,
+    ).order_by(AuditLog.id.desc()).first()
+    return submission is not None and (submission.details or {}).get('fingerprint') == fingerprint
+
+
+def _list_is_submitted_for_approval(namespace, list_id):
+    if namespace is None:
+        return False
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            fingerprint = _list_pending_submission_fingerprint(conn, list_id)
+        return _list_submission_matches(namespace, list_id, fingerprint)
+    except Exception:
+        logger.exception('Failed to load submission state for stat list %s', list_id)
+        return False
+    finally:
+        engine.dispose()
+
+
+@web_bp.route('/stats-editor/lists/<int:list_id>/submit-for-approval', methods=['POST'])
+@login_required
+def stats_editor_submit_list_for_approval(list_id):
+    if not _can_update_stats():
+        abort(403)
+    target = url_for('web.stats_editor_list_detail', list_id=list_id)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        flash('Select a namespace before submitting stat changes.', 'warning')
+        return redirect(target)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            list_name = conn.execute(text('SELECT list_name FROM stat_lists WHERE id = :list_id'),
+                                     {'list_id': list_id}).scalar_one_or_none()
+            if list_name is None:
+                abort(404)
+            fingerprint = _list_pending_submission_fingerprint(conn, list_id)
+            pending_count = conn.execute(text("""
+                SELECT COUNT(*) FROM stat_changes
+                WHERE race_result_id IS NULL AND stat_list_id = :list_id AND is_approved = FALSE
+            """), {'list_id': list_id}).scalar_one()
+        if not fingerprint:
+            flash('No pending stat edits to submit.', 'info')
+            return redirect(target)
+        AuditLog.log_action(
+            AuditAction.STAT_LIST_SUBMITTED, current_user,
+            resource_type=f'namespace:{namespace.id}:stat_list', resource_id=list_id,
+            details={'fingerprint': fingerprint},
+            ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'),
+        )
+        db.session.commit()
+        try:
+            notified = notify_discord_stat_list_saved(
+                namespace, list_id, list_name, url_for('web.stats_editor_list_detail', list_id=list_id, _external=True),
+                pending_count, saved_by=current_user.username,
+            )
+        except Exception:
+            logger.exception('Failed to send Discord submission notification for stat list %s', list_id)
+            notified = False
+        if notified:
+            flash('Submitted for approval. Discord approval thread notified.', 'success')
+        else:
+            flash('Submitted for approval, but the Discord notification was not sent. Check the Discord integration settings.', 'warning')
+    finally:
+        engine.dispose()
+    return redirect(target)
 
 
 @web_bp.route('/stats-editor/lists/<int:list_id>/approve-stat-deltas', methods=['POST'])
@@ -5503,6 +5573,11 @@ def stats_editor_approve_list_stat_deltas(list_id):
     applied_count = 0
     try:
         with engine.begin() as conn:
+            if not _list_submission_matches(
+                selected_namespace, list_id, _list_pending_submission_fingerprint(conn, list_id),
+            ):
+                flash('Submit the current saved changes for approval before approving this list.', 'warning')
+                return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
             conflicts = _load_scope_stat_change_conflicts(
                 conn,
                 """

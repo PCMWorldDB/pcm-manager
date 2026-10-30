@@ -174,20 +174,28 @@ body.dark-mode .panel-card .border.bg-light {
             <h4 class="mb-0">Rider List</h4>
             <div class="d-flex align-items-center gap-2 ms-auto">
                 <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
+                {% if can_update_stats %}
                 <form method="post" action="{{ url_for('web.stats_editor_save_list_stat_deltas', list_id=stat_list.id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="changes_json" id="stat-delta-changes-json" value="">
-                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save Edits{% if not can_update_stats %} &#128274;{% endif %}</button>
+                    <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save</button>
                 </form>
+                <form method="post" action="{{ url_for('web.stats_editor_submit_list_for_approval', list_id=stat_list.id) }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-success" {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>Submit for Approval</button>
+                </form>
+                {% endif %}
+                {% if can_approve_stats %}
                 <form method="post" action="{{ url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button
                         type="submit"
                         class="btn btn-success"
-                        {% if not can_approve_stats or not selected_namespace or not scope_delta_status.unapproved_changes or stat_conflicts %}disabled{% if not can_approve_stats %} title="Approve locked"{% endif %}{% endif %}>
+                        {% if not selected_namespace or not scope_delta_status.unapproved_changes or not is_submitted_for_approval or stat_conflicts %}disabled{% endif %}>
                         Approve{% if not can_approve_stats %} &#128274;{% endif %}
                     </button>
                 </form>
+                {% endif %}
             </div>
         </div>
 
@@ -461,11 +469,12 @@ body.dark-mode .panel-card .border.bg-light {
         });
 
         const changes = Array.from(changesByKey.values());
+        if (!changesInput || !saveButton) return;
         changesInput.value = JSON.stringify(changes);
         const hasChanges = changes.length > 0;
         saveButton.disabled = !canUpdateStats || !hasChanges;
         if (!canUpdateStats) {
-            saveButton.title = 'Save Edits locked';
+            saveButton.title = 'Save locked';
         } else {
             saveButton.removeAttribute('title');
         }
@@ -524,7 +533,7 @@ body.dark-mode .panel-card .border.bg-light {
 
     refreshFormState();
 
-    form.addEventListener('submit', function () {
+    if (form) form.addEventListener('submit', function () {
         refreshFormState();
     });
 })();
