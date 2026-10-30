@@ -1,3 +1,4 @@
+{% from '_navigation_icons.html' import navigation_icon %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -190,6 +191,11 @@
             color: #e0e0e0;
             border-color: var(--brand-primary-border);
         }
+
+        body.dark-mode .form-control::placeholder {
+            color: #ffffff;
+            opacity: 1;
+        }
         
         body.dark-mode .dropdown-menu {
             background: #2d3748;
@@ -246,6 +252,56 @@
             --bs-btn-active-border-color: var(--brand-primary);
             --bs-btn-disabled-color: var(--brand-primary);
             --bs-btn-disabled-border-color: var(--brand-primary);
+        }
+
+        body.dark-mode .btn-outline-primary {
+            --bs-btn-color: #ffffff;
+            --bs-btn-bg: #374151;
+            --bs-btn-border-color: var(--brand-primary-border);
+            --bs-btn-hover-color: #ffffff;
+            --bs-btn-hover-bg: #4a5568;
+            --bs-btn-hover-border-color: var(--brand-primary-border);
+            --bs-btn-active-color: #ffffff;
+            --bs-btn-active-bg: var(--brand-primary);
+            --bs-btn-active-border-color: var(--brand-primary-border);
+            --bs-btn-disabled-color: #cbd5e1;
+            --bs-btn-disabled-bg: #374151;
+            --bs-btn-disabled-border-color: #4a5568;
+        }
+
+        body.dark-mode .btn-outline-secondary {
+            --bs-btn-color: #ffffff;
+            --bs-btn-bg: #374151;
+            --bs-btn-border-color: #6b7280;
+            --bs-btn-hover-color: #ffffff;
+            --bs-btn-hover-bg: #4a5568;
+            --bs-btn-hover-border-color: #9ca3af;
+            --bs-btn-active-color: #ffffff;
+            --bs-btn-active-bg: #4a5568;
+            --bs-btn-active-border-color: #9ca3af;
+            --bs-btn-disabled-color: #cbd5e1;
+            --bs-btn-disabled-bg: #374151;
+            --bs-btn-disabled-border-color: #4a5568;
+        }
+
+        body.dark-mode .nav-tabs {
+            --bs-nav-tabs-border-color: #4a5568;
+            --bs-nav-tabs-link-hover-border-color: #4a5568;
+            --bs-nav-tabs-link-active-color: #ffffff;
+            --bs-nav-tabs-link-active-bg: var(--brand-primary);
+            --bs-nav-tabs-link-active-border-color: var(--brand-primary-border);
+        }
+
+        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled) {
+            color: #ffffff;
+            background-color: #374151;
+            border-color: #4a5568;
+        }
+
+        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):hover,
+        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):focus-visible {
+            background-color: #4a5568;
+            border-color: var(--brand-primary-border);
         }
 
         .bg-primary {
@@ -630,13 +686,14 @@
         body.dark-mode .namespace-navigation {
             border-bottom-color: #4b5563;
         }
-        .namespace-icon {
+        .navigation-icon {
             width: 18px;
             height: 18px;
-            border: 2px solid #000;
+            flex-shrink: 0;
+            color: #000;
         }
-        body.dark-mode .namespace-icon {
-            border-color: #fff;
+        body.dark-mode .navigation-icon {
+            color: #fff;
         }
         .panel-menu-list {
             list-style: none;
@@ -761,7 +818,7 @@
         <div class="side-panel-content">
             <div class="side-panel-section namespace-navigation">
                 <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespaces" aria-label="Namespaces">
-                    <span class="namespace-icon" aria-hidden="true"></span>
+                    {{ navigation_icon('namespace') }}
                     <span class="side-panel-label">Namespaces</span>
                 </a>
             </div>
@@ -771,14 +828,14 @@
                     <li>
                         {% if panel.is_clickable %}
                         <a class="panel-menu-link" href="{{ panel.url }}" title="{{ panel.display_name }}" aria-label="{{ panel.display_name }}">
-                            <span>{{ panel.icon }}</span>
+                            {{ navigation_icon(panel.name) }}
                             <span class="side-panel-label">{{ panel.display_name }}</span>
                         </a>
                         {% else %}
                         <span class="panel-menu-disabled" aria-disabled="true" title="{{ panel.display_name }}" aria-label="{{ panel.display_name }}">
-                            <span>{{ panel.icon }}</span>
+                            {{ navigation_icon(panel.name) }}
                             <span class="side-panel-label">{{ panel.display_name }}</span>
-                            <span class="panel-lock">🔒</span>
+                            <span class="panel-lock">{{ navigation_icon('lock') }}</span>
                         </span>
                         {% endif %}
                     </li>
@@ -790,19 +847,19 @@
             <ul class="side-panel-utility-list">
                 <li>
                     <a class="settings-btn" href="{{ url_for('web.wiki') }}" title="Wiki" aria-label="Wiki">
-                        <span>📖</span>
+                        {{ navigation_icon('wiki') }}
                         <span class="side-panel-label">Wiki</span>
                     </a>
                 </li>
                 <li>
                     <a class="settings-btn" href="{{ url_for('web.settings') }}" title="Settings" aria-label="Settings">
-                        <span>&#9881;&#65039;</span>
+                        {{ navigation_icon('settings') }}
                         <span class="side-panel-label">Settings</span>
                     </a>
                 </li>
                 <li>
                     <a class="user-btn" href="{{ url_for('web.account') }}" title="Account" aria-label="Account">
-                        <span>&#128100;</span>
+                        {{ navigation_icon('account') }}
                         <span class="side-panel-label">Account</span>
                     </a>
                 </li>

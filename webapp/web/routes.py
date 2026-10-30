@@ -341,7 +341,8 @@ def _get_panel_display_name(panel_name):
 def _get_panel_menu_items():
     """Return all known app panels with access metadata for global navigation."""
     panel_items = []
-    for panel_name in sorted(APP_PANELS):
+    panel_order = {'stat_editor': 0, 'team_manager': 1, 'release_manager': 2}
+    for panel_name in sorted(APP_PANELS, key=lambda name: (panel_order.get(name, 3), name)):
         panel_url = _get_panel_url(panel_name)
         can_access = _can_access_panel(panel_name)
         panel_items.append({
@@ -1648,6 +1649,7 @@ def _load_namespace_race_delta_status(namespace, first_cycling_race_ids):
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
             rows = conn.execute(
                 text(
                     """
@@ -3304,6 +3306,7 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
     try:
         params = {}
         with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
             stat_list_columns = {
                 row[0]
                 for row in conn.execute(
@@ -3984,6 +3987,58 @@ def wiki(section_slug=None, page_path=None):
     )
 
 
+def _load_dashboard_tasks(namespace):
+    """Build permission-specific queues for the selected namespace."""
+    tasks = {
+        'show_releases': _can_approve_releases() and _can_access_panel('release_manager'),
+        'show_reviews': _can_approve_stats() and _can_access_panel('stat_editor'),
+        'show_editing': _can_update_stats() and _can_access_panel('stat_editor'),
+        'releases': [],
+        'reviews': [],
+        'editing': {},
+    }
+    if namespace is None:
+        return tasks
+
+    if tasks['show_releases']:
+        tasks['releases'] = [
+            release for release in _load_namespace_releases(namespace)
+            if release.status in ('review', 'pending_approval')
+        ]
+
+    if tasks['show_reviews'] or tasks['show_editing']:
+        races = FirstCyclingRace.query.order_by(
+            FirstCyclingRace.end_date.asc(), FirstCyclingRace.name.asc(),
+        ).all()
+        statuses = _load_namespace_race_delta_status(namespace, {race.race_id for race in races})
+        today = datetime.utcnow().date()
+        selected_year, selected_gender = _resolve_namespace_season(namespace)
+        for race in races:
+            status = statuses.get(race.race_id, {})
+            total = status.get('total_changes', 0)
+            if tasks['show_reviews'] and total > status.get('approved_changes', 0):
+                tasks['reviews'].append({
+                    'label': race.name or f'Race #{race.race_id}',
+                    'url': url_for('web.stats_editor_race_detail', race_id=race.race_id),
+                    'kind': 'Race result',
+                })
+            if (tasks['show_editing'] and race.end_date and race.end_date < today and not total
+                    and race.season_year == selected_year and race.gender == selected_gender):
+                classification = race.classification or 'Unclassified'
+                tasks['editing'].setdefault(classification, []).append(race)
+        tasks['editing'] = dict(sorted(tasks['editing'].items()))
+
+    if tasks['show_reviews']:
+        for stat_list in _load_namespace_stat_lists(namespace):
+            if stat_list['total_changes'] > stat_list['approved_changes']:
+                tasks['reviews'].append({
+                    'label': stat_list['list_name'],
+                    'url': url_for('web.stats_editor_list_detail', list_id=stat_list['id']),
+                    'kind': 'Stat list',
+                })
+    return tasks
+
+
 @web_bp.route('/dashboard')
 @login_required
 def dashboard():
@@ -4006,7 +4061,7 @@ def dashboard():
             selected_namespace = matched_namespace
             session['selected_namespace_id'] = matched_namespace.id
 
-    namespace_stats = _load_dashboard_namespace_stats(selected_namespace)
+    waiting = _load_dashboard_tasks(selected_namespace)
 
     apps = []
     for panel_name, panel in APP_PANELS.items():
@@ -4026,7 +4081,7 @@ def dashboard():
         'dashboard.html',
         apps=apps,
         selected_namespace=selected_namespace,
-        namespace_stats=namespace_stats,
+        waiting=waiting,
     )
 
 
@@ -4387,9 +4442,9 @@ def _load_stats_editor_state(namespace):
         for key in STATS_EDITOR_FILTER_FIELDS
     })
     filters['edit_statuses'] = [
-        value
+        'waiting_edits' if value in ('no_edits', 'pending_edits') else value
         for value in (state.get('race_filters') or {}).get('edit_statuses', filters['edit_statuses'])
-        if value in ('pending_edits', 'pending_approval', 'approved')
+        if value in ('waiting_edits', 'no_edits', 'pending_edits', 'pending_approval', 'approved')
     ]
     return {
         'active_method': active_method,
@@ -4501,7 +4556,15 @@ def stats_editor():
             'race_filters': dict(editor_state['race_filters']),
         }
 
-        if action == 'set_method':
+        if action == 'dashboard_classification':
+            next_state['active_method'] = 'by_race'
+            next_state['race_filters'] = _default_stats_editor_race_filters()
+            next_state['race_filters'].update({
+                'classification': (request.form.get('classification', type=str) or '').strip(),
+                'start_date_to': datetime.utcnow().date().isoformat(),
+                'edit_statuses': ['waiting_edits'],
+            })
+        elif action == 'set_method':
             requested_method = (request.form.get('method', type=str) or 'by_race').strip().lower()
             if requested_method in ('by_race', 'by_list'):
                 next_state['active_method'] = requested_method
@@ -4509,14 +4572,14 @@ def stats_editor():
             next_state['active_method'] = 'by_race'
             next_state['race_filters'] = _default_stats_editor_race_filters()
         else:
-            valid_edit_statuses = ('pending_edits', 'pending_approval', 'approved')
+            valid_edit_statuses = ('waiting_edits', 'no_edits', 'pending_edits', 'pending_approval', 'approved')
             next_state['active_method'] = 'by_race'
             next_state['race_filters'] = {
                 key: (request.form.get(key, type=str) or '').strip()
                 for key in STATS_EDITOR_FILTER_FIELDS
             }
             next_state['race_filters']['edit_statuses'] = [
-                value
+                'waiting_edits' if value in ('no_edits', 'pending_edits') else value
                 for value in request.form.getlist('edit_status')
                 if value in valid_edit_statuses
             ]
@@ -4552,7 +4615,7 @@ def stats_editor():
     selected_edit_statuses = selected_filters['edit_statuses']
 
     if season_selected and active_method == 'by_race':
-        if not selected_filters['start_date_from']:
+        if not selected_filters['start_date_from'] and not selected_filters['start_date_to']:
             selected_filters['start_date_from'] = f'{selected_year}-01-01'
         if not selected_filters['start_date_to']:
             selected_filters['start_date_to'] = f'{selected_year}-12-31'
@@ -4571,7 +4634,7 @@ def stats_editor():
             if value
         ]
 
-        if selected_filters['classification']:
+        if selected_filters['classification'] and selected_filters['classification'] != '__unclassified__':
             wanted = selected_filters['classification'].replace(' ', '').strip().lower()
             default_classification_match = next(
                 (
@@ -4587,8 +4650,11 @@ def stats_editor():
 
         if selected_filters['race_name']:
             query = query.filter(FirstCyclingRace.name.ilike(f"%{selected_filters['race_name']}%"))
-        if selected_filters['classification']:
+        if selected_filters['classification'] == '__unclassified__':
+            query = query.filter(or_(FirstCyclingRace.classification.is_(None), FirstCyclingRace.classification == ''))
+        elif selected_filters['classification']:
             query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
+
         if selected_filters['nation']:
             query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation'])
 
@@ -4608,7 +4674,7 @@ def stats_editor():
         if parsed_start_date_from is not None:
             query = query.filter(FirstCyclingRace.start_date >= parsed_start_date_from)
         if parsed_start_date_to is not None:
-            query = query.filter(FirstCyclingRace.start_date <= parsed_start_date_to)
+            query = query.filter(FirstCyclingRace.end_date < parsed_start_date_to)
 
         if selected_filters['is_stage_race'] == 'true':
             query = query.filter(FirstCyclingRace.stage_count > 1)
@@ -4638,14 +4704,12 @@ def stats_editor():
 
             has_changes = delta_state['total_changes'] > 0
             all_approved = has_changes and delta_state['approved_changes'] == delta_state['total_changes']
-            has_any_results = result_state['is_result_saved'] or result_state.get('has_partial_stage_results', False)
-            is_pending_edits = has_any_results and not has_changes
             is_pending_approval = has_changes and not all_approved
             is_approved = all_approved
 
             if selected_edit_statuses:
                 matches_status_filter = (
-                    ('pending_edits' in selected_edit_statuses and is_pending_edits)
+                    ('waiting_edits' in selected_edit_statuses and not has_changes)
                     or ('pending_approval' in selected_edit_statuses and is_pending_approval)
                     or ('approved' in selected_edit_statuses and is_approved)
                 )

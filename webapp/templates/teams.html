@@ -83,7 +83,7 @@
 {% if active_method == 'teams' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}">
+        <form method="post" action="{{ url_for('web.teams') }}" id="teams-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="teams">
             <div class="section-block">
@@ -112,8 +112,7 @@
                         <input id="team" name="team" class="form-control" type="search" value="{{ selected_filters.team }}" placeholder="Search by team name">
                     </div>
                     <div class="col-lg-2 col-md-12 d-flex align-items-end gap-2 flex-wrap">
-                        <button class="btn btn-outline-primary" type="submit" name="action" value="apply_filters">Apply Filters</button>
-                        <button class="btn btn-outline-secondary" type="submit" name="action" value="clear_filters">Clear Filters</button>
+                        <button class="btn btn-outline-secondary" type="button" id="reset-teams-filters">Reset</button>
                     </div>
                 </div>
             </div>
@@ -147,7 +146,11 @@
                 <tbody>
                     {% for team in teams %}
                     <tr>
-                        <td data-sort-value="{{ team.division or '' }}">{{ team.division or '-' }}</td>
+                        {% set division_name = team.division or '' %}
+                        {% if division_name.startswith('[') and ']' in division_name and division_name.split(']', 1)[0][1:].isdigit() %}
+                            {% set division_name = division_name.split(']', 1)[1]|trim %}
+                        {% endif %}
+                        <td data-sort-value="{{ team.division or '' }}">{{ division_name or '-' }}</td>
                         <td data-sort-value="{{ team.uci_code or '' }}">{{ team.uci_code or '-' }}</td>
                         <td class="team-name-cell" data-sort-value="{{ team.team_name or ('Team #' ~ team.team_id) }}">
                             <a
@@ -161,60 +164,7 @@
                         <td data-sort-value="{{ rider_counts.get(team.team_id, 0) }}">{{ rider_counts.get(team.team_id, 0) }}</td>
                     </tr>
                     {% endfor %}
-                {% block scripts %}
-                <script>
-                // Sortable table logic for teams table
-                document.addEventListener('DOMContentLoaded', function () {
-                    const table = document.querySelector('.teams-table');
-                    if (!table || !table.tBodies.length) return;
-                    const tableBody = table.tBodies[0];
-                    const sortableHeaders = Array.from(table.querySelectorAll('thead th.sortable-col'));
-                    const sortState = { columnIndex: null, direction: 'asc' };
 
-                    function clearSortIndicators() {
-                        sortableHeaders.forEach(function (header) {
-                            header.classList.remove('sort-asc', 'sort-desc');
-                        });
-                    }
-
-                    function getSortValue(row, columnIndex, sortType) {
-                        const cell = row.cells[columnIndex];
-                        if (!cell) return sortType === 'number' ? Number.POSITIVE_INFINITY : '';
-                        const rawValue = (cell.getAttribute('data-sort-value') || cell.textContent || '').trim();
-                        if (sortType === 'number') {
-                            const num = Number.parseFloat(rawValue.replace(/^#/, ''));
-                            return Number.isFinite(num) ? num : Number.POSITIVE_INFINITY;
-                        }
-                        return rawValue.toLowerCase();
-                    }
-
-                    function sortByColumn(header) {
-                        const sortType = (header.getAttribute('data-sort-type') || 'text').toLowerCase();
-                        const columnIndex = header.cellIndex;
-                        const nextDirection = (sortState.columnIndex === columnIndex && sortState.direction === 'asc') ? 'desc' : 'asc';
-                        const rows = Array.from(tableBody.rows);
-                        rows.sort(function (rowA, rowB) {
-                            const valueA = getSortValue(rowA, columnIndex, sortType);
-                            const valueB = getSortValue(rowB, columnIndex, sortType);
-                            if (valueA < valueB) return nextDirection === 'asc' ? -1 : 1;
-                            if (valueA > valueB) return nextDirection === 'asc' ? 1 : -1;
-                            return 0;
-                        });
-                        rows.forEach(function (row) { tableBody.appendChild(row); });
-                        clearSortIndicators();
-                        header.classList.add(nextDirection === 'asc' ? 'sort-asc' : 'sort-desc');
-                        sortState.columnIndex = columnIndex;
-                        sortState.direction = nextDirection;
-                    }
-
-                    sortableHeaders.forEach(function (header) {
-                        header.addEventListener('click', function () {
-                            sortByColumn(header);
-                        });
-                    });
-                });
-                </script>
-                {% endblock %}
                 </tbody>
             </table>
         </div>
@@ -380,4 +330,101 @@
     Select a namespace with Database Year and Gender to load team data.
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+                <script>
+                // Sortable table logic for teams table
+                document.addEventListener('DOMContentLoaded', function () {
+                    const table = document.querySelector('.teams-table');
+                    if (!table || !table.tBodies.length) return;
+                    const tableBody = table.tBodies[0];
+                    const sortableHeaders = Array.from(table.querySelectorAll('thead th.sortable-col'));
+                    const sortState = { columnIndex: null, direction: 'asc' };
+
+                    function clearSortIndicators() {
+                        sortableHeaders.forEach(function (header) {
+                            header.classList.remove('sort-asc', 'sort-desc');
+                        });
+                    }
+
+                    function getSortValue(row, columnIndex, sortType) {
+                        const cell = row.cells[columnIndex];
+                        if (!cell) return sortType === 'number' ? Number.POSITIVE_INFINITY : '';
+                        const rawValue = (cell.getAttribute('data-sort-value') || cell.textContent || '').trim();
+                        if (sortType === 'number') {
+                            const num = Number.parseFloat(rawValue.replace(/^#/, ''));
+                            return Number.isFinite(num) ? num : Number.POSITIVE_INFINITY;
+                        }
+                        return rawValue.toLowerCase();
+                    }
+
+                    function sortByColumn(header) {
+                        const sortType = (header.getAttribute('data-sort-type') || 'text').toLowerCase();
+                        const columnIndex = header.cellIndex;
+                        const nextDirection = (sortState.columnIndex === columnIndex && sortState.direction === 'asc') ? 'desc' : 'asc';
+                        const rows = Array.from(tableBody.rows);
+                        rows.sort(function (rowA, rowB) {
+                            const valueA = getSortValue(rowA, columnIndex, sortType);
+                            const valueB = getSortValue(rowB, columnIndex, sortType);
+                            if (valueA < valueB) return nextDirection === 'asc' ? -1 : 1;
+                            if (valueA > valueB) return nextDirection === 'asc' ? 1 : -1;
+                            return 0;
+                        });
+                        rows.forEach(function (row) { tableBody.appendChild(row); });
+                        clearSortIndicators();
+                        header.classList.add(nextDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+                        sortState.columnIndex = columnIndex;
+                        sortState.direction = nextDirection;
+                    }
+
+                    sortableHeaders.forEach(function (header) {
+                        header.addEventListener('click', function () {
+                            sortByColumn(header);
+                        });
+                    });
+                });
+                </script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const filtersForm = document.getElementById('teams-filters-form');
+    if (!filtersForm) {
+        return;
+    }
+
+    let filterTimer;
+    let submitting = false;
+    function applyFilters() {
+        clearTimeout(filterTimer);
+        if (!submitting && filtersForm.reportValidity()) {
+            filtersForm.requestSubmit();
+        }
+    }
+    filtersForm.addEventListener('submit', function () {
+        clearTimeout(filterTimer);
+        submitting = true;
+    });
+    filtersForm.querySelectorAll('select').forEach(function (field) {
+        field.addEventListener('change', applyFilters);
+    });
+    const teamSearch = filtersForm.elements.namedItem('team');
+    teamSearch.addEventListener('input', function (event) {
+        clearTimeout(filterTimer);
+        if (!event.isComposing) {
+            filterTimer = setTimeout(applyFilters, 500);
+        }
+    });
+    teamSearch.addEventListener('compositionend', function () {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(applyFilters, 500);
+    });
+    document.getElementById('reset-teams-filters').addEventListener('click', function () {
+        ['division', 'country', 'team'].forEach(function (name) {
+            filtersForm.elements.namedItem(name).value = '';
+        });
+        applyFilters();
+    });
+});
+</script>
 {% endblock %}

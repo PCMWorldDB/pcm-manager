@@ -33,6 +33,10 @@
     .stage-row td {
         font-size: 0.9rem;
     }
+    .race-name-cell {
+        max-width: 260px;
+        overflow-wrap: anywhere;
+    }
     .toggle-btn {
         min-width: 64px;
     }
@@ -67,7 +71,7 @@
 {% if active_method == 'by_race' and season_selected %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.stats_editor') }}">
+        <form method="post" action="{{ url_for('web.stats_editor') }}" id="race-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="apply_filters">
             <h5 class="section-title">Search Races</h5>
@@ -80,6 +84,7 @@
                     <label class="form-label" for="classification">Classification</label>
                     <select id="classification" name="classification" class="form-select">
                         <option value="">All</option>
+                        <option value="__unclassified__" {% if selected_filters.classification == '__unclassified__' %}selected{% endif %}>Unclassified</option>
                         {% for value in filter_choices.classifications %}
                         <option value="{{ value }}" {% if selected_filters.classification == value %}selected{% endif %}>{{ value }}</option>
                         {% endfor %}
@@ -102,6 +107,9 @@
                         <option value="true" {% if selected_filters.is_stage_race == 'true' %}selected{% endif %}>Stage</option>
                     </select>
                 </div>
+                <div class="filter-item">
+                    <button class="btn btn-outline-secondary" type="button" id="reset-race-filters" data-year="{{ selected_year }}">Reset</button>
+                </div>
             </div>
             <div class="filters-grid mt-2">
                 <div class="filter-item filter-item-date">
@@ -110,26 +118,22 @@
                 </div>
                 <div class="filter-item filter-item-date">
                     <label class="form-label" for="start_date_to">To</label>
-                    <input id="start_date_to" name="start_date_to" type="date" class="form-control" value="{{ selected_filters.start_date_to }}">
+                    <input id="start_date_to" name="start_date_to" type="date" class="form-control" value="{{ selected_filters.start_date_to }}" title="Races ending before this date">
                 </div>
             </div>
             <div class="d-flex gap-4 mt-3">
                 <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="edit_status_pending_edits" name="edit_status" value="pending_edits" {% if 'pending_edits' in selected_filters.edit_statuses %}checked{% endif %}>
-                    <label class="form-check-label" for="edit_status_pending_edits">Pending Edits</label>
+                    <input class="form-check-input" type="checkbox" id="edit_status_waiting_edits" name="edit_status" value="waiting_edits" {% if 'waiting_edits' in selected_filters.edit_statuses %}checked{% endif %}>
+                    <label class="form-check-label" for="edit_status_waiting_edits">Waiting Edits</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="edit_status_pending_approval" name="edit_status" value="pending_approval" {% if 'pending_approval' in selected_filters.edit_statuses %}checked{% endif %}>
-                    <label class="form-check-label" for="edit_status_pending_approval">Pending Approval</label>
+                    <label class="form-check-label" for="edit_status_pending_approval">Waiting Approval</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="edit_status_approved" name="edit_status" value="approved" {% if 'approved' in selected_filters.edit_statuses %}checked{% endif %}>
                     <label class="form-check-label" for="edit_status_approved">Approved</label>
                 </div>
-            </div>
-            <div class="d-flex gap-2 mt-3">
-                <button class="btn btn-outline-primary" type="submit">Apply Filters</button>
-                <button class="btn btn-outline-secondary" type="submit" name="action" value="clear_filters">Clear Filters</button>
             </div>
         </form>
     </div>
@@ -146,13 +150,13 @@
             <table class="table table-sm table-hover align-middle mb-0">
                 <thead>
                     <tr>
-                        <th style="width: 82px;" class="sortable-col" data-sort-type="number">Stages</th>
                         <th style="width: 96px;">Status</th>
+                        <th style="width: 82px;" class="sortable-col" data-sort-type="number">Stages</th>
+                        <th class="sortable-col" data-sort-type="text" style="width: 260px;">Name</th>
+                        <th class="sortable-col" data-sort-type="text">Class.</th>
                         <th class="sortable-col" data-sort-type="date">Start Date</th>
-                        <th class="sortable-col" data-sort-type="text">Name</th>
+                        <th class="sortable-col" data-sort-type="date">End Date</th>
                         <th class="sortable-col" data-sort-type="text">Nation</th>
-                        <th class="sortable-col" data-sort-type="text">Category</th>
-                        <th class="sortable-col" data-sort-type="text">Classification</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -161,15 +165,6 @@
                     {% set has_stages = stage_rows|length > 0 %}
                     {% set race_status = (race_status_map | default({})).get(race.id, {}) %}
                     <tr class="race-row" data-race-id="{{ race.id }}">
-                        <td data-sort-value="{{ stage_rows|length if has_stages else 0 }}">
-                            {% if has_stages %}
-                            <button type="button" class="btn btn-sm btn-outline-secondary toggle-btn" data-race-id="{{ race.id }}" data-stage-count="{{ stage_rows|length }}">
-                                ({{ stage_rows|length }})
-                            </button>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
                         <td class="text-nowrap">
                             {% if race_status.get('is_result_downloaded') %}<span title="Race result downloaded">⬇️</span>{% endif %}
                             {% if race_status.get('is_partial_result_downloaded') and not race_status.get('is_result_downloaded') %}<span class="ms-1" title="Stage results partially downloaded">🔄</span>{% endif %}
@@ -180,22 +175,30 @@
                             <span class="ms-1" title="Approval pending">⏳</span>
                             {% endif %}
                         </td>
-                        <td data-sort-value="{{ race.start_date.isoformat() if race.start_date else '' }}">{{ race.start_date or '-' }}</td>
-                        <td data-sort-value="{{ (race.name or '')|lower }}">
+                        <td data-sort-value="{{ stage_rows|length if has_stages else 0 }}">
+                            {% if has_stages %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary toggle-btn" data-race-id="{{ race.id }}" data-stage-count="{{ stage_rows|length }}">
+                                ({{ stage_rows|length }})
+                            </button>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="race-name-cell" data-sort-value="{{ (race.name or '')|lower }}">
                             <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}">
                                 {{ race.name or '-' }}
                             </a>
                         </td>
-                        <td data-sort-value="{{ (race.nation_name or '')|lower }}">{{ race.nation_name or '-' }}</td>
-                        <td data-sort-value="{{ (race.category or '')|lower }}">{{ race.category or '-' }}</td>
                         <td data-sort-value="{{ (race.classification or '')|lower }}">{{ race.classification or '-' }}</td>
+                        <td data-sort-value="{{ race.start_date.isoformat() if race.start_date else '' }}">{{ race.start_date or '-' }}</td>
+                        <td data-sort-value="{{ race.end_date.isoformat() if race.end_date else '' }}">{{ race.end_date or '-' }}</td>
+                        <td data-sort-value="{{ (race.nation_name or '')|lower }}">{{ race.nation_name or '-' }}</td>
                     </tr>
 
                     {% if has_stages %}
                     {% for stage in stage_rows %}
                     {% set stage_status = (stage_status_map | default({})).get(stage.id, {}) %}
                     <tr class="stage-row stage-row-{{ race.id }}" style="display: none;">
-                        <td class="text-end">↳</td>
                         <td class="text-nowrap">
                             {% if stage_status.get('is_result_downloaded') %}<span title="Stage result downloaded">⬇️</span>{% endif %}
                             {% if stage_status.get('has_namespace') and stage_status.get('has_stat_changes') %}<span class="ms-1" title="Edits Saved">✏️</span>{% endif %}
@@ -205,14 +208,15 @@
                             <span class="ms-1" title="Approval pending">⏳</span>
                             {% endif %}
                         </td>
-                        <td>{{ stage.stage_date or '-' }}</td>
-                        <td>
+                        <td class="text-end">↳</td>
+                        <td class="race-name-cell">
                             <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id) }}">
                                 Stage {{ stage.stage_number or '?' }} - {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
                             </a>
                         </td>
                         <td>-</td>
-                        <td>-</td>
+                        <td>{{ stage.stage_date or '-' }}</td>
+                        <td>{{ stage.stage_date or '-' }}</td>
                         <td>-</td>
                     </tr>
                     {% endfor %}
@@ -321,6 +325,48 @@ function toggleStages(raceId, button) {
 }
 
 document.addEventListener('DOMContentLoaded', function () {
+    const filtersForm = document.getElementById('race-filters-form');
+    if (filtersForm) {
+        let filterTimer;
+        let submitting = false;
+        function applyFilters() {
+            clearTimeout(filterTimer);
+            if (!submitting && filtersForm.reportValidity()) {
+                filtersForm.requestSubmit();
+            }
+        }
+        filtersForm.addEventListener('submit', function () {
+            clearTimeout(filterTimer);
+            submitting = true;
+        });
+        filtersForm.querySelectorAll('select, input[type="date"], input[type="checkbox"]').forEach(function (field) {
+            field.addEventListener('change', applyFilters);
+        });
+        const raceName = filtersForm.elements.namedItem('race_name');
+        raceName.addEventListener('input', function (event) {
+            clearTimeout(filterTimer);
+            if (!event.isComposing) {
+                filterTimer = setTimeout(applyFilters, 500);
+            }
+        });
+        raceName.addEventListener('compositionend', function () {
+            clearTimeout(filterTimer);
+            filterTimer = setTimeout(applyFilters, 500);
+        });
+        document.getElementById('reset-race-filters').addEventListener('click', function () {
+            ['race_name', 'classification', 'nation', 'is_stage_race'].forEach(function (name) {
+                filtersForm.elements.namedItem(name).value = '';
+            });
+            filtersForm.querySelectorAll('input[name="edit_status"]').forEach(function (field) {
+                field.checked = false;
+            });
+            const year = this.dataset.year.padStart(4, '0');
+            filtersForm.elements.namedItem('start_date_from').value = year + '-01-01';
+            filtersForm.elements.namedItem('start_date_to').value = year + '-12-31';
+            applyFilters();
+        });
+    }
+
     document.querySelectorAll('.toggle-btn').forEach(button => {
         button.addEventListener('click', function () {
             const raceId = this.getAttribute('data-race-id');
