@@ -4608,6 +4608,7 @@ def stats_editor():
     }
     filter_choices = {
         'classifications': [],
+        'has_unclassified': False,
         'nations': [],
     }
 
@@ -4650,11 +4651,6 @@ def stats_editor():
 
         if selected_filters['race_name']:
             query = query.filter(FirstCyclingRace.name.ilike(f"%{selected_filters['race_name']}%"))
-        if selected_filters['classification'] == '__unclassified__':
-            query = query.filter(or_(FirstCyclingRace.classification.is_(None), FirstCyclingRace.classification == ''))
-        elif selected_filters['classification']:
-            query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
-
         if selected_filters['nation']:
             query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation'])
 
@@ -4674,7 +4670,10 @@ def stats_editor():
         if parsed_start_date_from is not None:
             query = query.filter(FirstCyclingRace.start_date >= parsed_start_date_from)
         if parsed_start_date_to is not None:
-            query = query.filter(FirstCyclingRace.end_date < parsed_start_date_to)
+            query = query.filter(
+                func.coalesce(FirstCyclingRace.end_date, FirstCyclingRace.start_date)
+                < parsed_start_date_to
+            )
 
         if selected_filters['is_stage_race'] == 'true':
             query = query.filter(FirstCyclingRace.stage_count > 1)
@@ -4753,7 +4752,27 @@ def stats_editor():
                     'has_namespace': selected_namespace is not None,
                 }
 
-        races = filtered_races
+        # Offer classifications with matches under every other active filter.
+        filter_choices['classifications'] = sorted({
+            race.classification for race in filtered_races if race.classification
+        })
+        filter_choices['has_unclassified'] = any(
+            not race.classification for race in filtered_races
+        )
+        classification = selected_filters['classification']
+        if (
+            classification == '__unclassified__' and not filter_choices['has_unclassified']
+        ) or (
+            classification and classification != '__unclassified__'
+            and classification not in filter_choices['classifications']
+        ):
+            classification = selected_filters['classification'] = ''
+        if classification == '__unclassified__':
+            races = [race for race in filtered_races if not race.classification]
+        elif classification:
+            races = [race for race in filtered_races if race.classification == classification]
+        else:
+            races = filtered_races
 
     if active_method == 'by_list':
         list_entries = _load_namespace_stat_lists(selected_namespace)
@@ -5592,6 +5611,15 @@ def releases():
                 },
             )
             selected_release_id = release.id
+            AuditLog.log_action(
+                AuditAction.RELEASE_CREATED, current_user,
+                resource_type=f'namespace:{selected_namespace.id}:release',
+                resource_id=release.id, resource_name=release_name or version,
+                details={'version': version, 'status': 'draft'},
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
             flash(f'Release {version} created as draft.', 'success')
         except IntegrityError:
             flash('Release version already exists for this namespace.', 'error')
@@ -5731,6 +5759,16 @@ def releases():
                 'published_at': selected_release.published_at,
             }
             _update_namespace_release_fields(selected_namespace, selected_release.id, release_updates)
+            AuditLog.log_action(
+                AuditAction.RELEASE_STATUS_CHANGED, current_user,
+                resource_type=f'namespace:{selected_namespace.id}:release',
+                resource_id=selected_release.id,
+                resource_name=selected_release.release_name or selected_release.version,
+                details={'from_status': current_status, 'to_status': next_status},
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
 
             if review_build_result is not None:
                 flash(
@@ -5988,6 +6026,13 @@ def stats_editor_race_detail(race_id, stage_id=None):
         stage_scope_id,
         include_all_race_stages=include_all_race_stages,
     )
+    overall_delta_status = scope_delta_status if selected_stage is None else (
+        _load_namespace_scope_delta_status(
+            selected_namespace,
+            race.race_id,
+            include_all_race_stages=result_state['is_stage_race'],
+        )
+    )
     rider_snapshot_map = _load_namespace_scope_snapshots(
         selected_namespace,
         race_result_ids=race_result_map_ids,
@@ -6082,6 +6127,8 @@ def stats_editor_race_detail(race_id, stage_id=None):
         stat_conflicts=stat_conflicts,
         stage_status_map=stage_status_map,
         selected_namespace=selected_namespace,
+        overall_delta_status=overall_delta_status,
+        is_submitted_for_approval=_race_is_submitted_for_approval(selected_namespace, race.race_id),
         stat_fields=STAT_DELTA_FIELDS,
         can_approve_stats=_can_approve_stats(),
         can_update_stats=_can_update_stats(),
@@ -6238,6 +6285,7 @@ def stats_editor_save_stat_deltas(race_id):
 
         saved_count = 0
         skipped_count = 0
+        saved_changes = []
 
         with engine.begin() as conn:
             snapshot_rider_ids = {
@@ -6291,6 +6339,11 @@ def stats_editor_save_stat_deltas(race_id):
                     continue
 
                 delta_value = final_value - original_value
+                saved_changes.append({
+                    'cdb_cyclist_id': cdb_cyclist_id, 'stat_name': stat_name,
+                    'original_value': original_value, 'final_value': final_value,
+                    'is_confilict_override': is_confilict_override,
+                })
                 if delta_value == 0 and not is_confilict_override:
                     conn.execute(
                         text(
@@ -6366,24 +6419,19 @@ def stats_editor_save_stat_deltas(race_id):
                 )
                 saved_count += 1
 
+        if saved_changes:
+            AuditLog.log_action(
+                AuditAction.RACE_STATS_SAVED, current_user,
+                resource_type=f'namespace:{selected_namespace.id}:race',
+                resource_id=race.race_id, resource_name=race.name,
+                details={'stage_id': stage_scope_id, 'changes': saved_changes},
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
+
         if saved_count > 0:
             flash(f'Saved {saved_count} stat edit(s).', 'success')
-            try:
-                review_url = url_for('web.stats_editor_race_detail', _external=True, **redirect_target)
-                if notify_discord_race_stat_saved(
-                    selected_namespace,
-                    race.race_id,
-                    race.name,
-                    race.start_date,
-                    stage_scope_id,
-                    review_url,
-                    saved_count,
-                    saved_by=current_user.username,
-                ):
-                    flash('Discord approval thread notified.', 'success')
-            except Exception:
-                logger.exception('Failed to send Discord notification for race %s', race.race_id)
-                flash('Saved stat changes, but Discord notification failed.', 'warning')
         else:
             flash('No stat delta changes were saved.', 'info')
 
@@ -6397,6 +6445,101 @@ def stats_editor_save_stat_deltas(race_id):
         engine.dispose()
 
     return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+
+
+def _race_pending_submission_fingerprint(conn, race_result_ids):
+    """Identify the exact saved, unapproved edits being submitted for review."""
+    rows = conn.execute(text("""
+        SELECT row_to_json(changes)::text
+        FROM stat_changes AS changes
+        WHERE race_result_id = ANY(:race_result_ids)
+          AND stat_list_id IS NULL AND is_approved = FALSE
+        ORDER BY id
+    """), {'race_result_ids': race_result_ids}).scalars().all()
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest() if rows else None
+
+
+def _race_submission_matches(namespace, race_id, fingerprint):
+    if not fingerprint or namespace is None:
+        return False
+    submission = AuditLog.query.filter_by(
+        action=AuditAction.RACE_STATS_SUBMITTED,
+        resource_type=f'namespace:{namespace.id}:race',
+        resource_id=race_id,
+    ).order_by(AuditLog.id.desc()).first()
+    return submission is not None and (submission.details or {}).get('fingerprint') == fingerprint
+
+
+def _race_is_submitted_for_approval(namespace, race_id):
+    if namespace is None:
+        return False
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            fingerprint = _race_pending_submission_fingerprint(
+                conn, _load_firstcycling_race_result_map_ids(race_id, include_all_race_stages=True),
+            )
+        return _race_submission_matches(namespace, race_id, fingerprint)
+    except Exception:
+        logger.exception('Failed to load submission state for race %s', race_id)
+        return False
+    finally:
+        engine.dispose()
+
+
+@web_bp.route('/stats-editor/races/<int:race_id>/submit-for-approval', methods=['POST'])
+@login_required
+def stats_editor_submit_for_approval(race_id):
+    """Request review of saved overall and stage edits in the selected namespace."""
+    if not _can_update_stats():
+        abort(403)
+    if 'stage_id' in request.form:
+        abort(400)
+
+    race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
+    target = url_for('web.stats_editor_race_detail', race_id=race_id)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        flash('Select a namespace before submitting stat changes.', 'warning')
+        return redirect(target)
+
+    race_result_ids = _load_firstcycling_race_result_map_ids(
+        race_id, include_all_race_stages=True,
+    )
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            pending_count = conn.execute(text("""
+                SELECT COUNT(*) FROM stat_changes
+                WHERE race_result_id = ANY(:race_result_ids)
+                  AND stat_list_id IS NULL AND is_approved = FALSE
+            """), {'race_result_ids': race_result_ids}).scalar_one()
+            fingerprint = _race_pending_submission_fingerprint(conn, race_result_ids)
+        if not pending_count:
+            flash('No pending stat edits to submit.', 'info')
+            return redirect(target)
+        AuditLog.log_action(
+            AuditAction.RACE_STATS_SUBMITTED, current_user,
+            resource_type=f'namespace:{namespace.id}:race', resource_id=race_id,
+            details={'fingerprint': fingerprint},
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+        )
+        db.session.commit()
+        if notify_discord_race_stat_saved(
+            namespace, race_id, race.name, race.start_date, None,
+            url_for('web.stats_editor_race_detail', race_id=race_id, _external=True),
+            pending_count, saved_by=current_user.username,
+        ):
+            flash('Submitted for approval. Discord approval thread notified.', 'success')
+        else:
+            flash('Submitted for approval, but the Discord notification was not sent. Check the Discord integration settings.', 'warning')
+    except Exception:
+        logger.exception('Failed to submit stat edits for race %s', race_id)
+        flash('Failed to submit stat edits for approval. Please try again.', 'error')
+    finally:
+        engine.dispose()
+    return redirect(target)
 
 
 @web_bp.route('/stats-editor/races/<int:race_id>/approve-stat-deltas', methods=['POST'])
@@ -6463,6 +6606,13 @@ def stats_editor_approve_stat_deltas(race_id):
                 flash('No saved stat changes were found for this race.', 'info')
                 return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
 
+            if not _race_submission_matches(
+                selected_namespace, race.race_id,
+                _race_pending_submission_fingerprint(conn, race_result_ids),
+            ):
+                flash('Submit the current saved changes for approval before approving this race.', 'warning')
+                return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+
             conflicts = _load_scope_stat_change_conflicts(conn, approval_where_clause, approval_params)
             if conflicts:
                 flash(f'Resolve {len(conflicts)} stat conflict(s) before approving this race.', 'warning')
@@ -6485,6 +6635,19 @@ def stats_editor_approve_stat_deltas(race_id):
                 approval_params,
             )
         approved_count = result.rowcount or 0
+        if approved_count > 0:
+            AuditLog.log_action(
+                AuditAction.RACE_STATS_APPROVED, current_user,
+                resource_type=f'namespace:{selected_namespace.id}:race',
+                resource_id=race.race_id, resource_name=race.name,
+                details={
+                    'stage_id': stage_scope_id, 'race_result_ids': race_result_ids,
+                    'approved_count': approved_count, 'applied_count': applied_count,
+                },
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
     except Exception:
         logger.exception('Failed to approve stat deltas for race %s (stage=%s)', race.race_id, stage_scope_id)
         flash('Failed to approve stat changes.', 'error')
@@ -6520,7 +6683,34 @@ def settings():
         'settings.html',
         can_manage_users=_can_access_user_management(),
         can_manage_namespaces=_can_access_namespace_management(),
+        can_read_audit_logs=current_user.has_permission('audit_logs', 'read'),
         provider_access=_integration_provider_access_map(),
+    )
+
+
+@web_bp.route('/admin/audit-log')
+@login_required
+def admin_audit_log():
+    """Read shared audit history with action and recorded-username filters."""
+    if not current_user.has_permission('audit_logs', 'read'):
+        abort(403)
+
+    selected_action = request.args.get('action', '').strip()
+    selected_user = request.args.get('user', '').strip()
+    page = max(1, request.args.get('page', 1, type=int))
+    query = AuditLog.query
+    if selected_action:
+        query = query.filter(AuditLog.action == selected_action)
+    if selected_user:
+        query = query.filter(AuditLog.username == selected_user)
+    entries = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).paginate(
+        page=page, per_page=50, error_out=False,
+    )
+    return render_template(
+        'admin/audit_log.html', entries=entries,
+        actions=[row[0] for row in db.session.query(AuditLog.action).distinct().order_by(AuditLog.action)],
+        usernames=[row[0] for row in db.session.query(AuditLog.username).distinct().order_by(AuditLog.username)],
+        selected_action=selected_action, selected_user=selected_user,
     )
 
 

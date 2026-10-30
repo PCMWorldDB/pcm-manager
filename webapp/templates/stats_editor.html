@@ -84,7 +84,9 @@
                     <label class="form-label" for="classification">Classification</label>
                     <select id="classification" name="classification" class="form-select">
                         <option value="">All</option>
+                        {% if filter_choices.has_unclassified %}
                         <option value="__unclassified__" {% if selected_filters.classification == '__unclassified__' %}selected{% endif %}>Unclassified</option>
+                        {% endif %}
                         {% for value in filter_choices.classifications %}
                         <option value="{{ value }}" {% if selected_filters.classification == value %}selected{% endif %}>{{ value }}</option>
                         {% endfor %}
