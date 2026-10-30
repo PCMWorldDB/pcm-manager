@@ -154,7 +154,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
         with client.session_transaction() as session:
             assert session['stats_editor_state_by_namespace']['other'] == {'active_method': 'by_list'}
         result = client.get('/stats-editor').get_json()
-        assert set(result['races']) == {'untouched', 'downloaded'}
+        assert set(result['races']) == {'untouched', 'downloaded', 'unknown-end'}
         assert result['method'] == 'by_race'
         assert result['filters']['start_date_to'] == today.isoformat()
         assert result['filters']['edit_statuses'] == ['waiting_edits']
@@ -164,7 +164,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
             'start_date_to': today.isoformat(), 'edit_status': 'waiting_edits',
         })
         assert response.status_code == 302
-        assert set(client.get('/stats-editor').get_json()['races']) == {'untouched', 'downloaded'}
+        assert set(client.get('/stats-editor').get_json()['races']) == {'untouched', 'downloaded', 'unknown-end'}
         for legacy_status in ('no_edits', 'pending_edits'):
             with client.session_transaction() as session:
                 states = dict(session['stats_editor_state_by_namespace'])
@@ -172,7 +172,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
                 session['stats_editor_state_by_namespace'] = states
             result = client.get('/stats-editor').get_json()
             assert result['filters']['edit_statuses'] == ['waiting_edits']
-            assert set(result['races']) == {'untouched', 'downloaded'}
+            assert set(result['races']) == {'untouched', 'downloaded', 'unknown-end'}
         client.post('/stats-editor', data={'action': 'clear_filters'})
         with client.session_transaction() as session:
             filters = session['stats_editor_state_by_namespace'][str(namespace.id)]['race_filters']
