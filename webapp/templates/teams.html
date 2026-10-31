@@ -176,7 +176,7 @@
 {% elif active_method == 'riders' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}">
+        <form method="post" action="{{ url_for('web.teams') }}" id="riders-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="riders">
             <div class="section-block">
@@ -217,8 +217,7 @@
                         </select>
                     </div>
                     <div class="col-12 d-flex align-items-end gap-2 flex-wrap">
-                        <button class="btn btn-outline-primary" type="submit" name="action" value="apply_filters">Apply Filters</button>
-                        <button class="btn btn-outline-secondary" type="submit" name="action" value="clear_filters">Clear Filters</button>
+                        <button class="btn btn-outline-secondary" type="button" id="reset-riders-filters">Reset</button>
                     </div>
                 </div>
             </div>
@@ -388,7 +387,8 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    const filtersForm = document.getElementById('teams-filters-form');
+    const filtersForm = document.getElementById('teams-filters-form')
+        || document.getElementById('riders-filters-form');
     if (!filtersForm) {
         return;
     }
@@ -408,21 +408,30 @@ document.addEventListener('DOMContentLoaded', function () {
     filtersForm.querySelectorAll('select').forEach(function (field) {
         field.addEventListener('change', applyFilters);
     });
-    const teamSearch = filtersForm.elements.namedItem('team');
-    teamSearch.addEventListener('input', function (event) {
-        clearTimeout(filterTimer);
-        if (!event.isComposing) {
+    filtersForm.querySelectorAll('input[type="search"]').forEach(function (field) {
+        field.addEventListener('input', function (event) {
+            clearTimeout(filterTimer);
+            if (!event.isComposing) {
+                filterTimer = setTimeout(applyFilters, 500);
+            }
+        });
+        field.addEventListener('compositionend', function () {
+            clearTimeout(filterTimer);
             filterTimer = setTimeout(applyFilters, 500);
-        }
+        });
     });
-    teamSearch.addEventListener('compositionend', function () {
-        clearTimeout(filterTimer);
-        filterTimer = setTimeout(applyFilters, 500);
-    });
-    document.getElementById('reset-teams-filters').addEventListener('click', function () {
+    document.getElementById('reset-teams-filters')?.addEventListener('click', function () {
         ['division', 'country', 'team'].forEach(function (name) {
             filtersForm.elements.namedItem(name).value = '';
         });
+        applyFilters();
+    });
+    document.getElementById('reset-riders-filters')?.addEventListener('click', function () {
+        const action = document.createElement('input');
+        action.type = 'hidden';
+        action.name = 'action';
+        action.value = 'clear_filters';
+        filtersForm.appendChild(action);
         applyFilters();
     });
 });
