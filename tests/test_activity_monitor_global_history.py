@@ -255,9 +255,10 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
             connection.execute(text("""
                 INSERT INTO activity_monitor_riders
                     (identity_key, source_worlddb_rider_id, identity_generation,
-                     first_name, last_name, team_name, identity_status, identity_hold,
-                     eligible, present_in_cdb, created_at, updated_at)
-                VALUES ('worlddb:2001:g0', 2001, 0, 'Returning', 'Rider', '',
+                     first_cycling_id, birth_date, first_name, last_name, team_name,
+                     identity_status, identity_hold, eligible, present_in_cdb,
+                     created_at, updated_at)
+                VALUES ('worlddb:2002:g0', 2002, 0, 77, '1992-01-02', 'Other', 'Rider', '',
                         'verified', FALSE, TRUE, TRUE, :now, :now)
             """), {"now": now})
             connection.execute(text("""
@@ -278,7 +279,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 SELECT source_worlddb_rider_id, identity_generation, present_in_cdb
                 FROM activity_monitor_riders ORDER BY id
             """)).all()
-            assert absent_rows == [(None, 0, False), (2001, 0, False)]
+            assert absent_rows == [(None, 0, False), (2002, 0, False), (2001, 0, False)]
             connection.execute(text("""
                 INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
                 VALUES (2001, 77, 'Returning', 'Rider', 19900102)
@@ -295,6 +296,52 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 SELECT present_in_cdb FROM activity_monitor_riders
                 WHERE source_worlddb_rider_id IS NULL
             """)).scalar_one() is True
+            assert connection.execute(text("""
+                SELECT source_worlddb_rider_id FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id IS NULL
+            """)).scalar_one() is None
+    finally:
+        engine.dispose()
+        drop_database(namespace_url)
+
+
+def test_roster_sync_rejects_ambiguous_monitor_only_identity(app):
+    base_url = make_url(os.environ["WORLDDB_TEST_DATABASE_URL"])
+    namespace_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    engine = create_engine(namespace_url)
+    now = datetime.utcnow()
+    try:
+        create_database(namespace_url)
+        ActivityMonitorBase.metadata.create_all(engine)
+        CDBTeam.__table__.create(engine)
+        CDBCyclist.__table__.create(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, identity_generation, first_cycling_id, birth_date,
+                     first_name, last_name, team_name, identity_status, identity_hold,
+                     eligible, present_in_cdb, created_at, updated_at)
+                VALUES
+                    ('manual:first', 0, 77, '1990-01-02', 'First', 'Rider', '',
+                     'valid', FALSE, TRUE, TRUE, :now, :now),
+                    ('manual:second', 0, 77, '1990-01-02', 'Second', 'Rider', '',
+                     'valid', FALSE, TRUE, TRUE, :now, :now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                VALUES (3001, 77, 'CDB', 'Rider', 19900102)
+            """))
+
+        assert sync_activity_monitor_roster(engine) == [3001]
+        with engine.connect() as connection:
+            assert connection.execute(text("""
+                SELECT present_in_cdb FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id IS NULL ORDER BY id
+            """)).scalars().all() == [False, False]
+            assert connection.execute(text("""
+                SELECT COUNT(*) FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id = 3001 AND present_in_cdb = TRUE
+            """)).scalar_one() == 1
     finally:
         engine.dispose()
         drop_database(namespace_url)
