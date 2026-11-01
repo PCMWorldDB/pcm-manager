@@ -283,7 +283,8 @@ def sync_activity_monitor_roster(namespace_engine):
         connection.execute(text("""
             UPDATE activity_monitor_riders
             SET present_in_cdb = FALSE, updated_at = :now
-            WHERE id != ALL(:active_ids) AND present_in_cdb = TRUE
+            WHERE source_worlddb_rider_id IS NOT NULL
+              AND id != ALL(:active_ids) AND present_in_cdb = TRUE
         """), {"now": datetime.utcnow(), "active_ids": active_rider_row_ids})
     return matched
 

@@ -264,6 +264,11 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 VALUES (2001, 'Returning', 'Rider')
             """))
         assert sync_activity_monitor_roster(engine) == [2001]
+        with engine.connect() as connection:
+            assert connection.execute(text("""
+                SELECT present_in_cdb FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id IS NULL
+            """)).scalar_one() is True
         with engine.begin() as connection:
             connection.execute(text("DELETE FROM cdb_cyclist WHERE id = 2001"))
         assert sync_activity_monitor_roster(engine) == []
@@ -272,7 +277,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 SELECT source_worlddb_rider_id, identity_generation, present_in_cdb
                 FROM activity_monitor_riders ORDER BY id
             """)).all()
-            assert absent_rows == [(None, 0, False), (2001, 0, False)]
+            assert absent_rows == [(None, 0, True), (2001, 0, False)]
             connection.execute(text("""
                 INSERT INTO cdb_cyclist (id, first_name, last_name)
                 VALUES (2001, 'Returning', 'Rider')
@@ -288,7 +293,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
             assert connection.execute(text("""
                 SELECT present_in_cdb FROM activity_monitor_riders
                 WHERE source_worlddb_rider_id IS NULL
-            """)).scalar_one() is False
+            """)).scalar_one() is True
     finally:
         engine.dispose()
         drop_database(namespace_url)
