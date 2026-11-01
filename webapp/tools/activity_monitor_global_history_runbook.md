@@ -63,9 +63,13 @@ the archive-table installation or migrates existing history automatically.
 - Recovery supports source checks, race results, rider schedules, profile
   links, review state/events, identity alerts, and eligibility events. Runs,
   task queues/events, scheduler settings, roster snapshots, and generic legacy
-  records are not restored. A namespace must already have Activity Monitor
-  rider rows linked to the matching WorldDB IDs; CDB rows alone do not supply
-  that stable identity.
+  records are not restored. When the Activity Monitor schema has been
+  operator-installed, CDB upload synchronizes its roster from `cdb_cyclist`
+  using `IDcyclist`/`cdb_cyclist.id` as the WorldDB rider ID, then restores
+  matching archived records. A rider returning after being absent starts a
+  new identity generation; records from an earlier generation remain archived
+  and are not attached to the current generation. Monitor-only rows are marked
+  absent from the current CDB.
 - Uploading a CDB from the namespace detail page replaces the mapped roster
   tables atomically. The namespace's Activity Monitor history is archived
   before the update when the shared archive is installed and remains in its

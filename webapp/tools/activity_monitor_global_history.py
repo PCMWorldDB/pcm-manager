@@ -215,6 +215,7 @@ def sync_activity_monitor_roster(namespace_engine):
     if not inspect(namespace_engine).has_table(ActivityMonitorRider.__tablename__):
         return []
     matched = []
+    active_rider_row_ids = []
     with namespace_engine.begin() as connection:
         cyclists = connection.execute(text("""
             SELECT c.id, c.first_cycling_id, c.first_name, c.last_name,
@@ -228,6 +229,7 @@ def sync_activity_monitor_roster(namespace_engine):
             rider = connection.execute(text("""
                 SELECT id, identity_generation FROM activity_monitor_riders
                 WHERE source_worlddb_rider_id = :worlddb_id
+                  AND present_in_cdb = TRUE
                 ORDER BY identity_generation DESC LIMIT 1
             """), {"worlddb_id": worlddb_id}).mappings().first()
             birth_date = None
@@ -251,27 +253,38 @@ def sync_activity_monitor_roster(namespace_engine):
                        "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "",
                        "now": now, "id": rider["id"]})
             else:
+                generation = connection.execute(text("""
+                    SELECT COALESCE(MAX(identity_generation), -1) + 1
+                    FROM activity_monitor_riders WHERE source_worlddb_rider_id = :worlddb_id
+                """), {"worlddb_id": worlddb_id}).scalar_one()
                 connection.execute(text("""
                     INSERT INTO activity_monitor_riders
                         (identity_key, source_worlddb_rider_id, identity_generation,
                          first_cycling_id, first_name, last_name, birth_date, team_id,
                          team_name, identity_status, identity_hold, eligible,
                          present_in_cdb, last_seen_cdb_at, created_at, updated_at)
-                    VALUES (:identity_key, :worlddb_id, 0, :fc_id, :first_name,
+                    VALUES (:identity_key, :worlddb_id, :generation, :fc_id, :first_name,
                             :last_name, :birth_date, :team_id, :team_name,
                             'unverified', FALSE, TRUE, TRUE, :now, :now, :now)
-                """), {"identity_key": f"worlddb:{worlddb_id}:g0", "worlddb_id": worlddb_id,
+                """), {"identity_key": f"worlddb:{worlddb_id}:g{generation}",
+                       "worlddb_id": worlddb_id, "generation": generation,
                        "fc_id": cyclist["first_cycling_id"], "first_name": cyclist["first_name"] or "",
                        "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
                        "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "", "now": now})
+                rider_id = connection.execute(text("""
+                    SELECT id FROM activity_monitor_riders
+                    WHERE source_worlddb_rider_id = :worlddb_id
+                      AND identity_generation = :generation
+                """), {"worlddb_id": worlddb_id, "generation": generation}).scalar_one()
+            if rider:
+                rider_id = rider["id"]
+            active_rider_row_ids.append(rider_id)
             matched.append(worlddb_id)
         connection.execute(text("""
             UPDATE activity_monitor_riders
             SET present_in_cdb = FALSE, updated_at = :now
-            WHERE source_worlddb_rider_id IS NOT NULL
-              AND source_worlddb_rider_id != ALL(:worlddb_ids)
-              AND present_in_cdb = TRUE
-        """), {"now": datetime.utcnow(), "worlddb_ids": matched})
+            WHERE id != ALL(:active_ids) AND present_in_cdb = TRUE
+        """), {"now": datetime.utcnow(), "active_ids": active_rider_row_ids})
     return matched
 
 
@@ -294,6 +307,7 @@ def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
             SELECT source_worlddb_rider_id, id, identity_generation
             FROM activity_monitor_riders
             WHERE source_worlddb_rider_id = ANY(:worlddb_ids)
+              AND present_in_cdb = TRUE
         """), {"worlddb_ids": sorted(rider_ids)}).all()
         }
         if not local_riders:
@@ -320,13 +334,17 @@ def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
             if worlddb_id not in local_riders:
                 continue
             table = metadata.tables[table_name]
+            target_generation = local_riders[worlddb_id][1]
+            if ("identity_generation" in table.c and
+                    int(record.get("identity_generation") or 0) != target_generation):
+                continue
             values = {key: _restore_value(table.c[key], value)
                       for key, value in record.items()
                       if key in table.c and key != "id"}
             if "rider_id" in table.c:
                 values["rider_id"] = local_riders[worlddb_id][0]
             if "identity_generation" in table.c:
-                values["identity_generation"] = local_riders[worlddb_id][1]
+                values["identity_generation"] = target_generation
             if "source_worlddb_rider_id" in table.c:
                 values["source_worlddb_rider_id"] = worlddb_id
             source_key_column = "source_result_key" if table_name == "activity_monitor_results" else "source_record_key"
