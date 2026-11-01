@@ -209,6 +209,72 @@ def _restore_value(column, value):
     return value
 
 
+def sync_activity_monitor_roster(namespace_engine):
+    from webapp.models.ns.activity_monitor import ActivityMonitorRider
+
+    if not inspect(namespace_engine).has_table(ActivityMonitorRider.__tablename__):
+        return []
+    matched = []
+    with namespace_engine.begin() as connection:
+        cyclists = connection.execute(text("""
+            SELECT c.id, c.first_cycling_id, c.first_name, c.last_name,
+                   c.birth_date, c.team_id, COALESCE(t.team_name, t.short_name, '') AS team_name
+            FROM cdb_cyclist c
+            LEFT JOIN cdb_team t ON t.id = c.team_id
+            ORDER BY c.id
+        """)).mappings().all()
+        for cyclist in cyclists:
+            worlddb_id = int(cyclist["id"])
+            rider = connection.execute(text("""
+                SELECT id, identity_generation FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id = :worlddb_id
+                ORDER BY identity_generation DESC LIMIT 1
+            """), {"worlddb_id": worlddb_id}).mappings().first()
+            birth_date = None
+            raw_birth_date = cyclist["birth_date"]
+            if raw_birth_date:
+                try:
+                    birth_date = datetime.strptime(str(raw_birth_date), "%Y%m%d").date()
+                except ValueError:
+                    birth_date = None
+            now = datetime.utcnow()
+            if rider:
+                connection.execute(text("""
+                    UPDATE activity_monitor_riders
+                    SET first_cycling_id = :fc_id, first_name = :first_name,
+                        last_name = :last_name, birth_date = COALESCE(:birth_date, birth_date),
+                        team_id = :team_id, team_name = :team_name,
+                        present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
+                    WHERE id = :id
+                """), {"fc_id": cyclist["first_cycling_id"], "first_name": cyclist["first_name"] or "",
+                       "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
+                       "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "",
+                       "now": now, "id": rider["id"]})
+            else:
+                connection.execute(text("""
+                    INSERT INTO activity_monitor_riders
+                        (identity_key, source_worlddb_rider_id, identity_generation,
+                         first_cycling_id, first_name, last_name, birth_date, team_id,
+                         team_name, identity_status, identity_hold, eligible,
+                         present_in_cdb, last_seen_cdb_at, created_at, updated_at)
+                    VALUES (:identity_key, :worlddb_id, 0, :fc_id, :first_name,
+                            :last_name, :birth_date, :team_id, :team_name,
+                            'unverified', FALSE, TRUE, TRUE, :now, :now, :now)
+                """), {"identity_key": f"worlddb:{worlddb_id}:g0", "worlddb_id": worlddb_id,
+                       "fc_id": cyclist["first_cycling_id"], "first_name": cyclist["first_name"] or "",
+                       "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
+                       "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "", "now": now})
+            matched.append(worlddb_id)
+        connection.execute(text("""
+            UPDATE activity_monitor_riders
+            SET present_in_cdb = FALSE, updated_at = :now
+            WHERE source_worlddb_rider_id IS NOT NULL
+              AND source_worlddb_rider_id != ALL(:worlddb_ids)
+              AND present_in_cdb = TRUE
+        """), {"now": datetime.utcnow(), "worlddb_ids": matched})
+    return matched
+
+
 def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
     """Restore supported append-only records for riders already matched locally."""
     from webapp.models.ns.activity_monitor import ActivityMonitorBase
@@ -222,11 +288,14 @@ def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
     transaction = destination.begin()
     restored = {table: 0 for table in RECOVERABLE_TABLES}
     try:
-        local_riders = dict(destination.execute(text("""
+        local_riders = {
+            worlddb_id: (rider_id, generation)
+            for worlddb_id, rider_id, generation in destination.execute(text("""
             SELECT source_worlddb_rider_id, id, identity_generation
             FROM activity_monitor_riders
             WHERE source_worlddb_rider_id = ANY(:worlddb_ids)
-        """), {"worlddb_ids": sorted(rider_ids)}).all())
+        """), {"worlddb_ids": sorted(rider_ids)}).all()
+        }
         if not local_riders:
             transaction.commit()
             return {"riders": 0, "restored": restored}
@@ -270,23 +339,36 @@ def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
                 values["run_id"] = None
             elif table_name == "activity_monitor_results":
                 old_check_id = record.get("source_check_id")
-                values["source_check_id"] = check_id_map.get(old_check_id)
+                values["source_check_id"] = check_id_map.get((entry["namespace_slug"], old_check_id))
             elif table_name == "activity_monitor_rider_schedules":
                 pass
             elif table_name == "activity_monitor_identity_alerts":
                 values["cdb_import_id"] = None
             elif table_name == "activity_monitor_eligibility_events":
                 values["cdb_import_id"] = None
+            elif table_name == "activity_monitor_profile_links" and values.get("is_current"):
+                current_exists = destination.execute(text("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM activity_monitor_profile_links
+                        WHERE rider_id = :rider_id
+                          AND identity_generation = :generation
+                          AND is_current = TRUE
+                    )
+                """), {"rider_id": values["rider_id"],
+                       "generation": values["identity_generation"]}).scalar_one()
+                if current_exists:
+                    continue
             statement = pg_insert(table).values(**values).on_conflict_do_nothing().returning(table.c.id)
             inserted_id = destination.execute(statement).scalar_one_or_none()
+            was_inserted = inserted_id is not None
             if inserted_id is None and source_key_column in table.c:
                 inserted_id = destination.execute(
                     text(f'SELECT id FROM "{table_name}" WHERE "{source_key_column}" = :key'),
                     {"key": values[source_key_column]},
                 ).scalar_one_or_none()
             if table_name == "activity_monitor_source_checks" and record.get("id") is not None and inserted_id is not None:
-                check_id_map[record["id"]] = inserted_id
-            if inserted_id is not None:
+                check_id_map[(entry["namespace_slug"], record["id"])] = inserted_id
+            if was_inserted:
                 restored[table_name] += 1
         transaction.commit()
         return {"riders": len(local_riders), "restored": restored}
