@@ -55,6 +55,11 @@ RESOURCES = [
         'supported_actions': ['read'],
     },
     {
+        'name': 'activity-monitor',
+        'description': 'Read-only rider activity monitoring',
+        'supported_actions': ['read'],
+    },
+    {
         'name': 'users',
         'description': 'User management',
         'supported_actions': ['create', 'read', 'update', 'delete'],
@@ -113,6 +118,7 @@ ACTIONS = [
 ROLE_PERMISSIONS = {
     'admin': {
         'audit_logs': ['read'],
+        'activity-monitor': ['read'],
         'users': ['create', 'read', 'update', 'delete'],
         'roles': ['create', 'read', 'update', 'delete'],
         'namespaces': ['create', 'read', 'update', 'delete'],
@@ -123,6 +129,7 @@ ROLE_PERMISSIONS = {
         'integrations-discord': ['read', 'update'],
     },
     'release_manager': {
+        'activity-monitor': ['read'],
         'users': ['read'],
         'roles': ['read'],
         'namespaces': ['create', 'read'],
@@ -131,6 +138,7 @@ ROLE_PERMISSIONS = {
         'releases': ['read', 'approve', 'publish', 'download', 'export'],
     },
     'release_editor': {
+        'activity-monitor': ['read'],
         'users': ['read'],
         'roles': ['read'],
         'namespaces': ['read'],
@@ -139,6 +147,7 @@ ROLE_PERMISSIONS = {
         'releases': ['create', 'read', 'update', 'download', 'export'],
     },
     'stat_editor': {
+        'activity-monitor': ['read'],
         'users': ['read'],
         'roles': ['read'],
         'teams': ['read'],
@@ -146,6 +155,7 @@ ROLE_PERMISSIONS = {
         'releases': ['read', 'download'],
     },
     'stat_editor_approver': {
+        'activity-monitor': ['read'],
         'users': ['read'],
         'roles': ['read'],
         'teams': ['read'],
@@ -163,6 +173,7 @@ ROLE_PERMISSIONS = {
         'integrations-discord': ['read', 'update'],
     },
     'viewer': {
+        'activity-monitor': ['read'],
         'users': ['read'],
         'roles': ['read'],
         'teams': ['read'],

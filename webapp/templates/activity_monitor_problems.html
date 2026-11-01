@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Monitor Problems - WDB{% endblock %}
+{% block body_class %}activity-monitor-page{% endblock %}
+
+{% block styles %}
+.activity-problems-table { min-width: 1450px; }
+.activity-problems-table th, .activity-problems-table td { white-space: nowrap; }
+.activity-problems-table td { vertical-align: middle; }
+.activity-problems-table .pcs-profile-slug.slug-color-red { color: #b02a37 !important; }
+.activity-problems-table .pcs-profile-slug.slug-color-orange { color: #e67700 !important; }
+.activity-problems-table .pcs-profile-slug.slug-color-green { color: #146c43 !important; }
+.activity-problems-table .pcs-profile-status-mark { display: inline-block; flex: 0 0 12px; width: 12px; text-align: center; font-weight: 700; line-height: 1; }
+.activity-problems-table .pcs-profile-status-mark.slug-color-red { color: #b02a37; }
+.activity-problems-table .pcs-profile-status-mark.slug-color-orange { color: #e67700; }
+.activity-problems-table .pcs-profile-status-mark.slug-color-green { color: #146c43; }
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 mb-3 flex-wrap">
+    <div>
+        <h2 class="mb-1">Needs Review</h2>
+        <p class="text-muted mb-0">Review rider or profile-link details that need a person to check them.</p>
+    </div>
+    <span class="badge text-bg-secondary">Review only</span>
+</div>
+
+{% if selected_namespace %}
+{% set activity_monitor_active = 'problems' %}
+{% include 'activity_monitor_nav.html' %}
+
+{% if load_error %}
+<div class="alert alert-warning" role="status">Activity Monitor problem data could not be loaded. No data was changed.</div>
+{% else %}
+{% if history_unavailable %}
+<div class="alert alert-info" role="status">Earlier rider-review records are not available here. Recent website checks appear below when available.</div>
+{% endif %}
+
+<section class="panel-card card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+        <strong>Recent website checks that may need review</strong>
+        <span class="text-muted small">Checks that may need a closer look</span>
+    </div>
+    {% if source_history_unavailable %}<div class="card-body text-muted">No earlier website-check records are available for this dataset yet.</div>{% else %}
+    <div class="table-wrapper"><table class="table table-sm table-hover mb-0 activity-problems-table" data-csrf-token="{{ csrf_token() }}">
+        <thead><tr>
+            <th class="sortable-col" data-sort-type="date">Date</th>
+            <th class="sortable-col" data-sort-type="text">Rider</th>
+            <th class="sortable-col" data-sort-type="number">WorldDB ID</th>
+            <th class="sortable-col" data-sort-type="text">Website</th>
+            <th class="sortable-col" data-sort-type="text">Team</th>
+            <th class="sortable-col" data-sort-type="text">Division</th>
+            <th class="sortable-col" data-sort-type="text">Check result</th>
+            <th class="sortable-col" data-sort-type="text">Race history</th>
+            <th class="sortable-col" data-sort-type="text">Rider match</th>
+            <th class="sortable-col" data-sort-type="date">Next Check</th>
+            <th class="sortable-col" data-sort-type="text">PCS profile</th>
+        </tr></thead>
+        <tbody>
+            {% for check in source_problems %}
+            <tr>
+                <td data-sort-value="{{ check.checked_at.isoformat() if check.checked_at else '' }}">{{ check.checked_at|activity_datetime }}</td>
+                <td data-sort-value="{{ ((check.first_name ~ ' ' ~ check.last_name).strip() or 'Unknown rider')|lower }}">{% if check.rider_id %}<a href="{{ url_for('web.activity_monitor_rider_detail', rider_id=check.rider_id) }}">{{ (check.first_name ~ ' ' ~ check.last_name).strip() or 'Unknown rider' }}</a>{% else %}Unknown rider{% endif %}</td>
+                <td data-sort-value="{{ check.source_worlddb_rider_id or '' }}">{{ check.source_worlddb_rider_id or '—' }}</td>
+                {% set website_label = (check.source or 'unknown')|lower %}
+                <td data-sort-value="{{ website_label }}">{{ 'FC' if website_label in ['firstcycling', 'fc_json', 'firstcycling_json'] else website_label|upper }}</td>
+                <td data-sort-value="{{ (check.team_name or '')|lower }}">{{ check.team_name or '—' }}</td>
+                <td data-sort-value="{{ (check.division_name or '')|lower }}">{{ check.division_name or '—' }}</td>
+                <td data-sort-value="{{ check.source_status|activity_check_status|lower }}">{{ check.source_status|activity_check_status }}</td>
+                <td data-sort-value="{{ check.coverage_status|activity_check_history|lower }}">{{ check.coverage_status|activity_check_history }}</td>
+                <td data-sort-value="{{ check.identity_result|activity_check_history|lower }}">{{ check.identity_result|activity_check_history }}</td>
+                <td data-sort-value="{{ check.next_check_date or '' }}">{{ check.next_check_date or '—' }}</td>
+                <td class="pcs-profile-cell" data-sort-value="{{ check.pcs_slug|lower }}">
+                    <div class="d-flex align-items-center gap-1">
+                        <span class="pcs-profile-status-mark slug-color-{{ check.pcs_slug_color }}" aria-hidden="true" title="PCS link status: {{ check.pcs_slug_color }}">{% if check.pcs_slug_color == 'red' %}X{% elif check.pcs_slug_color == 'orange' %}={% elif check.pcs_slug_color == 'green' %}✓{% else %}-{% endif %}</span>
+                        <input class="form-control form-control-sm pcs-profile-slug slug-color-{{ check.pcs_slug_color }}" type="text"
+                               value="{{ check.pcs_slug }}" placeholder="N/A"
+                               aria-label="PCS rider slug for {{ (check.first_name ~ ' ' ~ check.last_name).strip() }}"
+                               title="{% if check.pcs_slug_assumed %}Suggested from the rider's name; not checked or saved yet.{% elif check.pcs_slug %}Saved PCS profile page.{% else %}No PCS profile page saved.{% endif %}"
+                               data-original="{{ check.pcs_slug }}"
+                               data-save-url="{{ url_for('web.activity_monitor_save_pcs_profile', rider_id=check.rider_id) }}">
+                        <a class="pcs-profile-open {% if not check.pcs_slug %}d-none{% endif %}"
+                           href="{{ check.pcs_url }}" target="_blank" rel="noopener noreferrer"
+                           aria-label="Open PCS profile" title="{% if check.pcs_slug_assumed %}Open suggested PCS profile page (not checked yet){% else %}Open PCS profile{% endif %}">↗</a>
+                    </div>
+                    <span class="pcs-profile-save-status visually-hidden" aria-live="polite"></span>
+                </td>
+            </tr>
+            {% else %}<tr><td colspan="11" class="text-muted py-4 text-center">No recent checks need a closer look. A website being unavailable or showing no race results does not by itself mean there is a problem with the rider.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+    {% endif %}
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const table = document.querySelector('.activity-problems-table');
+    if (!table) return;
+    const csrfToken = table.dataset.csrfToken
+        || document.querySelector('meta[name="csrf-token"]')?.content
+        || document.querySelector('input[name="csrf_token"]')?.value
+        || '';
+    table.querySelectorAll('.pcs-profile-slug').forEach(function (input) {
+        const cell = input.closest('.pcs-profile-cell');
+        const openLink = cell?.querySelector('.pcs-profile-open');
+        const saveStatus = cell?.querySelector('.pcs-profile-save-status');
+        input.addEventListener('blur', async function () {
+            const slug = input.value.trim();
+            if (slug === input.dataset.original) return;
+            if (!slug) {
+                input.value = input.dataset.original || '';
+                if (saveStatus) saveStatus.textContent = 'Enter a PCS slug';
+                return;
+            }
+            input.disabled = true;
+            if (saveStatus) saveStatus.textContent = 'Saving…';
+            try {
+                const body = new URLSearchParams({ pcs_profile: slug, csrf_token: csrfToken });
+                const response = await fetch(input.dataset.saveUrl, {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                    body,
+                    credentials: 'same-origin'
+                });
+                const result = await response.json();
+                if (!response.ok || !result.ok) throw new Error(result.message || 'The PCS link could not be saved.');
+                input.value = result.slug;
+                input.dataset.original = result.slug;
+                input.classList.remove('slug-color-red', 'slug-color-orange', 'slug-color-green');
+                input.classList.add('slug-color-orange');
+                const statusMark = cell?.querySelector('.pcs-profile-status-mark');
+                statusMark?.classList.remove('slug-color-red', 'slug-color-orange', 'slug-color-green');
+                statusMark?.classList.add('slug-color-orange');
+                if (statusMark) { statusMark.textContent = '='; statusMark.title = 'PCS link status: orange'; }
+                if (openLink) {
+                    openLink.href = result.url;
+                    openLink.classList.remove('d-none');
+                }
+                cell.dataset.sortValue = result.slug.toLowerCase();
+                if (saveStatus) saveStatus.textContent = 'Saved · not checked yet';
+            } catch (error) {
+                input.value = input.dataset.original || '';
+                if (saveStatus) saveStatus.textContent = error.message || 'Could not save';
+            } finally {
+                input.disabled = false;
+            }
+        });
+    });
+    const headers = Array.from(table.querySelectorAll('thead th.sortable-col'));
+    const state = { column: null, direction: 'asc' };
+    headers.forEach(function (header, column) {
+        header.tabIndex = 0;
+        header.setAttribute('role', 'button');
+        header.addEventListener('click', function () {
+            const direction = state.column === column && state.direction === 'asc' ? 'desc' : 'asc';
+            const rows = Array.from(table.tBodies[0].rows).filter(function (row) { return row.cells.length === headers.length; });
+            const type = (header.dataset.sortType || 'text').toLowerCase();
+            rows.sort(function (a, b) {
+                let left = a.cells[column].dataset.sortValue || '';
+                let right = b.cells[column].dataset.sortValue || '';
+                if (!left || !right) return !left && !right ? 0 : (!left ? 1 : -1);
+                if (type === 'number') {
+                    left = Number(left);
+                    right = Number(right);
+                } else {
+                    left = left.toLocaleLowerCase();
+                    right = right.toLocaleLowerCase();
+                }
+                const result = left < right ? -1 : left > right ? 1 : 0;
+                return direction === 'asc' ? result : -result;
+            });
+            rows.forEach(function (row) { table.tBodies[0].appendChild(row); });
+            headers.forEach(function (item) { item.classList.remove('sort-asc', 'sort-desc'); });
+            header.classList.add(direction === 'asc' ? 'sort-asc' : 'sort-desc');
+            state.column = column;
+            state.direction = direction;
+        });
+        header.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); header.click(); }
+        });
+    });
+});
+</script>
+{% endif %}
+{% else %}
+<div class="alert alert-info">Select an active namespace to review its Activity Monitor problems.</div>
+{% endif %}
+{% endblock %}

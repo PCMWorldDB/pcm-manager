@@ -84,9 +84,9 @@ class NamespaceForm(FlaskForm):
     pcm_version = SelectField('PCM Version', validators=[Optional()], default='PCM2025')
     database_year = IntegerField('Database Year', validators=[Optional()], default=2026)
     gender = SelectField('Gender', choices=[('Men', 'Men'), ('Women', 'Women')], default='Men')
-    cdb_file = FileField('CDB Database File (SQLite)', validators=[
+    cdb_file = FileField('CDB Database File', validators=[
         Optional(),
-        FileAllowed(['sqlite'], 'Only .sqlite files are allowed')
+        FileAllowed(['cdb', 'sqlite'], 'Only .cdb or .sqlite files are allowed')
     ])
     status = SelectField('Status', choices=[
         ('active', 'Active'),

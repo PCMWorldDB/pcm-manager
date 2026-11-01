@@ -4,6 +4,19 @@ Shared tools for interacting with the Pro Cycling Manager CDB SQLite file.
 This integration handles SQLite inspection, release stat updates, and PCM version
 field mappings. Namespace PostgreSQL models remain in `webapp/models/ns`.
 
+The namespace importer also accepts packed `.cdb` uploads. It converts them to
+SQLite with the `cdb-converter` CLI (`--precise-types`) before import, preserves
+the original upload, and records the converted SQLite file as the namespace's
+release baseline. The web image supplies Node.js 22 and the pinned converter.
+SQLite uploads are checked read-only before a namespace is created.
+
+Cyclist imports deliberately ignore `DYN_cyclist.CONSTANT`; PCS profile links
+are managed by Activity Monitor and are never sourced from an uploaded CDB.
+The cyclist mapping's `export_fields` section identifies `CONSTANT` as the PCS
+slug output field. During release generation, only confirmed or explicitly
+accepted/manual PCS profile links may be written there. The updated SQLite
+working copy is converted back to PCM's packed `.cdb` format for download.
+
 ## Files
 
 - `cdb_mappings.yaml`: authoritative PCM version, table, and field mappings,

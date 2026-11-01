@@ -97,6 +97,23 @@
             </div>
             {% endif %}
 
+            {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+            <div class="card border-warning mb-3">
+                <div class="card-body">
+                    <h6 class="card-title">Update this namespace from a CDB</h6>
+                    <p class="text-muted small mb-2">The mapped CDB tables will be replaced together. Activity Monitor history and other namespace workflow data stay in place; the uploaded file is saved as a new import baseline.</p>
+                    <form method="POST" action="{{ url_for('web.admin_namespace_update_cdb', namespace_id=namespace.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-end">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div>
+                            <label for="namespace-cdb-update" class="form-label">CDB file</label>
+                            <input id="namespace-cdb-update" class="form-control" type="file" name="cdb_file" accept=".cdb,.sqlite" required>
+                        </div>
+                        <button class="btn btn-warning" type="submit">Update namespace CDB</button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+
             <hr>
 
             <div class="row">
