@@ -55,8 +55,9 @@ the archive-table installation or migrates existing history automatically.
   selected namespace into the archive. The namespace's own check remains the
   authoritative result if the shared archive is unavailable; the worker logs
   archive failures for an operator to reconcile with the dry-run/apply command.
-- The rider details page can show archive entries from every namespace with
-  the same WorldDB ID.
+- The archive remains keyed by WorldDB ID, so backend and history-import
+  workflows can link records across namespaces and CDB replacements. Archived
+  entries are not currently displayed on rider pages.
 - Uploading a CDB from the namespace detail page replaces the mapped roster
   tables atomically. The namespace's Activity Monitor history is archived
   before the update when the shared archive is installed and remains in its
