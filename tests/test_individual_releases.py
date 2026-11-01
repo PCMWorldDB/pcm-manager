@@ -21,6 +21,7 @@ def test_individual_release_grouping_and_overview(app, monkeypatch):
         db.session.add_all([race, mapped])
         db.session.commit()
         result_id = mapped.race_result_id
+        race_id = race.id
         for schema in schemas:
             db.session.execute(text(f'CREATE SCHEMA {schema}'))
             db.session.commit()
@@ -81,8 +82,8 @@ def test_individual_release_grouping_and_overview(app, monkeypatch):
             assert '<td>List</td>' in captured[0]
             with engines[0].begin() as conn:
                 conn.execute(text('''
-                    INSERT INTO stat_changes (stat_list_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value,is_approved)
-                    VALUES (1,2,'mo',70,74,4,FALSE)
+                    INSERT INTO stat_changes (stat_list_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value,is_approved,is_confilict_override)
+                    VALUES (1,2,'mo',70,74,4,FALSE,FALSE)
                 '''))
             event = AuditLog(username='Test', action='individual_stats_approved',
                              resource_type='namespace:100:individual', resource_id=1,
@@ -107,7 +108,7 @@ def test_individual_release_grouping_and_overview(app, monkeypatch):
             engine.dispose()
         with app.app_context():
             AuditLog.query.filter(AuditLog.id.in_(event_ids)).delete(synchronize_session=False)
-            db.session.delete(db.session.get(FirstCyclingRace, race.id))
+            db.session.delete(db.session.get(FirstCyclingRace, race_id))
             db.session.delete(db.session.get(RaceResultMap, result_id))
             for schema in schemas:
                 db.session.execute(text(f'DROP SCHEMA {schema} CASCADE'))
@@ -125,7 +126,7 @@ def test_profile_list_conversion_preserves_approval_and_release(app):
             with engine.begin() as conn:
                 conn.execute(text("INSERT INTO stat_lists (id,list_name,season_year,gender) VALUES (1,'Rider profile #1',2026,'Men'),(2,'Ordinary list',2026,'Men')"))
                 conn.execute(text('INSERT INTO stat_list_items (stat_list_id,cdb_cyclist_id) VALUES (1,1),(2,1)'))
-                conn.execute(text("INSERT INTO stat_changes (stat_list_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value,is_approved,release_id) VALUES (1,1,'mo',70,72,2,TRUE,7),(2,1,'tt',70,71,1,FALSE,NULL)"))
+                conn.execute(text("INSERT INTO stat_changes (stat_list_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value,is_approved,release_id,is_confilict_override) VALUES (1,1,'mo',70,72,2,TRUE,7,FALSE),(2,1,'tt',70,71,1,FALSE,NULL,FALSE)"))
             sql = (Path(__file__).resolve().parents[1] / 'migrations/convert_profile_lists_to_individual.sql').read_text()
             raw = engine.raw_connection()
             try:

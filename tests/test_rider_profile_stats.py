@@ -73,7 +73,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert b'Edit Rider Stats' in profile.data
         assert b'stat_input_controls.js' in profile.data
         assert b'>Edit Stats<' not in profile.data
-        assert b'<th>Name</th>' in profile.data
+        assert b'No stat edits found for this rider.' in profile.data
         wrong_rider = json.dumps([{'first_cycling_rider_id': 2, 'stat_name': 'mo', 'final_value': 80}])
         assert client.post(base + 'save', data={'changes_json': wrong_rider}).status_code == 400
         assert client.post(base + 'submit').status_code == 302
@@ -98,6 +98,8 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
             assert conn.execute(text('SELECT COUNT(*) FROM stat_lists')).scalar_one() == 0
             assert conn.execute(text('SELECT COUNT(*) FROM stat_changes WHERE race_result_id IS NULL AND stat_list_id IS NULL')).scalar_one() == 1
         history = client.get('/riders/1')
+        assert history.status_code == 200
+        assert b'<th>Name</th>' in history.data
         assert b'Individual' in history.data
         assert b'Test Rider' in history.data
         if role == 'admin':
