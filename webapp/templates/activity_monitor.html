@@ -74,6 +74,12 @@ body.dark-mode .activity-monitor-progress-track { background: #333b44; }
     {% set activity_monitor_active = 'overview' %}
     {% include 'activity_monitor_nav.html' %}
 
+    {% if can_transfer_history %}
+    <div class="d-flex justify-content-end gap-2 mb-3">
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('web.activity_monitor_history_transfer') }}">History transfer</a>
+    </div>
+    {% endif %}
+
     {% if load_error %}
     <div class="alert alert-warning" role="status">
         The selected namespace could not be read. No data was changed.

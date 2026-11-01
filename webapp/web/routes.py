@@ -642,6 +642,14 @@ def _can_access_namespace_management():
     )
 
 
+def _can_transfer_activity_monitor_history():
+    """Require namespace write authority for moving cross-database history."""
+    return current_user.is_superadmin or any(
+        current_user.has_permission('namespaces', action)
+        for action in ('create', 'update', 'delete')
+    )
+
+
 def _can_create_namespaces():
     return current_user.is_superadmin or current_user.has_permission('namespaces', 'create')
 
@@ -4685,6 +4693,122 @@ def activity_monitor():
         monitor_summary=monitor_summary,
         history_unavailable=history_unavailable,
         load_error=load_error,
+        can_transfer_history=_can_transfer_activity_monitor_history(),
+    )
+
+
+@web_bp.route('/activity-monitor/history-transfer', methods=['GET', 'POST'])
+@login_required
+def activity_monitor_history_transfer():
+    """Export local monitor history or preview/apply a one-time history bundle."""
+    if not _can_access_panel('activity_monitor') or not _can_transfer_activity_monitor_history():
+        abort(403)
+    namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(namespaces)
+    if selected_namespace is None:
+        abort(404)
+    main_engine = db.engines.get('main') or db.engine
+    namespace_engine = None
+    preview = None
+    error = None
+    completed = False
+    archive_ready = False
+    namespace_history_ready = False
+
+    from webapp.tools.activity_monitor_global_history import (
+        ARCHIVE_TABLE,
+        TRANSFER_MARKER_TYPE,
+        archive_namespace_history,
+        build_history_bundle,
+        import_and_restore_history_bundle,
+        preview_history_bundle,
+        validate_history_bundle,
+    )
+    from sqlalchemy import inspect as sqlalchemy_inspect
+
+    try:
+        namespace_engine = create_engine(selected_namespace.build_connection_string(), pool_pre_ping=True)
+        archive_ready = sqlalchemy_inspect(main_engine).has_table(ARCHIVE_TABLE)
+        namespace_history_ready = sqlalchemy_inspect(namespace_engine).has_table('activity_monitor_riders')
+        if archive_ready:
+            with main_engine.connect() as connection:
+                completed = connection.execute(text(f"""
+                    SELECT EXISTS (SELECT 1 FROM {ARCHIVE_TABLE}
+                     WHERE namespace_slug = '__pcm_manager_transfer__'
+                       AND record_type = :marker_type
+                       AND record_data->>'status' = 'complete')
+                """), {'marker_type': TRANSFER_MARKER_TYPE}).scalar_one()
+        if request.method != 'GET':
+            action = request.form.get('action')
+            uploaded = request.files.get('history_bundle')
+            if action == 'prepare':
+                from webapp.models.ns.activity_monitor import ActivityMonitorBase
+                from webapp.tools.activity_monitor_global_history import install_global_history_schema
+
+                install_global_history_schema(main_engine)
+                ActivityMonitorBase.metadata.create_all(namespace_engine, checkfirst=True)
+                flash('History storage is ready. No history was imported or deleted.', 'success')
+                return redirect(url_for('web.activity_monitor_history_transfer'))
+            if action == 'export':
+                total_to_sync = 0
+                for namespace in namespaces:
+                    source_engine = create_engine(namespace.build_connection_string(), pool_pre_ping=True)
+                    try:
+                        namespace_summary = archive_namespace_history(
+                            source_engine, main_engine, namespace.slug, apply=True,
+                        )
+                        total_to_sync += namespace_summary.get('records_to_sync', 0)
+                    finally:
+                        source_engine.dispose()
+                bundle_bytes = build_history_bundle(main_engine)
+                filename = f"activity-monitor-history-{selected_namespace.slug}.json"
+                response = send_file(
+                    io.BytesIO(bundle_bytes), mimetype='application/json',
+                    as_attachment=True, download_name=filename,
+                )
+                response.headers['X-Activity-Monitor-Export-Records'] = str(total_to_sync)
+                return response
+            if uploaded is None or not uploaded.filename:
+                error = 'Choose the Activity Monitor history export file first.'
+            else:
+                raw_bytes = uploaded.stream.read(100 * 1024 * 1024 + 1)
+                if len(raw_bytes) > 100 * 1024 * 1024:
+                    error = 'The export file is larger than the 100 MB limit.'
+                else:
+                    try:
+                        validated = validate_history_bundle(raw_bytes)
+                        preview = preview_history_bundle(main_engine, namespace_engine, validated)
+                        if action == 'import':
+                            if (request.form.get('confirm_import') != 'yes'
+                                    or request.form.get('preview_sha256') != preview['bundle_sha256']):
+                                error = 'The selected file differs from the preview. Review the new preview before importing.'
+                            elif completed:
+                                error = 'A history transfer has already been completed in this installation.'
+                            else:
+                                outcome = import_and_restore_history_bundle(
+                                    main_engine, namespace_engine, validated,
+                                    actor_user_id=current_user.id,
+                                )
+                                flash(
+                                    f"History transfer completed: {outcome['records_imported']:,} archive records "
+                                    f"processed and {outcome['riders_matched']:,} riders matched.",
+                                    'success',
+                                )
+                                return redirect(url_for('web.activity_monitor_history_transfer'))
+                    except (ValueError, RuntimeError) as exc:
+                        error = str(exc)
+    except Exception:
+        logger.exception('Activity Monitor history transfer failed for namespace %s', selected_namespace.slug)
+        error = ('The transfer stopped before completion. The archive may already be saved; '
+                 'you can safely retry it, and no existing records were deleted.')
+    finally:
+        if namespace_engine is not None:
+            namespace_engine.dispose()
+
+    return render_template(
+        'activity_monitor_history_transfer.html', selected_namespace=selected_namespace,
+        preview=preview, error=error, completed=completed,
+        archive_ready=archive_ready, namespace_history_ready=namespace_history_ready,
     )
 
 
