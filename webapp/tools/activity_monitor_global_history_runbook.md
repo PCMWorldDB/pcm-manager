@@ -69,7 +69,10 @@ the archive-table installation or migrates existing history automatically.
   matching archived records. A rider returning after being absent starts a
   new identity generation; records from an earlier generation remain archived
   and are not attached to the current generation. Monitor-only rows are marked
-  absent from the current CDB.
+  present only while a unique FirstCycling ID and matching birth date identify
+  a current CDB cyclist; unmatched or ambiguous monitor-only rows are marked
+  absent. These rows remain unlinked by WorldDB ID and do not receive archived
+  cross-namespace history.
 - Uploading a CDB from the namespace detail page replaces the mapped roster
   tables atomically. The namespace's Activity Monitor history is archived
   before the update when the shared archive is installed and remains in its

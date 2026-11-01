@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from collections import defaultdict
 from datetime import date, datetime
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -224,8 +225,40 @@ def sync_activity_monitor_roster(namespace_engine):
             LEFT JOIN cdb_team t ON t.id = c.team_id
             ORDER BY c.id
         """)).mappings().all()
+        monitor_riders_by_fc_id = defaultdict(list)
+        for monitor_rider in connection.execute(text("""
+            SELECT id, source_worlddb_rider_id, first_cycling_id, birth_date, identity_hold
+            FROM activity_monitor_riders
+            WHERE first_cycling_id IS NOT NULL
+        """)).mappings().all():
+            monitor_riders_by_fc_id[monitor_rider["first_cycling_id"]].append(monitor_rider)
+        cyclist_counts = defaultdict(int)
+        for cyclist in cyclists:
+            if cyclist["first_cycling_id"] is not None:
+                cyclist_counts[cyclist["first_cycling_id"]] += 1
         for cyclist in cyclists:
             worlddb_id = int(cyclist["id"])
+            fc_id = cyclist["first_cycling_id"]
+            unlinked_candidates = [
+                rider for rider in monitor_riders_by_fc_id.get(fc_id, [])
+                if rider["source_worlddb_rider_id"] != worlddb_id
+            ]
+            unlinked = unlinked_candidates[0] if len(unlinked_candidates) == 1 else None
+            if (unlinked and unlinked["source_worlddb_rider_id"] is None
+                    and not unlinked["identity_hold"] and cyclist_counts[fc_id] == 1
+                    and unlinked["birth_date"] is not None):
+                try:
+                    cdb_birth_date = datetime.strptime(str(cyclist["birth_date"]), "%Y%m%d").date()
+                except ValueError:
+                    cdb_birth_date = None
+                if cdb_birth_date == unlinked["birth_date"]:
+                    now = datetime.utcnow()
+                    connection.execute(text("""
+                        UPDATE activity_monitor_riders
+                        SET present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
+                        WHERE id = :id
+                    """), {"now": now, "id": unlinked["id"]})
+                    active_rider_row_ids.append(unlinked["id"])
             rider = connection.execute(text("""
                 SELECT id, identity_generation FROM activity_monitor_riders
                 WHERE source_worlddb_rider_id = :worlddb_id
@@ -283,8 +316,7 @@ def sync_activity_monitor_roster(namespace_engine):
         connection.execute(text("""
             UPDATE activity_monitor_riders
             SET present_in_cdb = FALSE, updated_at = :now
-            WHERE source_worlddb_rider_id IS NOT NULL
-              AND id != ALL(:active_ids) AND present_in_cdb = TRUE
+            WHERE id != ALL(:active_ids) AND present_in_cdb = TRUE
         """), {"now": datetime.utcnow(), "active_ids": active_rider_row_ids})
     return matched
 
