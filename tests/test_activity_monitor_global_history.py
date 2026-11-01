@@ -230,3 +230,65 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
         destination_engine.dispose()
         drop_database(destination_url)
         drop_database(source_url)
+
+
+def test_roster_sync_starts_new_generation_after_reintroduction(app):
+    base_url = make_url(os.environ["WORLDDB_TEST_DATABASE_URL"])
+    namespace_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    engine = create_engine(namespace_url)
+    now = datetime.utcnow()
+    try:
+        create_database(namespace_url)
+        ActivityMonitorBase.metadata.create_all(engine)
+        CDBTeam.__table__.create(engine)
+        CDBCyclist.__table__.create(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, identity_generation, first_name, last_name, team_name,
+                     identity_status, identity_hold, eligible, present_in_cdb,
+                     created_at, updated_at)
+                VALUES ('manual:unlinked', 0, 'Manual', 'Rider', '', 'unverified',
+                        FALSE, TRUE, TRUE, :now, :now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, source_worlddb_rider_id, identity_generation,
+                     first_name, last_name, team_name, identity_status, identity_hold,
+                     eligible, present_in_cdb, created_at, updated_at)
+                VALUES ('worlddb:2001:g0', 2001, 0, 'Returning', 'Rider', '',
+                        'verified', FALSE, TRUE, TRUE, :now, :now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_name, last_name)
+                VALUES (2001, 'Returning', 'Rider')
+            """))
+        assert sync_activity_monitor_roster(engine) == [2001]
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM cdb_cyclist WHERE id = 2001"))
+        assert sync_activity_monitor_roster(engine) == []
+        with engine.begin() as connection:
+            absent_rows = connection.execute(text("""
+                SELECT source_worlddb_rider_id, identity_generation, present_in_cdb
+                FROM activity_monitor_riders ORDER BY id
+            """)).all()
+            assert absent_rows == [(None, 0, False), (2001, 0, False)]
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_name, last_name)
+                VALUES (2001, 'Returning', 'Rider')
+            """))
+        assert sync_activity_monitor_roster(engine) == [2001]
+        with engine.connect() as connection:
+            generations = connection.execute(text("""
+                SELECT identity_generation, present_in_cdb
+                FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id = 2001 ORDER BY identity_generation
+            """)).all()
+            assert generations == [(0, False), (1, True)]
+            assert connection.execute(text("""
+                SELECT present_in_cdb FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id IS NULL
+            """)).scalar_one() is False
+    finally:
+        engine.dispose()
+        drop_database(namespace_url)
