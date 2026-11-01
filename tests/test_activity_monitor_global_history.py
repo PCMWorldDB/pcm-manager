@@ -245,10 +245,11 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
         with engine.begin() as connection:
             connection.execute(text("""
                 INSERT INTO activity_monitor_riders
-                    (identity_key, identity_generation, first_name, last_name, team_name,
+                    (identity_key, identity_generation, first_cycling_id, birth_date,
+                     first_name, last_name, team_name,
                      identity_status, identity_hold, eligible, present_in_cdb,
                      created_at, updated_at)
-                VALUES ('manual:unlinked', 0, 'Manual', 'Rider', '', 'unverified',
+                VALUES ('manual:unlinked', 0, 77, '1990-01-02', 'Returning', 'Rider', '', 'valid',
                         FALSE, TRUE, TRUE, :now, :now)
             """), {"now": now})
             connection.execute(text("""
@@ -260,8 +261,8 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                         'verified', FALSE, TRUE, TRUE, :now, :now)
             """), {"now": now})
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_name, last_name)
-                VALUES (2001, 'Returning', 'Rider')
+                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                VALUES (2001, 77, 'Returning', 'Rider', 19900102)
             """))
         assert sync_activity_monitor_roster(engine) == [2001]
         with engine.connect() as connection:
@@ -277,10 +278,10 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 SELECT source_worlddb_rider_id, identity_generation, present_in_cdb
                 FROM activity_monitor_riders ORDER BY id
             """)).all()
-            assert absent_rows == [(None, 0, True), (2001, 0, False)]
+            assert absent_rows == [(None, 0, False), (2001, 0, False)]
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_name, last_name)
-                VALUES (2001, 'Returning', 'Rider')
+                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                VALUES (2001, 77, 'Returning', 'Rider', 19900102)
             """))
         assert sync_activity_monitor_roster(engine) == [2001]
         with engine.connect() as connection:
