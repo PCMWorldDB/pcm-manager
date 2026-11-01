@@ -1359,7 +1359,10 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     stage = stage_map.get(stage_id)
     race_name = race.name if race is not None and race.name else f'Race #{race_id or mapped_result.race_result_id}'
     if stage_id is not None:
-        stage_label = stage.stage_name or f'Stage #{stage.stage_number or "?"}'
+        stage_label = (
+            stage.stage_name or f'Stage #{stage.stage_number or stage_id}'
+            if stage is not None else f'Stage #{stage_id}'
+        )
         label = f'{race_name} - {stage_label}'
         url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id) if race_id is not None else None
     else:
@@ -1373,19 +1376,23 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     }
 
 
-def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
-    if namespace is None or cdb_cyclist_id is None:
+def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None, offset=0):
+    """Load newest edits for a rider, or a page of the namespace-wide stat log."""
+    if namespace is None:
         return []
 
     connection_string = namespace.build_connection_string()
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            if cdb_cyclist_id is None:
+                _ensure_namespace_database_connection(conn, namespace)
             rows = conn.execute(
                 text(
                     """
                     SELECT
                         sc.id,
+                        sc.cdb_cyclist_id,
                         sc.race_result_id,
                         sc.stat_list_id,
                         sc.release_id,
@@ -1404,11 +1411,12 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
                     LEFT JOIN stat_lists sl ON sl.id = sc.stat_list_id
                     LEFT JOIN cdb_cyclist c ON c.id = sc.cdb_cyclist_id
                     LEFT JOIN releases rel ON rel.id = sc.release_id
-                    WHERE sc.cdb_cyclist_id = :cdb_cyclist_id
+                    WHERE (CAST(:cdb_cyclist_id AS INTEGER) IS NULL OR sc.cdb_cyclist_id = :cdb_cyclist_id)
                     ORDER BY sc.id DESC
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'cdb_cyclist_id': cdb_cyclist_id},
+                {'cdb_cyclist_id': cdb_cyclist_id, 'limit': limit, 'offset': offset},
             ).mappings().all()
     except Exception:
         logger.exception('Failed to load stat edits for cyclist %s from namespace %s', cdb_cyclist_id, namespace.slug)
@@ -1454,11 +1462,12 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
 
     edits = []
     for row in rows:
+        row_rider_id = row['cdb_cyclist_id']
         if row.get('stat_list_id') is None and row.get('race_result_id') is None:
             source = {
                 'type': 'Individual',
-                'label': row.get('rider_name') or f'Rider #{cdb_cyclist_id}',
-                'url': url_for('web.rider_detail', rider_id=cdb_cyclist_id),
+                'label': row.get('rider_name') or f'Rider #{row_rider_id}',
+                'url': url_for('web.rider_detail', rider_id=row_rider_id),
             }
         elif row.get('stat_list_id') is not None:
             source = {
@@ -1481,6 +1490,8 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
         stat_code = stat_name[5:] if stat_name.startswith('stat_') else stat_name
         edits.append({
             'id': row.get('id'),
+            'rider_name': row.get('rider_name') or f'Rider #{row_rider_id}',
+            'rider_url': url_for('web.rider_detail', rider_id=row_rider_id),
             'source': source,
             'stat': stat_code.upper() if stat_code else '-',
             'original_value': row.get('original_value'),
@@ -1849,8 +1860,11 @@ def _load_namespace_approved_release_items(
     gender=None,
     selected_release_id=None,
     release_status=None,
+    log_mode=False,
+    limit=None,
+    offset=0,
 ):
-    """Return approved inclusion candidates across race/stage/list scopes."""
+    """Return release candidates, or paginated edit groups of every status for the log."""
     if namespace is None:
         return []
 
@@ -1858,6 +1872,8 @@ def _load_namespace_approved_release_items(
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            if log_mode:
+                _ensure_namespace_database_connection(conn, namespace)
             release_scope_id = _safe_int(selected_release_id) or 0
             draft_release = _is_draft_release_status(release_status)
             release_filter = (
@@ -1870,6 +1886,9 @@ def _load_namespace_approved_release_items(
                 if draft_release
                 else 'SUM(CASE WHEN release_id = :selected_release_id THEN 1 ELSE 0 END)'
             )
+            if log_mode:
+                release_filter = 'TRUE'
+            having_sql = '' if log_mode else 'HAVING BOOL_AND(COALESCE(is_approved, FALSE))'
             rows = conn.execute(
                 text(
                     f"""
@@ -1879,7 +1898,11 @@ def _load_namespace_approved_release_items(
                         CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id,
                         {selected_rows_sql} AS selected_rows,
                         COUNT(*) AS total_edits,
-                        COUNT(DISTINCT cdb_cyclist_id) AS riders_edited
+                        COUNT(DISTINCT cdb_cyclist_id) AS riders_edited,
+                        BOOL_AND(COALESCE(is_approved, FALSE)) AS is_approved,
+                        BOOL_AND(release_id IS NOT NULL) AS is_released,
+                        ARRAY_AGG(DISTINCT release_id) FILTER (WHERE release_id IS NOT NULL) AS release_ids,
+                        MAX(id) AS latest_edit_id
                     FROM stat_changes
                     WHERE {release_filter}
                       AND (race_result_id IS NULL OR stat_list_id IS NULL)
@@ -1887,12 +1910,24 @@ def _load_namespace_approved_release_items(
                         COALESCE(race_result_id, 0),
                         COALESCE(stat_list_id, 0),
                         CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
-                    HAVING BOOL_AND(COALESCE(is_approved, FALSE))
+                    {having_sql}
+                    ORDER BY MAX(id) DESC
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'selected_release_id': release_scope_id},
+                {'selected_release_id': release_scope_id,
+                 'limit': None if log_mode else limit, 'offset': 0 if log_mode else offset},
             ).mappings().all()
 
+            release_names = {}
+            if log_mode:
+                release_ids = {release_id for row in rows for release_id in (row.get('release_ids') or [])}
+                if release_ids:
+                    release_names = {
+                        release['id']: ' '.join(str(value) for value in (release['release_name'], release['version']) if value)
+                        for release in conn.execute(text('SELECT id, release_name, version FROM releases WHERE id = ANY(:ids)'),
+                                                    {'ids': list(release_ids)}).mappings()
+                    }
             list_ids = {
                 int(row['stat_list_id'])
                 for row in rows
@@ -1978,16 +2013,18 @@ def _load_namespace_approved_release_items(
         race_obj = None
         if individual_rider_id:
             rider = _load_namespace_roster_rider(namespace, individual_rider_id)
-            if rider is None:
+            if rider is None and not log_mode:
                 continue
             scope_type = 'individual'
-            display_name = rider.name
+            display_name = rider.name if rider is not None else f'Rider #{individual_rider_id}'
             item_date = '-'
             category = '-'
             classification_label = '-'
             detail_url = url_for('web.rider_detail', rider_id=individual_rider_id)
         elif list_id > 0:
             list_meta = list_name_map.get(list_id)
+            if not list_meta and log_mode:
+                list_meta = {'list_name': f'List #{list_id}'}
             if not list_meta:
                 continue
             if season_year is not None and _safe_int(list_meta.get('season_year')) != season_year:
@@ -2005,25 +2042,29 @@ def _load_namespace_approved_release_items(
         elif stage_id > 0:
             race_obj = race_map.get(race_id)
             stage_obj = stage_map.get(stage_id)
-            if race_obj is None or stage_obj is None:
+            if (race_obj is None or stage_obj is None) and not log_mode:
                 continue
             scope_type = 'stage'
-            stage_name = stage_obj.stage_name or f'Stage {stage_obj.stage_number or "?"}'
-            display_name = f"{race_obj.name or f'Race #{race_id}'} - {stage_name}"
+            source = _race_result_source_info(mapped_result, race_map, stage_map)
+            display_name = source['label']
             item_date = stage_obj.stage_date if stage_obj is not None else (race_obj.start_date if race_obj is not None else '-')
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
             detail_url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id)
         else:
             race_obj = race_map.get(race_id)
-            if race_obj is None:
+            if race_obj is None and not log_mode:
                 continue
             scope_type = 'race'
-            display_name = race_obj.name or f'Race #{race_id}'
+            display_name = race_obj.name if race_obj is not None and race_obj.name else f'Race #{race_id}'
             item_date = race_obj.start_date if race_obj is not None else '-'
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
             detail_url = url_for('web.stats_editor_race_detail', race_id=race_id)
+
+        if not list_id and not individual_rider_id and mapped_result is None and log_mode:
+            display_name = f"Race Result #{row['race_result_id']}"
+            detail_url = None
 
         resource_kind = 'individual' if individual_rider_id else ('stat_list' if list_id else 'race')
         resource_id = individual_rider_id or list_id or race_id
@@ -2053,8 +2094,17 @@ def _load_namespace_approved_release_items(
             'classification_label': classification_label,
             'riders_edited': int(row.get('riders_edited') or 0),
             'total_edits': int(row.get('total_edits') or 0),
+            'is_approved': bool(row.get('is_approved')),
+            'is_released': bool(row.get('is_released')),
+            'latest_edit_id': row.get('latest_edit_id') or 0,
+            'releases': [{'name': release_names.get(release_id) or f'Release #{release_id}',
+                          'url': url_for('web.releases', release_id=release_id, tab='stats')}
+                         for release_id in sorted(row.get('release_ids') or [])] if log_mode else [],
         })
 
+    if log_mode:
+        items.sort(key=lambda item: (item['approved_on'] or datetime.min, item['latest_edit_id']), reverse=True)
+        return items[offset:offset + limit if limit is not None else None]
     return sorted(
         items,
         key=lambda item: (
@@ -4623,7 +4673,7 @@ def _load_stats_editor_state(namespace):
     states = session.get('stats_editor_state_by_namespace') or {}
     state = states.get(_stats_editor_session_key(namespace)) or {}
     active_method = (state.get('active_method') or 'by_race').strip().lower()
-    if active_method not in ('by_race', 'by_list'):
+    if active_method not in ('by_race', 'by_list', 'log'):
         active_method = 'by_race'
 
     filters = _default_stats_editor_race_filters()
@@ -4649,7 +4699,7 @@ def _save_stats_editor_state(namespace, state):
 
 
 def _set_stats_editor_active_method(namespace, active_method):
-    if active_method not in ('by_race', 'by_list'):
+    if active_method not in ('by_race', 'by_list', 'log'):
         return
     state = _load_stats_editor_state(namespace)
     state['active_method'] = active_method
@@ -4729,7 +4779,7 @@ def _save_team_panel_active_method(namespace, active_method):
 @web_bp.route('/stats-editor', methods=['GET', 'POST'])
 @login_required
 def stats_editor():
-    """Stats editor panel with two methods: by race result and by ad-hoc list."""
+    """Stats editor with race results, lists, and a namespace-wide edit log."""
     if not _can_access_panel('stat_editor'):
         abort(403)
 
@@ -4756,7 +4806,7 @@ def stats_editor():
             })
         elif action == 'set_method':
             requested_method = (request.form.get('method', type=str) or 'by_race').strip().lower()
-            if requested_method in ('by_race', 'by_list'):
+            if requested_method in ('by_race', 'by_list', 'log'):
                 next_state['active_method'] = requested_method
         elif action == 'clear_filters':
             next_state['active_method'] = 'by_race'
@@ -4967,8 +5017,18 @@ def stats_editor():
     if active_method == 'by_list':
         list_entries = _load_namespace_stat_lists(selected_namespace)
 
+    log_page = max(1, request.args.get('log_page', 1, type=int))
+    log_entries = []
+    if active_method == 'log' and selected_namespace is not None:
+        log_entries = _load_namespace_approved_release_items(
+            selected_namespace, log_mode=True, limit=101, offset=(log_page - 1) * 100,
+        )
+
     return render_template(
         'stats_editor.html',
+        log_entries=log_entries[:100],
+        log_has_next=len(log_entries) > 100,
+        log_page=log_page,
         active_method=active_method,
         selected_namespace=selected_namespace,
         selected_year=selected_year,
@@ -6955,6 +7015,77 @@ def settings():
     )
 
 
+def _audit_resource_links(entries):
+    """Format historical resource references without relying on the selected namespace."""
+    namespaces = {ns.id: ns for ns in Namespace.query.all()}
+    resources = {}
+    name_cache = {}
+    for entry in entries:
+        kind = entry.resource_type or ''
+        namespace = None
+        parts = kind.split(':')
+        if len(parts) == 3 and parts[0] == 'namespace':
+            namespace = namespaces.get(_safe_int(parts[1]))
+            kind = parts[2]
+        links = []
+        if len(parts) == 3 and parts[0] == 'namespace':
+            links.append({
+                'label': f'ns:{namespace.slug if namespace else parts[1]}',
+                'url': url_for('web.admin_namespace_detail', namespace_id=namespace.id) if namespace else None,
+            })
+        name = entry.resource_name
+        resource_id = entry.resource_id
+        key = (namespace.id if namespace else None, kind, resource_id)
+        if not name and resource_id is not None:
+            if key not in name_cache:
+                resolved_name = None
+                if kind == 'race':
+                    race = FirstCyclingRace.query.filter_by(race_id=resource_id).first()
+                    resolved_name = race.name if race else None
+                elif kind == 'user':
+                    user = db.session.get(User, resource_id)
+                    resolved_name = user.username if user else None
+                elif kind == 'namespace':
+                    ns = namespaces.get(resource_id)
+                    resolved_name = ns.slug if ns else None
+                elif namespace and not namespace.is_deleted and kind in ('release', 'stat_list', 'individual'):
+                    try:
+                        if kind == 'individual':
+                            rider = _load_namespace_roster_rider(namespace, resource_id)
+                            resolved_name = rider.name if rider else None
+                        elif kind == 'release':
+                            release = _load_namespace_release(namespace, resource_id)
+                            resolved_name = (release.release_name or release.version) if release else None
+                        else:
+                            resolved_name = next((row['list_name'] for row in _load_namespace_stat_lists(namespace)
+                                                  if row['id'] == resource_id), None)
+                    except Exception:
+                        logger.exception('Failed to resolve audit resource name for %s', key)
+                name_cache[key] = resolved_name
+            name = name_cache[key]
+        endpoint, values = None, {}
+        if resource_id is not None:
+            if namespace and not namespace.is_deleted:
+                if kind == 'race':
+                    endpoint, values = 'web.stats_editor_race_detail', {'race_id': resource_id}
+                elif kind == 'release':
+                    endpoint, values = 'web.releases', {'tab': 'overview', 'release_id': resource_id}
+                elif kind == 'stat_list':
+                    endpoint, values = 'web.stats_editor_list_detail', {'list_id': resource_id}
+                elif kind == 'individual':
+                    endpoint, values = 'web.rider_detail', {'rider_id': resource_id}
+                if endpoint:
+                    values['namespace_slug'] = namespace.slug
+            elif kind == 'user':
+                endpoint, values = 'web.admin_user_detail', {'user_id': resource_id}
+            elif kind == 'namespace' and resource_id in namespaces:
+                endpoint, values = 'web.admin_namespace_detail', {'namespace_id': resource_id}
+        label = f'{"ns" if kind == "namespace" else kind}:{name or resource_id}' if kind and (name or resource_id is not None) else (name or kind or '—')
+        links.append({'label': label, 'url': url_for(endpoint, **values) if endpoint else None})
+        resources[entry.id] = links
+    return resources
+
+
 @web_bp.route('/admin/audit-log')
 @login_required
 def admin_audit_log():
@@ -6975,6 +7106,7 @@ def admin_audit_log():
     )
     return render_template(
         'admin/audit_log.html', entries=entries,
+        resource_links=_audit_resource_links(entries.items),
         actions=[row[0] for row in db.session.query(AuditLog.action).distinct().order_by(AuditLog.action)],
         usernames=[row[0] for row in db.session.query(AuditLog.username).distinct().order_by(AuditLog.username)],
         selected_action=selected_action, selected_user=selected_user,

@@ -6,6 +6,8 @@ import pytest
 
 from webapp.extensions import db
 from webapp.models import AuditLog, Role, User
+from webapp.models import Namespace
+from webapp.web import routes
 
 
 @pytest.fixture
@@ -77,7 +79,9 @@ def test_audit_page_filters_and_paginates(app, client, audit_user):
     assert 'fixture-50' in html and 'fixture-00' not in html
     assert html.index('fixture-50') < html.index('fixture-49')
     assert 'excluded-action' not in html and 'excluded-user' not in html
-    assert 'namespace:1:race #1' in html and 'namespace:2:race #1' in html
+    assert 'race:fixture-50' in html and 'race:fixture-49' in html
+    assert '<th scope="col">ID</th>' not in html
+    assert 'IP address' not in html and 'User agent:' not in html
     assert '<script>alert(1)</script>' not in html
     assert '<script>agent</script>' not in html
     assert f'action={action}' in html and f'user={username}' in html
@@ -89,3 +93,45 @@ def test_audit_page_filters_and_paginates(app, client, audit_user):
         assert client.get('/admin/audit-log', query_string={**query, 'page': page}).status_code == 200
     assert client.get('/admin/audit-log', query_string={'user': username}).status_code == 200
     assert client.get('/admin/audit-log', query_string={'action': other_action}).status_code == 200
+
+
+def test_audit_resource_links_use_recorded_namespace(app, client, audit_user, monkeypatch):
+    user_id = audit_user('admin')
+    suffix = uuid4().hex
+    with app.app_context():
+        namespaces = [Namespace(name=f'Audit {suffix} {i}', slug=f'audit-{suffix}-{i}',
+                                database_name=f'audit_{suffix}_{i}') for i in range(2)]
+        db.session.add_all(namespaces)
+        db.session.commit()
+        ids = [ns.id for ns in namespaces]
+        slugs = [ns.slug for ns in namespaces]
+        for ns in namespaces:
+            for kind in ('release', 'stat_list', 'individual'):
+                db.session.add(AuditLog(user_id=user_id, username=suffix, action=suffix,
+                                       resource_type=f'namespace:{ns.id}:{kind}', resource_id=1))
+        db.session.commit()
+    from types import SimpleNamespace
+    monkeypatch.setattr(routes, '_load_namespace_release', lambda ns, rid: SimpleNamespace(
+        release_name=f'Release {ns.slug}', version='1.0'))
+    monkeypatch.setattr(routes, '_load_namespace_stat_lists', lambda ns: [{'id': 1, 'list_name': f'List {ns.slug}'}])
+    monkeypatch.setattr(routes, '_load_namespace_roster_rider', lambda ns, rid: SimpleNamespace(name=f'Rider {ns.slug}'))
+    try:
+        html = client.get('/admin/audit-log', query_string={'action': suffix}).get_data(as_text=True)
+        for slug in slugs:
+            assert f'ns:{slug}' in html
+            assert f'release:Release {slug}' in html
+            assert f'stat_list:List {slug}' in html
+            assert f'individual:Rider {slug}' in html
+            with app.test_request_context():
+                from flask import url_for
+                release_url = url_for('web.releases', namespace_slug=slug, tab='overview', release_id=1)
+                list_url = url_for('web.stats_editor_list_detail', namespace_slug=slug, list_id=1)
+                rider_url = url_for('web.rider_detail', namespace_slug=slug, rider_id=1)
+            assert release_url.replace('&', '&amp;') in html
+            assert list_url in html
+            assert rider_url in html
+    finally:
+        with app.app_context():
+            for namespace_id in ids:
+                db.session.delete(db.session.get(Namespace, namespace_id))
+            db.session.commit()

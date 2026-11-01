@@ -3,6 +3,10 @@
 {% block title %}Stats Editor - WDB{% endblock %}
 
 {% block styles %}
+    body > .container {
+        max-width: 1600px;
+        width: 100%;
+    }
     .filters-grid {
         display: flex;
         flex-wrap: nowrap;
@@ -67,7 +71,18 @@
             <button class="nav-link {% if active_method == 'by_list' %}active{% endif %}" type="submit">By List</button>
         </form>
     </li>
+    <li class="nav-item">
+        <form method="post" action="{{ url_for('web.stats_editor') }}" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_method">
+            <input type="hidden" name="method" value="log">
+            <button class="nav-link {% if active_method == 'log' %}active{% endif %}" type="submit">Log</button>
+        </form>
+    </li>
 </ul>
+{% if active_method == 'log' %}
+{% include 'stat_edit_log.html' %}
+{% endif %}
 {% if active_method == 'by_race' and season_selected %}
 <div class="panel-card card">
     <div class="card-body">
@@ -305,7 +320,7 @@
         {% endif %}
     </div>
 </div>
-{% else %}
+{% elif active_method != 'log' %}
 <div class="alert alert-info">Select a namespace with Database Year and Gender to load stats editor data.</div>
 {% endif %}
 {% endblock %}
