@@ -1,5 +1,6 @@
 """Global Activity Monitor history is isolated by namespace and linked by WorldDB ID."""
 import os
+import hashlib
 from datetime import datetime
 from uuid import uuid4
 
@@ -9,10 +10,12 @@ from sqlalchemy_utils import create_database, drop_database
 
 from webapp.extensions import db
 from webapp.models.ns.activity_monitor import ActivityMonitorBase
+from webapp.models.ns.schema import CDBCyclist, CDBTeam
 from webapp.tools.activity_monitor_global_history import (
     archive_namespace_history,
     install_global_history_schema,
     restore_worlddb_history,
+    sync_activity_monitor_roster,
 )
 
 
@@ -111,13 +114,21 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
     source_engine = create_engine(source_url)
     destination_engine = create_engine(destination_url)
     source_slug = f"recovery-{uuid4().hex[:12]}"
+    rider_worlddb_id = 1905
     now = datetime.utcnow()
     try:
         create_database(source_url)
         create_database(destination_url)
         ActivityMonitorBase.metadata.create_all(source_engine)
         ActivityMonitorBase.metadata.create_all(destination_engine)
-        for engine, rider_id, worlddb_id in ((source_engine, 1, 905), (destination_engine, 55, 905)):
+        CDBTeam.__table__.create(destination_engine)
+        CDBCyclist.__table__.create(destination_engine)
+        with destination_engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, team_id)
+                VALUES (1905, 77, 'Test', 'Rider', NULL), (1906, 78, 'Other', 'Rider', NULL)
+            """))
+        for engine, rider_id, worlddb_id in ((source_engine, 1, rider_worlddb_id),):
             with engine.begin() as connection:
                 connection.execute(text("""
                     INSERT INTO activity_monitor_riders
@@ -134,41 +145,86 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
                     (id, source_record_key, rider_id, source_worlddb_rider_id,
                      identity_generation, first_cycling_id, season, source, source_status,
                      coverage_status, identity_result, checked_at)
-                VALUES (1, 'source-check-1', 1, 905, 0, 77, 2025, 'pcs', 'success',
+                    VALUES (1, 'source-check-1', 1, :worlddb_id, 0, 77, 2025, 'pcs', 'success',
                         'complete', 'verified', :now)
-            """), {"now": now})
+                """), {"now": now, "worlddb_id": rider_worlddb_id})
             connection.execute(text("""
                 INSERT INTO activity_monitor_results
                     (id, source_result_key, rider_id, source_worlddb_rider_id,
                      identity_generation, first_cycling_id, season, race_name, race_category,
                      race_url, stage_name, row_type, result_position, gc_position,
                      participation_status, source, source_check_id, identity_verified, imported_at)
-                VALUES (1, 'source-result-1', 1, 905, 0, 77, 2025, 'Test Race', '', '', '',
+                    VALUES (1, 'source-result-1', 1, :worlddb_id, 0, 77, 2025, 'Test Race', '', '', '',
                         'stage', '', '', 'finished', 'pcs', 1, TRUE, :now)
-            """), {"now": now})
+                """), {"now": now, "worlddb_id": rider_worlddb_id})
 
         with app.app_context():
             main_engine = db.engines["main"]
             install_global_history_schema(main_engine)
             archive_namespace_history(source_engine, main_engine, source_slug, apply=True)
-            first = restore_worlddb_history(main_engine, destination_engine, [905, 906])
-            second = restore_worlddb_history(main_engine, destination_engine, [905, 906])
+            with main_engine.begin() as connection:
+                connection.execute(text("""
+                    INSERT INTO activity_monitor_global_history
+                        (namespace_slug, worlddb_rider_id, record_type, source_record_key,
+                         occurred_at, record_data)
+                    SELECT :second_slug, worlddb_rider_id, record_type, source_record_key,
+                           occurred_at, record_data
+                    FROM activity_monitor_global_history WHERE namespace_slug = :source_slug
+                """), {"second_slug": f"{source_slug}-other", "source_slug": source_slug})
+            synced_ids = sync_activity_monitor_roster(destination_engine)
+            assert synced_ids == [1905, 1906]
+            local_check_key = "archive:" + hashlib.sha256(
+                f"{source_slug}\0activity_monitor_source_checks\0source-check-1".encode()
+            ).hexdigest()
+            with destination_engine.begin() as connection:
+                destination_rider_id = connection.execute(text("""
+                    SELECT id FROM activity_monitor_riders WHERE source_worlddb_rider_id = :worlddb_id
+                """), {"worlddb_id": rider_worlddb_id}).scalar_one()
+                connection.execute(text("""
+                    INSERT INTO activity_monitor_source_checks
+                        (source_record_key, rider_id, source_worlddb_rider_id,
+                         identity_generation, source, source_status, coverage_status,
+                         identity_result, checked_at, message)
+                        VALUES (:key, :rider_id, :worlddb_id, 0, 'pcs', 'failure', 'partial',
+                            'verified', :now, 'newer local check')
+                    """), {"key": local_check_key, "rider_id": destination_rider_id,
+                           "worlddb_id": rider_worlddb_id, "now": now})
+            first = restore_worlddb_history(main_engine, destination_engine, synced_ids)
+            second = restore_worlddb_history(main_engine, destination_engine, synced_ids)
             assert first["restored"]["activity_monitor_source_checks"] == 1
-            assert first["restored"]["activity_monitor_results"] == 1
+            assert first["restored"]["activity_monitor_results"] == 2
             assert second["restored"]["activity_monitor_source_checks"] == 0
+            assert second["restored"]["activity_monitor_results"] == 0
             with destination_engine.connect() as connection:
-                check_id = connection.execute(text("""
-                    SELECT id FROM activity_monitor_source_checks
-                    WHERE rider_id = 55 AND source_worlddb_rider_id = 905
-                """)).scalar_one()
+                check_ids = connection.execute(text("""
+                    SELECT c.id FROM activity_monitor_source_checks c
+                    JOIN activity_monitor_riders r ON r.id = c.rider_id
+                    WHERE r.source_worlddb_rider_id = :worlddb_id ORDER BY c.id
+                """), {"worlddb_id": rider_worlddb_id}).scalars().all()
+                result_rows = connection.execute(text("""
+                    SELECT r.source_worlddb_rider_id, a.source_check_id, a.identity_generation
+                    FROM activity_monitor_results a
+                    JOIN activity_monitor_riders r ON r.id = a.rider_id
+                    ORDER BY a.id
+                """)).all()
+                assert len(check_ids) == 2
+                assert len({row.source_check_id for row in result_rows}) == 2
+                assert all(row.source_worlddb_rider_id == rider_worlddb_id and row.identity_generation == 0
+                           for row in result_rows)
+                assert {row.source_check_id for row in result_rows} == set(check_ids)
                 assert connection.execute(text("""
-                    SELECT rider_id, source_check_id, identity_generation
-                    FROM activity_monitor_results
-                """)).one() == (55, check_id, 3)
+                    SELECT message FROM activity_monitor_source_checks
+                    WHERE source_record_key = :key
+                """), {"key": local_check_key}).scalar_one() == "newer local check"
                 assert connection.execute(text("""
                     SELECT COUNT(*) FROM activity_monitor_source_checks
-                    WHERE source_worlddb_rider_id = 906
+                    WHERE source_worlddb_rider_id = 1906
                 """)).scalar_one() == 0
+            with main_engine.begin() as connection:
+                connection.execute(text("""
+                    DELETE FROM activity_monitor_global_history
+                    WHERE namespace_slug = ANY(:slugs)
+                """), {"slugs": [source_slug, f"{source_slug}-other"]})
     finally:
         source_engine.dispose()
         destination_engine.dispose()

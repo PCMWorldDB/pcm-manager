@@ -10989,21 +10989,15 @@ def admin_namespace_update_cdb(namespace_id):
         ) as importer:
             stats = importer.import_all_tables(replace_existing=True)
         try:
-            from webapp.tools.activity_monitor_global_history import restore_worlddb_history
+            from webapp.tools.activity_monitor_global_history import (
+                restore_worlddb_history,
+                sync_activity_monitor_roster,
+            )
 
             destination_engine = create_engine(namespace.build_connection_string(), pool_pre_ping=True)
             try:
-                with destination_engine.connect() as connection:
-                    history_ready = connection.execute(text(
-                        "SELECT to_regclass('activity_monitor_riders') IS NOT NULL"
-                    )).scalar_one()
-                if history_ready:
-                    with destination_engine.connect() as connection:
-                        worlddb_ids = connection.execute(text("""
-                            SELECT DISTINCT source_worlddb_rider_id
-                            FROM activity_monitor_riders
-                            WHERE source_worlddb_rider_id IS NOT NULL
-                        """)).scalars().all()
+                worlddb_ids = sync_activity_monitor_roster(destination_engine)
+                if worlddb_ids:
                     restore_worlddb_history(
                         db.engines.get('main') or db.engine,
                         destination_engine,
