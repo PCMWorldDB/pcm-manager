@@ -184,7 +184,10 @@ class CDBImporter:
         if self.pg_engine:
             self.pg_engine.dispose()
 
-    def import_mapped_table(self, table_type, model_class, batch_size=1000, boolean_fields=None):
+    def import_mapped_table(
+        self, table_type, model_class, batch_size=1000, boolean_fields=None,
+        commit_batches=True,
+    ):
         """Import a mapped CDB table from SQLite to PostgreSQL."""
         boolean_fields = set(boolean_fields or [])
         mapping = get_field_mapping(self.pcm_version, table_type)
@@ -214,14 +217,16 @@ class CDBImporter:
 
             if len(batch) >= batch_size:
                 self.pg_session.bulk_save_objects(batch)
-                self.pg_session.commit()
+                if commit_batches:
+                    self.pg_session.commit()
                 total_imported += len(batch)
                 logger.info(f"Imported {total_imported} {table_type} rows...")
                 batch = []
 
         if batch:
             self.pg_session.bulk_save_objects(batch)
-            self.pg_session.commit()
+            if commit_batches:
+                self.pg_session.commit()
             total_imported += len(batch)
 
         logger.info(f"Total {table_type} rows imported: {total_imported}")
@@ -261,32 +266,65 @@ class CDBImporter:
             boolean_fields={'is_europe'},
         )
     
-    def import_all_tables(self):
+    def import_all_tables(self, *, replace_existing=True):
         """Import all supported tables
         
         Returns:
             dict with import statistics for each table
         """
+        from sqlalchemy import delete
+        from webapp.models.ns.schema import (
+            CDBCyclist, CDBTeam, CDBRegion, CDBDivision, CDBCountry,
+        )
+
         stats = {}
-        
         logger.info(f"Starting data import from CDB ({self.pcm_version})...")
-        
-        logger.info("[1/5] Importing countries...")
-        stats['countries'] = self.import_countries()
 
-        logger.info("[2/5] Importing divisions...")
-        stats['divisions'] = self.import_divisions()
+        # Keep the previous mapped CDB intact unless every table in the new
+        # import succeeds. Activity Monitor tables and all other namespace
+        # workflow tables are deliberately outside this replacement set.
+        try:
+            if replace_existing:
+                with self.pg_session.begin():
+                    for model in (CDBCyclist, CDBTeam, CDBRegion, CDBDivision, CDBCountry):
+                        self.pg_session.execute(delete(model))
+                    stats['countries'] = self.import_mapped_table(
+                        'country', CDBCountry, commit_batches=False
+                    )
+                    stats['divisions'] = self.import_mapped_table(
+                        'division', CDBDivision, commit_batches=False
+                    )
+                    stats['regions'] = self.import_mapped_table(
+                        'region', CDBRegion, boolean_fields={'is_europe'},
+                        commit_batches=False,
+                    )
+                    stats['teams'] = self.import_mapped_table(
+                        'team', CDBTeam, commit_batches=False
+                    )
+                    stats['cyclists'] = self.import_mapped_table(
+                        'cyclist', CDBCyclist, commit_batches=False
+                    )
+                    for table_name in (
+                        'cdb_country', 'cdb_division', 'cdb_region', 'cdb_team', 'cdb_cyclist'
+                    ):
+                        self.pg_session.execute(text(f"""
+                            SELECT setval(
+                                pg_get_serial_sequence('{table_name}', 'id'),
+                                COALESCE((SELECT MAX(id) FROM {table_name}), 1),
+                                EXISTS (SELECT 1 FROM {table_name})
+                            )
+                        """))
+            else:
+                stats['countries'] = self.import_countries()
+                stats['divisions'] = self.import_divisions()
+                stats['regions'] = self.import_regions()
+                stats['teams'] = self.import_teams()
+                stats['cyclists'] = self.import_cyclists()
+        except Exception:
+            self.pg_session.rollback()
+            raise
 
-        logger.info("[3/5] Importing regions...")
-        stats['regions'] = self.import_regions()
-
-        logger.info("[4/5] Importing teams...")
-        stats['teams'] = self.import_teams()
-
-        logger.info("[5/5] Importing cyclists...")
-        stats['cyclists'] = self.import_cyclists()
-        
-        logger.info("Import complete!")
+        logger.info("CDB import complete; mapped tables were replaced atomically.")
         return stats
     
     def __enter__(self):

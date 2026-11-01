@@ -1,6 +1,7 @@
 """PCM CDB SQLite updates, inspection, and field mappings."""
 
 import sqlite3
+import unicodedata
 from pathlib import Path
 
 import yaml
@@ -146,6 +147,15 @@ def quote_identifier(value):
 
 
 def find_riders(conn, search_terms=None, cdb_ids=None, firstcycling_ids=None, limit=25):
+    def normalize_name(value):
+        normalized = unicodedata.normalize('NFKD', str(value or '').casefold())
+        normalized = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+        return (normalized.replace('æ', 'ae').replace('œ', 'oe')
+                .replace('ß', 'ss').replace('þ', 'th').replace('ð', 'd')
+                .replace('ø', 'o').replace('ł', 'l').replace('đ', 'd')
+                .replace('ı', 'i'))
+
+    conn.create_function('normalize_name', 1, normalize_name, deterministic=True)
     search_terms = [term.strip() for term in (search_terms or []) if term.strip()]
     cdb_ids = [int(value) for value in (cdb_ids or [])]
     firstcycling_ids = [int(value) for value in (firstcycling_ids or [])]
@@ -157,13 +167,13 @@ def find_riders(conn, search_terms=None, cdb_ids=None, firstcycling_ids=None, li
         param_name = f'term_{index}'
         where_parts.append(
             '('
-            f'LOWER(gene_sz_firstname) LIKE :{param_name} OR '
-            f'LOWER(gene_sz_lastname) LIKE :{param_name} OR '
-            f'LOWER(gene_sz_firstlastname) LIKE :{param_name} OR '
-            f'LOWER(TRIM(COALESCE(gene_sz_firstname, "") || " " || COALESCE(gene_sz_lastname, ""))) LIKE :{param_name}'
+            f'normalize_name(gene_sz_firstname) LIKE :{param_name} OR '
+            f'normalize_name(gene_sz_lastname) LIKE :{param_name} OR '
+            f'normalize_name(gene_sz_firstlastname) LIKE :{param_name} OR '
+            f'normalize_name(TRIM(COALESCE(gene_sz_firstname, "") || " " || COALESCE(gene_sz_lastname, ""))) LIKE :{param_name}'
             ')'
         )
-        params[param_name] = f'%{term.lower()}%'
+        params[param_name] = f'%{normalize_name(term)}%'
 
     if cdb_ids:
         placeholders = []

@@ -49,7 +49,24 @@ def init_extensions(app):
     ma.init_app(app)
     
     # Celery
-    celery.conf.update(app.config)
+    celery_config = dict(app.config)
+    # Celery 5.6 rejects mixing the legacy ``CELERY_*`` names in Flask's
+    # config with the modern setting names used by the Celery instance.
+    celery_config.pop('CELERY_BROKER_URL', None)
+    celery_config.pop('CELERY_RESULT_BACKEND', None)
+    celery.conf.update(celery_config)
+    celery.conf.update(
+        broker_url=app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+        result_backend=app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+    )
+    celery.conf.timezone = 'Europe/Amsterdam'
+    celery.conf.beat_schedule = {
+        **(celery.conf.beat_schedule or {}),
+        'poll-activity-monitor-schedules': {
+            'task': 'webapp.tasks.poll_activity_monitor_schedules',
+            'schedule': 60.0,
+        },
+    }
     
     class ContextTask(celery.Task):
         """Make celery tasks work with Flask app context"""

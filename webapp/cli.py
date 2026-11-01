@@ -216,6 +216,233 @@ def namespace():
     """Namespace database management commands"""
     pass
 
+
+@namespace.command('install-activity-monitor')
+@click.argument('namespace_slug')
+@click.option('--yes', is_flag=True, help='Skip the confirmation prompt')
+@with_appcontext
+def install_activity_monitor_schema(namespace_slug, yes):
+    """Explicitly create the shared Activity Monitor tables in one namespace.
+
+    This command is intentionally separate from application startup and normal
+    namespace provisioning. It creates missing tables only; it imports no
+    rider data and does not alter existing tables.
+    """
+    selected_namespace = Namespace.query.filter_by(slug=namespace_slug).first()
+    if selected_namespace is None:
+        raise click.ClickException(f"Namespace '{namespace_slug}' was not found.")
+    if not yes and not click.confirm(
+        f"Create the Activity Monitor tables in namespace '{namespace_slug}'?"
+    ):
+        click.echo('Aborted; no namespace database was changed.')
+        return
+
+    from webapp.models.ns.activity_monitor import (
+        ACTIVITY_MONITOR_TABLES,
+        ActivityMonitorBase,
+    )
+
+    try:
+        namespace_connection_string = selected_namespace.build_connection_string()
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Namespace '{namespace_slug}' has no usable database connection."
+        ) from exc
+
+    engine = create_engine(namespace_connection_string)
+    try:
+        ActivityMonitorBase.metadata.create_all(engine, checkfirst=True)
+    except Exception as exc:
+        raise click.ClickException(f'Could not create Activity Monitor tables: {exc}') from exc
+    finally:
+        engine.dispose()
+
+    click.echo(
+        f"Created or confirmed {len(ACTIVITY_MONITOR_TABLES)} Activity Monitor tables "
+        f"in namespace '{namespace_slug}'. No rider records were imported."
+    )
+
+
+@namespace.command('install-global-activity-monitor-history')
+@click.option('--yes', is_flag=True, help='Skip the confirmation prompt')
+@with_appcontext
+def install_global_activity_monitor_history(yes):
+    """Explicitly install the cross-namespace history archive in the main DB."""
+    if not yes and not click.confirm(
+        'Create the Activity Monitor history archive table in the main database?'
+    ):
+        click.echo('Aborted; no database was changed.')
+        return
+
+    from webapp.tools.activity_monitor_global_history import install_global_history_schema
+
+    engine = db.engines.get('main') or db.engine
+    try:
+        install_global_history_schema(engine)
+    except Exception as exc:
+        raise click.ClickException(
+            f'Could not create the shared Activity Monitor history table: {exc}'
+        ) from exc
+    click.echo(
+        'The shared Activity Monitor history archive is installed in the main database. '
+        'No namespace records were copied.'
+    )
+
+
+@namespace.command('archive-activity-monitor-history')
+@click.argument('namespace_slug')
+@click.option('--apply', 'apply_changes', is_flag=True,
+              help='Copy/update archived records. Without this flag, only a preview is performed.')
+@click.option('--yes', is_flag=True, help='Skip the confirmation prompt for --apply')
+@with_appcontext
+def archive_activity_monitor_history(namespace_slug, apply_changes, yes):
+    """Preview or synchronize Activity Monitor history into the main database."""
+    selected_namespace = Namespace.query.filter_by(slug=namespace_slug).first()
+    if selected_namespace is None:
+        raise click.ClickException(f"Namespace '{namespace_slug}' was not found.")
+    if apply_changes and not yes and not click.confirm(
+        f"Copy Activity Monitor history from '{namespace_slug}' into the main database?"
+    ):
+        click.echo('Aborted; no history was copied.')
+        return
+
+    from webapp.tools.activity_monitor_global_history import archive_namespace_history
+
+    try:
+        source_url = selected_namespace.build_connection_string()
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Namespace '{namespace_slug}' has no usable database connection."
+        ) from exc
+    source_engine = create_engine(source_url, pool_pre_ping=True)
+    main_engine = db.engines.get('main') or db.engine
+    try:
+        summary = archive_namespace_history(
+            source_engine,
+            main_engine,
+            selected_namespace.slug,
+            apply=apply_changes,
+        )
+    except Exception as exc:
+        raise click.ClickException(
+            f'Activity Monitor history archive stopped safely: {exc}'
+        ) from exc
+    finally:
+        source_engine.dispose()
+
+    click.echo(
+        f"Namespace: {summary['namespace']}\n"
+        f"History records found: {summary['records']}\n"
+        f"Records to synchronize: {summary.get('records_to_sync', 0)}\n"
+        f"Records written: {summary['written']}\n"
+        f"Mode: {'apply' if apply_changes else 'dry run'}"
+    )
+    for table_name, count in summary['tables'].items():
+        click.echo(f'  {table_name}: {count}')
+
+
+@namespace.command('import-activity-monitor-history')
+@click.argument('namespace_slug')
+@click.option('--source', 'source_path', required=True, type=click.Path(exists=True, dir_okay=False, path_type=str),
+              help='Path to the local Activity Monitor SQLite database.')
+@click.option('--apply', 'apply_changes', is_flag=True,
+              help='Write the validated history in one transaction. Without this flag, only a dry run is performed.')
+@click.option('--actor-user-id', type=int, default=None,
+              help='PCM Manager user ID to record as the initiating user.')
+@with_appcontext
+def import_activity_monitor_history(namespace_slug, source_path, apply_changes, actor_user_id):
+    """Validate or import local Activity Monitor history into a namespace."""
+    selected_namespace = Namespace.query.filter_by(slug=namespace_slug).first()
+    if selected_namespace is None:
+        raise click.ClickException(f"Namespace '{namespace_slug}' was not found.")
+    try:
+        namespace_connection_string = selected_namespace.build_connection_string()
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Namespace '{namespace_slug}' has no usable database connection."
+        ) from exc
+
+    from webapp.tools.activity_monitor_history_import import run_history_import
+
+    engine = create_engine(namespace_connection_string, pool_pre_ping=True)
+    try:
+        run_history_import(
+            engine,
+            source_path,
+            apply=apply_changes,
+            actor_user_id=actor_user_id,
+        )
+    except Exception as exc:
+        current_app.logger.error(
+            'Activity Monitor history import stopped safely (%s).',
+            type(exc).__name__,
+        )
+        raise click.ClickException(
+            'Activity Monitor history import stopped safely; no partial records were committed.'
+        ) from exc
+    finally:
+        engine.dispose()
+
+
+@namespace.command('backfill-activity-monitor-history-tail')
+@click.argument('namespace_slug')
+@click.option('--source', 'source_path', required=True, type=click.Path(exists=True, dir_okay=False, path_type=str),
+              help='The local Activity Monitor SQLite database for the imported rider roster.')
+@click.option('--apply', 'apply_changes', is_flag=True,
+              help='Append missing cycle/schedule history. Without this flag, only a read-only preview is shown.')
+@with_appcontext
+def backfill_activity_monitor_history_tail(namespace_slug, source_path, apply_changes):
+    """Append durable source-cycle and scheduling history missing since import."""
+    selected_namespace = Namespace.query.filter_by(slug=namespace_slug).first()
+    if selected_namespace is None:
+        raise click.ClickException(f"Namespace '{namespace_slug}' was not found.")
+    try:
+        namespace_connection_string = selected_namespace.build_connection_string()
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Namespace '{namespace_slug}' has no usable database connection."
+        ) from exc
+    from webapp.tools.activity_monitor_history_import import backfill_imported_activity_history
+    engine = create_engine(namespace_connection_string, pool_pre_ping=True)
+    try:
+        backfill_imported_activity_history(engine, source_path, apply=apply_changes)
+    except Exception as exc:
+        current_app.logger.error('Activity Monitor history backfill stopped safely (%s).', type(exc).__name__)
+        raise click.ClickException(
+            'Activity Monitor history backfill stopped safely; no partial records were committed.'
+        ) from exc
+    finally:
+        engine.dispose()
+
+
+@namespace.command('backfill-activity-monitor-pcs-paths')
+@click.argument('namespace_slug')
+@click.option('--source', 'source_path', required=True, type=click.Path(exists=True, dir_okay=False, path_type=str),
+              help='The exact local Activity Monitor SQLite database already imported.')
+@click.option('--apply', 'apply_changes', is_flag=True,
+              help='Fill only missing request paths for matching imported PCS checks.')
+@with_appcontext
+def backfill_activity_monitor_pcs_paths(namespace_slug, source_path, apply_changes):
+    """Restore safe PCS request paths omitted by the original history import."""
+    selected_namespace = Namespace.query.filter_by(slug=namespace_slug).first()
+    if selected_namespace is None:
+        raise click.ClickException(f"Namespace '{namespace_slug}' was not found.")
+    try:
+        namespace_connection_string = selected_namespace.build_connection_string()
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Namespace '{namespace_slug}' has no usable database connection."
+        ) from exc
+    from webapp.tools.activity_monitor_history_import import backfill_imported_pcs_request_paths
+    engine = create_engine(namespace_connection_string, pool_pre_ping=True)
+    try:
+        backfill_imported_pcs_request_paths(engine, source_path, apply=apply_changes)
+    except Exception as exc:
+        current_app.logger.error('PCS path backfill stopped safely (%s).', type(exc).__name__)
+        raise click.ClickException('PCS path backfill stopped safely; no partial changes were committed.') from exc
+    finally:
+        engine.dispose()
+
 @namespace.command('drop')
 @click.argument('namespace_slug')
 @click.option('--yes', is_flag=True, help='Skip confirmation prompt')

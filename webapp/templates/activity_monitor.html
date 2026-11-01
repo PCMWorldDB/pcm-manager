@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Monitor - WDB{% endblock %}
+{% block body_class %}activity-monitor-page{% endblock %}
+
+{% block styles %}
+.activity-monitor-overview { width: 100%; }
+.activity-monitor-intro {
+    background: #eaf1f5;
+    border: 1px solid #d8e2e9;
+    padding: 1rem;
+}
+.activity-monitor-stat {
+    min-height: 128px;
+    border-top: 3px solid #128577;
+}
+.activity-monitor-stat .value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.activity-monitor-progress { min-height: 152px; }
+.activity-monitor-progress-track {
+    height: 16px;
+    border: 1px solid #a9b2b8;
+    background: #e4e7e9;
+    overflow: hidden;
+}
+.activity-monitor-progress-fill {
+    height: 100%;
+    background: #128577;
+}
+body.dark-mode .activity-monitor-intro {
+    background: #202d3b;
+    border-color: #34485d;
+}
+body.dark-mode .activity-monitor-progress-track { background: #333b44; }
+{% endblock %}
+
+{% block content %}
+<div class="activity-monitor-overview">
+    <h2 class="mb-3">Activity overview</h2>
+
+    {% if selected_namespace %}
+    <section class="activity-monitor-intro mb-3" aria-label="Activity Monitor information">
+        <div class="d-flex justify-content-between align-items-start gap-3">
+            <div>
+                <p class="mb-0">
+                    Activity Monitor brings together race-result evidence from ProCyclingStats and FirstCycling
+                    to show recorded rider activity and checks that may need review.
+                    {% if monitor_summary %}Imported history and checks carried out in PCM Manager are shown separately below.{% endif %}
+                </p>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary flex-shrink-0" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#activity-monitor-details"
+                    aria-expanded="false" aria-controls="activity-monitor-details">Read more</button>
+        </div>
+        <div class="collapse" id="activity-monitor-details">
+            <hr>
+            <p class="mb-2 text-muted">
+                A saved result confirms that a rider raced. A check is flagged for review when rider details do not match or a profile cannot be confirmed.
+            </p>
+            <h6 class="mb-2">How to use Activity Monitor</h6>
+            <ol class="mb-2 ps-3">
+                <li>Open <strong>Riders</strong> to find riders, check their status, and review saved activity.</li>
+                <li>Select riders there and choose <strong>Start checks</strong> to review the selection on <strong>Run checks</strong> before confirming it. The manual check panel starts up to 25 riders at a time.</li>
+                <li>Open a rider to review source checks, the PCS profile, and saved race evidence.</li>
+                <li>Use <strong>Review</strong> to find website checks and profile details that need a closer look.</li>
+            </ol>
+            <p class="mb-0 text-muted">Automatic checks run only when enabled in <strong>Run checks</strong>.</p>
+        </div>
+    </section>
+
+    {% set activity_monitor_active = 'overview' %}
+    {% include 'activity_monitor_nav.html' %}
+
+    {% if load_error %}
+    <div class="alert alert-warning" role="status">
+        The selected namespace could not be read. No data was changed.
+    </div>
+    {% elif history_unavailable %}
+    <div class="alert alert-info" role="status">
+        No saved Activity Monitor records are available for this dataset yet.
+        Choose the local test dataset that contains the imported rider history.
+    </div>
+    {% elif monitor_summary %}
+    {% set monitored = monitor_summary.monitored or 0 %}
+    {% set checked = monitor_summary.riders_checked or 0 %}
+    {% set progress = (100 * checked / monitored)|round(2) if monitored else 0 %}
+
+    <div class="row g-2 mb-2">
+        <div class="col-12 col-sm-6 col-xl">
+            <section class="panel-card card activity-monitor-stat h-100"><div class="card-body">
+                <div class="text-muted small mb-2">Riders monitored</div>
+                <div class="value">{{ "{:,}".format(monitored) }}</div>
+                <div class="text-muted mt-2">Riders in current DB</div>
+            </div></section>
+        </div>
+        <div class="col-12 col-sm-6 col-xl">
+            <section class="panel-card card activity-monitor-stat h-100"><div class="card-body">
+                <div class="text-muted small mb-2">Awaiting first check</div>
+                <div class="value">{{ "{:,}".format(monitor_summary.awaiting_first_check or 0) }}</div>
+                <div class="text-muted mt-2">No website check has been done yet</div>
+            </div></section>
+        </div>
+        <div class="col-12 col-sm-6 col-xl">
+            <section class="panel-card card activity-monitor-stat h-100"><div class="card-body">
+                <div class="text-muted small mb-2">Riders active this year</div>
+                <div class="value">{{ "{:,}".format(monitor_summary.riders_active_this_year or 0) }}</div>
+                <div class="text-muted mt-2">Riders with at least one confirmed race</div>
+            </div></section>
+        </div>
+        <div class="col-12 col-sm-6 col-xl">
+            <section class="panel-card card activity-monitor-stat h-100"><div class="card-body">
+                <div class="text-muted small mb-2">Upcoming checks</div>
+                <div class="value">{{ "{:,}".format(monitor_summary.upcoming_checks or 0) }}</div>
+                <div class="text-muted mt-2">Overdue or due in the next 2 days</div>
+            </div></section>
+        </div>
+        <div class="col-12 col-sm-6 col-xl">
+            <section class="panel-card card activity-monitor-stat h-100"><div class="card-body">
+                <div class="text-muted small mb-2">Needs Review</div>
+                <div class="value">{{ "{:,}".format(monitor_summary.needs_attention or 0) }}</div>
+                <div class="text-muted mt-2">Riders who need a profile check</div>
+            </div></section>
+        </div>
+    </div>
+
+    <section class="panel-card card activity-monitor-progress">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+                <div>
+                    <h5 class="mb-1">Riders checked so far</h5>
+                    <div class="fw-semibold">{{ "{:,}".format(checked) }} / {{ "{:,}".format(monitored) }} riders checked · {{ "%.2f"|format(progress) }}%</div>
+                </div>
+                <a class="btn btn-success" href="{{ url_for('web.activity_monitor_riders', status='monitored') }}">Choose riders to check</a>
+            </div>
+            <div class="activity-monitor-progress-track" role="progressbar"
+                 aria-label="Share of riders checked" aria-valuenow="{{ progress }}"
+                 aria-valuemin="0" aria-valuemax="100">
+                <div class="activity-monitor-progress-fill" style="width: {{ progress }}%"></div>
+            </div>
+            <div class="text-muted small mt-2">
+                This includes earlier imported records and checks completed here. To start a check, choose riders on the Riders page and review the selection first.
+            </div>
+            <div class="border-top mt-3 pt-2 d-flex flex-wrap gap-4 small">
+                <div><span class="text-muted">Most recent saved check</span><br>
+                    {{ monitor_summary.latest_check_at|activity_datetime if monitor_summary.latest_check_at else 'No check recorded' }}
+                </div>
+                <div><span class="text-muted">Most recent check started here</span><br>
+                    {% if monitor_summary.latest_run_at %}
+                        {{ monitor_summary.latest_run_at|activity_datetime }}
+                        · {{ monitor_summary.latest_run_status|replace('_', ' ')|title }}
+                        · {{ monitor_summary.latest_run_attempted or 0 }} attempted / {{ monitor_summary.latest_run_requested or 0 }} requested
+                        · {{ monitor_summary.latest_run_successful or 0 }} successful
+                    {% else %}No PCM Manager run yet{% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% else %}
+    <div class="alert alert-info">Select an active namespace to open its Activity Monitor.</div>
+    {% endif %}
+</div>
+{% endblock %}

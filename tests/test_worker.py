@@ -29,6 +29,7 @@ celery = find_app('webapp.worker:celery')
 assert find_app('webapp.worker:celery') is celery
 webapp.create_app.assert_called_once_with()
 assert worker.run_external_sync_task.name == 'webapp.tasks.run_external_sync'
+assert worker.run_activity_monitor_run_task.name == 'webapp.tasks.run_activity_monitor_run'
 
 def sync_race_calendar(**kwargs):
     assert current_app.name == __name__

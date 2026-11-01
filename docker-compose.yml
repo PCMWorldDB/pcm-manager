@@ -11,6 +11,9 @@ x-common-env: &common-env
   FIRST_CYCLING_BASE_URL: ${FIRST_CYCLING_BASE_URL:-https://firstcycling.com}
   FIRST_CYCLING_API_PATH: ${FIRST_CYCLING_API_PATH}
   FIRST_CYCLING_FETCH_ONLY_MISSING: True
+  ACTIVITY_MONITOR_PCS_ENABLED: ${ACTIVITY_MONITOR_PCS_ENABLED:-false}
+  ACTIVITY_MONITOR_FC_ENABLED: ${ACTIVITY_MONITOR_FC_ENABLED:-false}
+  ACTIVITY_MONITOR_REQUEST_DELAY_SECONDS: ${ACTIVITY_MONITOR_REQUEST_DELAY_SECONDS:-1.5}
 
 x-common-depends: &common-depends
   database:
@@ -94,6 +97,20 @@ services:
       - ./webapp:/app/webapp
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
+    depends_on: *common-depends
+    networks:
+      - pcm-manager-network
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/webapp/Dockerfile
+    container_name: scheduler
+    command: celery -A webapp.worker:celery beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    environment:
+      <<: *common-env
+    volumes:
+      - ./webapp:/app/webapp
     depends_on: *common-depends
     networks:
       - pcm-manager-network
