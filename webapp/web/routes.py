@@ -10988,6 +10988,31 @@ def admin_namespace_update_cdb(namespace_id):
             namespace.pcm_version,
         ) as importer:
             stats = importer.import_all_tables(replace_existing=True)
+        try:
+            from webapp.tools.activity_monitor_global_history import restore_worlddb_history
+
+            destination_engine = create_engine(namespace.build_connection_string(), pool_pre_ping=True)
+            try:
+                with destination_engine.connect() as connection:
+                    history_ready = connection.execute(text(
+                        "SELECT to_regclass('activity_monitor_riders') IS NOT NULL"
+                    )).scalar_one()
+                if history_ready:
+                    with destination_engine.connect() as connection:
+                        worlddb_ids = connection.execute(text("""
+                            SELECT DISTINCT source_worlddb_rider_id
+                            FROM activity_monitor_riders
+                            WHERE source_worlddb_rider_id IS NOT NULL
+                        """)).scalars().all()
+                    restore_worlddb_history(
+                        db.engines.get('main') or db.engine,
+                        destination_engine,
+                        worlddb_ids,
+                    )
+            finally:
+                destination_engine.dispose()
+        except Exception:
+            logger.exception('Could not restore archived Activity Monitor history for namespace %s', namespace.slug)
         cdb_import_completed = True
 
         namespace.sqlite_file_path = f'cdb/import/{os.path.basename(sqlite_path)}'
