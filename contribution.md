@@ -91,6 +91,6 @@ The active CDB mappings are in `webapp/integrations/cdb/cdb_mappings.yaml` (the 
 
 - Keep changes surgical and follow existing Python and Flask patterns.
 - Verify role permissions and namespace boundaries when affected.
-- For CDB changes, check `webapp/models/ns/cdb_mappings.yaml` and preserve compatibility.
+- For CDB changes, check `webapp/integrations/cdb/cdb_mappings.yaml` and preserve compatibility.
 - Document manual schema changes and which database they affect (`main` or `namespace`). Do not introduce automatic migrations without agreement.
 - Report the checks performed and anything that remains unverified. For CDB release changes, verify the CDB SQLite file, rider stats update SQL, and release overview HTML as applicable.
