@@ -55,14 +55,17 @@ the archive-table installation or migrates existing history automatically.
   selected namespace into the archive. The namespace's own check remains the
   authoritative result if the shared archive is unavailable; the worker logs
   archive failures for an operator to reconcile with the dry-run/apply command.
-- The archive remains keyed by WorldDB ID for backend lookup across namespaces
-  and CDB replacements. Archived entries are not displayed on rider pages and
-  are not restored into another namespace's Activity Monitor tables. The JSON
-  payload contains source-namespace primary and foreign keys, while destination
-  rider IDs and identity generations are namespace-local; no safe table-specific
-  remapping is currently implemented. Therefore this archive preserves records
-  for external recovery work, but does not resume Activity Monitor state in a
-  replacement CDB or another namespace.
+- After a successful CDB replacement, the application restores archived records
+  for WorldDB IDs already present in that namespace's Activity Monitor roster.
+  It remaps rider IDs and source-check references, preserves existing rows, and
+  leaves the archive unchanged. The global archive table is not displayed on
+  rider pages.
+- Recovery supports source checks, race results, rider schedules, profile
+  links, review state/events, identity alerts, and eligibility events. Runs,
+  task queues/events, scheduler settings, roster snapshots, and generic legacy
+  records are not restored. A namespace must already have Activity Monitor
+  rider rows linked to the matching WorldDB IDs; CDB rows alone do not supply
+  that stable identity.
 - Uploading a CDB from the namespace detail page replaces the mapped roster
   tables atomically. The namespace's Activity Monitor history is archived
   before the update when the shared archive is installed and remains in its

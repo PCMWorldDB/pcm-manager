@@ -8,12 +8,25 @@ WorldDB rider ID, never by a namespace-local primary key.
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import date, datetime
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from sqlalchemy import inspect, text
+from sqlalchemy import Date as SQLDate, DateTime as SQLDateTime, inspect, text
 
 
 ARCHIVE_TABLE = "activity_monitor_global_history"
+
+RECOVERABLE_TABLES = (
+    "activity_monitor_source_checks",
+    "activity_monitor_results",
+    "activity_monitor_rider_schedules",
+    "activity_monitor_profile_links",
+    "activity_monitor_reviews",
+    "activity_monitor_review_events",
+    "activity_monitor_identity_alerts",
+    "activity_monitor_eligibility_events",
+)
 
 # The live roster and singleton scheduler settings are current state, not
 # history. All other Activity Monitor tables are retained as archived records.
@@ -184,3 +197,101 @@ def archive_namespace_history(
             """), payloads)
         summary["written"] = len(payloads)
     return summary
+
+
+def _restore_value(column, value):
+    if value is None:
+        return None
+    if isinstance(column.type, SQLDateTime) and isinstance(value, str):
+        return datetime.fromisoformat(value)
+    if isinstance(column.type, SQLDate) and not isinstance(column.type, SQLDateTime) and isinstance(value, str):
+        return date.fromisoformat(value)
+    return value
+
+
+def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
+    """Restore supported append-only records for riders already matched locally."""
+    from webapp.models.ns.activity_monitor import ActivityMonitorBase
+
+    rider_ids = {int(value) for value in worlddb_rider_ids}
+    if not rider_ids or not inspect(main_engine).has_table(ARCHIVE_TABLE):
+        return {"riders": 0, "restored": {}}
+
+    metadata = ActivityMonitorBase.metadata
+    destination = namespace_engine.connect()
+    transaction = destination.begin()
+    restored = {table: 0 for table in RECOVERABLE_TABLES}
+    try:
+        local_riders = dict(destination.execute(text("""
+            SELECT source_worlddb_rider_id, id, identity_generation
+            FROM activity_monitor_riders
+            WHERE source_worlddb_rider_id = ANY(:worlddb_ids)
+        """), {"worlddb_ids": sorted(rider_ids)}).all())
+        if not local_riders:
+            transaction.commit()
+            return {"riders": 0, "restored": restored}
+
+        with main_engine.connect() as archive:
+            archived = archive.execute(text("""
+                SELECT namespace_slug, worlddb_rider_id, record_type, source_record_key, record_data
+                FROM activity_monitor_global_history
+                WHERE worlddb_rider_id = ANY(:worlddb_ids)
+                  AND record_type = ANY(:record_types)
+                ORDER BY CASE record_type
+                    WHEN 'activity_monitor_source_checks' THEN 0
+                    WHEN 'activity_monitor_results' THEN 1
+                    ELSE 2 END, id
+            """), {"worlddb_ids": list(local_riders), "record_types": list(RECOVERABLE_TABLES)}).mappings().all()
+
+        check_id_map = {}
+        for entry in archived:
+            table_name = entry["record_type"]
+            record = entry["record_data"]
+            worlddb_id = entry["worlddb_rider_id"]
+            if worlddb_id not in local_riders:
+                continue
+            table = metadata.tables[table_name]
+            values = {key: _restore_value(table.c[key], value)
+                      for key, value in record.items()
+                      if key in table.c and key != "id"}
+            if "rider_id" in table.c:
+                values["rider_id"] = local_riders[worlddb_id][0]
+            if "identity_generation" in table.c:
+                values["identity_generation"] = local_riders[worlddb_id][1]
+            if "source_worlddb_rider_id" in table.c:
+                values["source_worlddb_rider_id"] = worlddb_id
+            source_key_column = "source_result_key" if table_name == "activity_monitor_results" else "source_record_key"
+            if source_key_column in table.c:
+                key_digest = hashlib.sha256(
+                    f"{entry['namespace_slug']}\0{table_name}\0{entry['source_record_key']}".encode()
+                ).hexdigest()
+                values[source_key_column] = f"archive:{key_digest}"
+            if table_name == "activity_monitor_source_checks":
+                values["run_id"] = None
+            elif table_name == "activity_monitor_results":
+                old_check_id = record.get("source_check_id")
+                values["source_check_id"] = check_id_map.get(old_check_id)
+            elif table_name == "activity_monitor_rider_schedules":
+                pass
+            elif table_name == "activity_monitor_identity_alerts":
+                values["cdb_import_id"] = None
+            elif table_name == "activity_monitor_eligibility_events":
+                values["cdb_import_id"] = None
+            statement = pg_insert(table).values(**values).on_conflict_do_nothing().returning(table.c.id)
+            inserted_id = destination.execute(statement).scalar_one_or_none()
+            if inserted_id is None and source_key_column in table.c:
+                inserted_id = destination.execute(
+                    text(f'SELECT id FROM "{table_name}" WHERE "{source_key_column}" = :key'),
+                    {"key": values[source_key_column]},
+                ).scalar_one_or_none()
+            if table_name == "activity_monitor_source_checks" and record.get("id") is not None and inserted_id is not None:
+                check_id_map[record["id"]] = inserted_id
+            if inserted_id is not None:
+                restored[table_name] += 1
+        transaction.commit()
+        return {"riders": len(local_riders), "restored": restored}
+    except Exception:
+        transaction.rollback()
+        raise
+    finally:
+        destination.close()
