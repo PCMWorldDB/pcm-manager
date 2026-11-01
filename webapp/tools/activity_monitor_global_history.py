@@ -239,19 +239,20 @@ def sync_activity_monitor_roster(namespace_engine):
         for cyclist in cyclists:
             worlddb_id = int(cyclist["id"])
             fc_id = cyclist["first_cycling_id"]
-            unlinked_candidates = [
-                rider for rider in monitor_riders_by_fc_id.get(fc_id, [])
-                if rider["source_worlddb_rider_id"] != worlddb_id
-            ]
-            unlinked = unlinked_candidates[0] if len(unlinked_candidates) == 1 else None
-            if (unlinked and unlinked["source_worlddb_rider_id"] is None
-                    and not unlinked["identity_hold"] and cyclist_counts[fc_id] == 1
-                    and unlinked["birth_date"] is not None):
+            if fc_id is not None and cyclist_counts[fc_id] == 1:
                 try:
                     cdb_birth_date = datetime.strptime(str(cyclist["birth_date"]), "%Y%m%d").date()
                 except ValueError:
                     cdb_birth_date = None
-                if cdb_birth_date == unlinked["birth_date"]:
+                matching_monitor_rows = [
+                    rider for rider in monitor_riders_by_fc_id.get(fc_id, [])
+                    if rider["source_worlddb_rider_id"] != worlddb_id
+                    and not rider["identity_hold"]
+                    and cdb_birth_date is not None
+                    and rider["birth_date"] == cdb_birth_date
+                ]
+                unlinked = matching_monitor_rows[0] if len(matching_monitor_rows) == 1 else None
+                if unlinked and unlinked["source_worlddb_rider_id"] is None:
                     now = datetime.utcnow()
                     connection.execute(text("""
                         UPDATE activity_monitor_riders
