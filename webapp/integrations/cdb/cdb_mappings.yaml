@@ -47,6 +47,8 @@ CDB_TABLE_MAPPINGS:
         stat_rec: charac_i_recuperation
         stat_cob: charac_i_cobble
         stat_att: charac_i_baroudeur
+      export_fields:
+        pcs_profile_slug: CONSTANT
     team:
       cdb_table_name: DYN_team
       fields:

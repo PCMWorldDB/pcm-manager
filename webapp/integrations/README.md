@@ -14,6 +14,9 @@ integrations/
   firstcycling/
     api.py
     README.md
+  activity_monitor_sources.py
+  activity_monitor_queue.py
+  activity_monitor_evidence.py
   pcs/
     __init__.py
     README.md
@@ -30,6 +33,9 @@ resources can live beside it as needed.
 - [Discord](discord/README.md): workflow notifications and approval images.
 - [FirstCycling](firstcycling/README.md): API fetching and main database sync.
 - [ProCyclingStats](pcs/README.md): result HTML parsing and Namespace CDB rider matching.
+- `activity_monitor_evidence.py`: shared, transactional persistence for verified source outcomes in a selected Namespace.
+- `activity_monitor_queue.py`: shared, transactional Activity Monitor runs, per-rider tasks, audit events, and task-state transitions. It does not enqueue Celery jobs or contact PCS/FC yet.
+- `activity_monitor_sources.py`: PCS profile and FirstCycling all-results fetch/parser/persistence paths used by the Celery worker. Both require separate opt-in settings (`ACTIVITY_MONITOR_PCS_ENABLED` and `ACTIVITY_MONITOR_FC_ENABLED`). Importing the module makes no network requests.
 
 ## Adding an integration
 

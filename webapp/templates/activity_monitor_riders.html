@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Monitor Riders - WDB{% endblock %}
+{% block body_class %}activity-monitor-page{% endblock %}
+
+{% block styles %}
+.activity-riders-filters { background: var(--bs-tertiary-bg); }
+.activity-riders-table { width: 100%; min-width: 1585px; table-layout: fixed; }
+.activity-riders-table th { white-space: nowrap; text-align: center; }
+.activity-riders-table thead th + th { border-left: 1px solid #d6dde5; }
+.activity-riders-table td { vertical-align: middle; }
+.activity-riders-table .id-cell,
+.activity-riders-table .age-cell,
+.activity-riders-table .check-date-cell,
+.activity-riders-table .result-date-cell,
+.activity-riders-table .days-cell,
+.activity-riders-table .race-days-cell,
+.activity-riders-table .pcs-profile-cell { white-space: nowrap; }
+.activity-riders-table .first-name-cell,
+.activity-riders-table .last-name-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-riders-table .status-cell .badge { white-space: nowrap; }
+.activity-riders-table .pcs-profile-slug { width: 126px; min-width: 0; }
+.activity-riders-table .pcs-profile-slug.slug-color-red { color: #b02a37 !important; }
+.activity-riders-table .pcs-profile-slug.slug-color-orange { color: #e67700 !important; }
+.activity-riders-table .pcs-profile-slug.slug-color-green { color: #146c43 !important; }
+.pcs-profile-status-mark { display: inline-block; flex: 0 0 12px; width: 12px; text-align: center; font-weight: 700; line-height: 1; }
+.pcs-profile-status-mark.slug-color-red { color: #b02a37; }
+.pcs-profile-status-mark.slug-color-orange { color: #e67700; }
+.pcs-profile-status-mark.slug-color-green { color: #146c43; }
+.activity-riders-table .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-riders-table tr.activity-rider-needs-attention > td { color: #c45100; }
+.activity-riders-table tr.activity-rider-needs-attention > td a { color: #c45100 !important; }
+.activity-riders-table tr.activity-rider-needs-attention > td .badge { color: var(--bs-badge-color, #000); }
+.activity-riders-table tr.activity-rider-selected > td { background-color: #dcefeb !important; }
+.activity-riders-table td.activity-rider-selection-cell { cursor: crosshair; }
+.activity-riders-table input.activity-rider-select { pointer-events: none; }
+.activity-riders-actions { position: sticky; bottom: 0; z-index: 2; background: var(--bs-body-bg); }
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 mb-3 flex-wrap">
+    <div>
+        <h2 class="mb-1">Rider overview</h2>
+        <p class="text-muted mb-0">Find riders, review their activity, or select specific riders for an activity check.</p>
+    </div>
+    <span class="badge text-bg-secondary">Read-only history</span>
+</div>
+
+{% if selected_namespace %}
+{% set activity_monitor_active = 'riders' %}
+{% include 'activity_monitor_nav.html' %}
+
+{% if load_error %}
+<div class="alert alert-warning" role="status">The rider history could not be loaded. No data was changed.</div>
+{% elif history_unavailable %}
+<div class="alert alert-info" role="status">Activity Monitor history has not been installed for this namespace.</div>
+{% else %}
+<section class="panel-card card activity-riders-filters mb-3">
+    <div class="card-body">
+        <form id="activity-rider-filters" method="get" action="{{ url_for('web.activity_monitor_riders') }}">
+            <div class="row g-3 align-items-end">
+                <div class="col-12 col-lg-3">
+                    <label for="rider-search" class="form-label">Rider or ID</label>
+                    <input id="rider-search" class="form-control" type="search" name="q" value="{{ filters.q }}"
+                           placeholder="Name or WorldDB ID">
+                </div>
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <label for="monitor-status" class="form-label">Monitor status</label>
+                    <select id="monitor-status" class="form-select" name="status">
+                        <option value="monitored" {% if filters.status == 'monitored' %}selected{% endif %}>All Riders</option>
+                        <option value="awaiting" {% if filters.status == 'awaiting' %}selected{% endif %}>Awaiting first check</option>
+                        <option value="checked" {% if filters.status == 'checked' %}selected{% endif %}>Has check history</option>
+                        <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Review</option>
+                        <option value="no_evidence" {% if filters.status == 'no_evidence' %}selected{% endif %}>No race evidence</option>
+                        <option value="other" {% if filters.status == 'other' %}selected{% endif %}>Not eligible / outside CDB</option>
+                    </select>
+                </div>
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <label for="rider-team" class="form-label">Team</label>
+                    <input id="rider-team" class="form-control" type="search" name="team" value="{{ filters.team }}"
+                           list="rider-team-options" placeholder="All teams">
+                    <datalist id="rider-team-options">
+                        {% for team in team_options %}<option value="{{ team }}">{% endfor %}
+                    </datalist>
+                </div>
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <label for="rider-country" class="form-label">Nationality</label>
+                    <input id="rider-country" class="form-control" type="search" name="country"
+                           value="{{ filters.country }}" list="rider-country-options" placeholder="All nationalities">
+                    <datalist id="rider-country-options">
+                        {% for country in country_options %}<option value="{{ country }}">{% endfor %}
+                    </datalist>
+                </div>
+                <div class="col-12 col-sm-6 col-lg-1">
+                    <label for="rider-division" class="form-label">Division</label>
+                    <input id="rider-division" class="form-control" type="search" name="division"
+                           value="{{ filters.division }}" list="rider-division-options" placeholder="All">
+                    <datalist id="rider-division-options">
+                        {% for division in division_options %}<option value="{{ division.label }}">{% endfor %}
+                    </datalist>
+                </div>
+                <div class="col-12 col-sm-6 col-lg-1">
+                    <label for="rider-page-size" class="form-label">Per page</label>
+                    <select id="rider-page-size" class="form-select" name="per_page">
+                        {% for size in [25, 50, 100, 1000] %}
+                        <option value="{{ size }}" {% if not show_all and per_page == size %}selected{% endif %}>{{ '{:,}'.format(size) }}</option>
+                        {% endfor %}
+                        <option value="all" {% if show_all %}selected{% endif %}>All</option>
+                    </select>
+                </div>
+            </div>
+            <input type="hidden" name="sort" value="{{ filters.sort }}">
+            <input type="hidden" name="direction" value="{{ filters.direction }}">
+        </form>
+        <script>
+        (() => {
+            const form = document.getElementById('activity-rider-filters');
+            if (!form) return;
+            let timer;
+            form.querySelectorAll('select').forEach((field) => field.addEventListener('change', () => form.requestSubmit()));
+            form.querySelectorAll('input[type="search"]').forEach((field) => field.addEventListener('input', () => {
+                window.clearTimeout(timer);
+                timer = window.setTimeout(() => form.requestSubmit(), 350);
+            }));
+        })();
+        </script>
+    </div>
+</section>
+
+<section class="panel-card card">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <h5 class="mb-0">Riders ({{ "{:,}".format(total) }})</h5>
+                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('web.activity_monitor_riders') }}">Clear filters</a>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('web.activity_monitor_riders', q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, sort=filters.sort, direction=filters.direction, export='csv') }}">Export filtered riders CSV</a>
+                <span class="text-muted small">Showing {{ start }}–{{ end }} of {{ "{:,}".format(total) }}</span>
+            </div>
+        </div>
+        {% if riders %}
+        <form id="activity-rider-selection" method="post" action="{{ url_for('web.activity_monitor_run_checks') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="selection_origin" value="riders_page_bulk">
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0 activity-riders-table">
+                <colgroup>
+                    <col style="width:50px"><col style="width:110px"><col style="width:110px">
+                    <col style="width:115px"><col style="width:105px"><col style="width:145px"><col style="width:90px">
+                    <col style="width:150px"><col style="width:105px"><col style="width:170px"><col style="width:105px">
+                    <col style="width:72px"><col style="width:100px"><col style="width:160px">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th scope="col">Select</th>
+                        {% for key, label in [('first_name', 'First name'), ('last_name', 'Last name'), ('team', 'Team'), ('country', 'Nationality'), ('age', 'Age'), ('division', 'Division'), ('status', 'Status'), ('checked', 'Last check'), ('race', 'Last race'), ('result', 'Race date'), ('days', 'Days ago'), ('race_days', 'RD ' ~ current_year)] %}
+                        {% set next_direction = 'desc' if filters.sort == key and filters.direction == 'asc' else 'asc' %}
+                        <th scope="col"><a class="link-body-emphasis text-decoration-none"
+                            href="{{ url_for('web.activity_monitor_riders', q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=1, sort=key, direction=next_direction) }}">{{ label }}{% if filters.sort == key %} <span aria-hidden="true">{{ '↑' if filters.direction == 'asc' else '↓' }}</span>{% endif %}</a></th>
+                        {% endfor %}
+                        <th scope="col">PCS profile</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rider in riders %}
+                    <tr class="{% if rider.needs_attention %}activity-rider-needs-attention{% endif %}" data-rider-id="{{ rider.monitor_rider_id }}">
+                        <td class="activity-rider-selection-cell">
+                            {% if rider.eligible and rider.present_in_cdb %}
+                            <input class="form-check-input activity-rider-select" type="checkbox" value="{{ rider.monitor_rider_id }}" data-detail-url="{{ url_for('web.activity_monitor_rider_detail', rider_id=rider.monitor_rider_id, q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=page, sort=filters.sort, direction=filters.direction) }}" aria-label="Select {{ (rider.first_name ~ ' ' ~ rider.last_name).strip() or 'rider' }}">
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td class="first-name-cell"><a class="text-decoration-none" href="{{ url_for('web.activity_monitor_rider_detail', rider_id=rider.monitor_rider_id, q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=page, sort=filters.sort, direction=filters.direction) }}">{{ rider.first_name or '—' }}</a></td>
+                        <td class="last-name-cell"><a class="text-decoration-none" href="{{ url_for('web.activity_monitor_rider_detail', rider_id=rider.monitor_rider_id, q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=page, sort=filters.sort, direction=filters.direction) }}">{{ rider.last_name or '—' }}</a></td>
+                        <td class="team-cell truncate" title="{{ rider.team_display }}">{{ rider.team_display }}</td>
+                        <td class="country-cell truncate" title="{{ rider.country_name }}">{{ rider.country_name }}</td>
+                        <td class="age-cell">{{ rider.age if rider.age is not none else '—' }}{% if rider.birth_date %}<span class="birth-date"> | {{ rider.birth_date.strftime('%d-%m-%Y') }}</span>{% endif %}</td>
+                        <td class="division-cell truncate" title="{{ rider.division_name }}">{{ rider.division_name }}</td>
+                        <td class="status-cell">
+                            {% if not rider.eligible or not rider.present_in_cdb %}
+                                <span class="badge text-bg-secondary">{{ rider.status_label }}</span>
+                            {% elif rider.needs_attention %}
+                                <span class="badge text-bg-warning">{{ rider.status_label }}</span>
+                            {% elif rider.status_label == 'Awaiting first check' %}
+                                <span class="badge text-bg-light border">{{ rider.status_label }}</span>
+                            {% elif rider.status_label == 'No race evidence' %}
+                                <span class="badge text-bg-light border text-muted" title="No confirmed race result is saved. This does not prove the rider did not race.">{{ rider.status_label }}</span>
+                            {% else %}
+                                <span class="badge text-bg-success">{{ rider.status_label }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="check-date-cell">
+                            {{ rider.latest_check_at.strftime('%Y-%m-%d') if rider.latest_check_at else '—' }}
+                        </td>
+                        <td class="result-cell truncate" title="{{ rider.latest_race_name or '' }}">{{ rider.latest_race_name or '—' }}</td>
+                        <td class="result-date-cell">{{ rider.latest_result_date.strftime('%Y-%m-%d') if rider.latest_result_date else '—' }}</td>
+                        <td class="days-cell">{{ rider.days_since_last_race if rider.days_since_last_race is not none else '—' }}</td>
+                        <td class="race-days-cell">{{ rider.pcs_race_days_current_year if rider.pcs_race_days_current_year is not none else 'N/A' }}</td>
+                        <td class="pcs-profile-cell">
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="pcs-profile-status-mark slug-color-{{ rider.pcs_slug_color }}" aria-hidden="true" title="PCS link status: {{ rider.pcs_slug_color }}">{% if rider.pcs_slug_color == 'red' %}X{% elif rider.pcs_slug_color == 'orange' %}={% elif rider.pcs_slug_color == 'green' %}✓{% else %}-{% endif %}</span>
+                                <input class="form-control form-control-sm pcs-profile-slug slug-color-{{ rider.pcs_slug_color }}" type="text"
+                                       value="{{ rider.pcs_slug }}" placeholder="N/A"
+                                       aria-label="PCS rider slug for {{ (rider.first_name ~ ' ' ~ rider.last_name).strip() }}"
+                                       title="{% if rider.pcs_slug_assumed %}Suggested from the rider's name; not checked or saved yet.{% else %}Saved PCS profile page.{% endif %}"
+                                       data-original="{{ rider.pcs_slug }}"
+                                       data-save-url="{{ url_for('web.activity_monitor_save_pcs_profile', rider_id=rider.monitor_rider_id) }}">
+                                <a class="pcs-profile-open {% if not rider.pcs_slug %}d-none{% endif %}"
+                                   href="{{ rider.pcs_url or '' }}" target="_blank" rel="noopener noreferrer"
+                                   aria-label="Open PCS profile" title="{% if rider.pcs_slug_assumed %}Open suggested PCS profile page (not checked yet){% else %}Open PCS profile{% endif %}">↗</a>
+                            </div>
+                            <span class="pcs-profile-save-status visually-hidden" aria-live="polite"></span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="activity-riders-actions d-flex align-items-center justify-content-between gap-3 flex-wrap mt-3 p-3 border rounded">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span class="small text-muted"><span id="activity-selected-count">0</span> selected · maximum 250</span>
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="activity-select-filtered">Select filtered riders (up to 250)</button>
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="activity-deselect-all">Deselect all</button>
+                <span id="activity-selection-feedback" class="small text-muted" role="status" aria-live="polite"></span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="activity-open-rider" disabled>Open rider details</button>
+                <button class="btn btn-primary btn-sm" type="submit">Start checks</button>
+            </div>
+        </div>
+        <script>
+        (() => {
+            const form = document.getElementById('activity-rider-selection');
+            if (!form) return;
+            const csrfToken = form.querySelector('input[name="csrf_token"]')?.value || '';
+            form.querySelectorAll('.pcs-profile-slug').forEach((input) => {
+                const cell = input.closest('.pcs-profile-cell');
+                const openLink = cell?.querySelector('.pcs-profile-open');
+                const saveStatus = cell?.querySelector('.pcs-profile-save-status');
+                input.addEventListener('blur', async () => {
+                    const slug = input.value.trim();
+                    if (slug === input.dataset.original) return;
+                    if (!slug) {
+                        input.value = input.dataset.original || '';
+                        saveStatus.textContent = 'Enter a PCS slug';
+                        return;
+                    }
+                    input.disabled = true;
+                    saveStatus.textContent = 'Saving…';
+                    try {
+                        const body = new URLSearchParams({ pcs_profile: slug, csrf_token: csrfToken });
+                        const response = await fetch(input.dataset.saveUrl, {
+                            method: 'POST',
+                            headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                            body,
+                            credentials: 'same-origin'
+                        });
+                        const result = await response.json();
+                        if (!response.ok || !result.ok) throw new Error(result.message || 'The PCS link could not be saved.');
+                        input.value = result.slug;
+                        input.dataset.original = result.slug;
+                        input.classList.remove('slug-color-red', 'slug-color-orange', 'slug-color-green');
+                        input.classList.add('slug-color-orange');
+                        const statusMark = cell?.querySelector('.pcs-profile-status-mark');
+                        statusMark?.classList.remove('slug-color-red', 'slug-color-orange', 'slug-color-green');
+                        statusMark?.classList.add('slug-color-orange');
+                        if (statusMark) { statusMark.textContent = '='; statusMark.title = 'PCS link status: orange'; }
+                        openLink.href = result.url;
+                        openLink.classList.remove('d-none');
+                        saveStatus.textContent = 'Saved · not checked yet';
+                    } catch (error) {
+                        input.value = input.dataset.original || '';
+                        saveStatus.textContent = error.message || 'Could not save';
+                    } finally {
+                        input.disabled = false;
+                    }
+                });
+            });
+            const boxes = [...form.querySelectorAll('.activity-rider-select')];
+            const count = document.getElementById('activity-selected-count');
+            const openButton = document.getElementById('activity-open-rider');
+            const storageKey = 'activity-monitor-selection:{{ selected_namespace.slug|e }}';
+            const filterStorageKey = storageKey + ':filters';
+            const maxSelected = 250;
+            const filterForm = document.getElementById('activity-rider-filters');
+            const filterSignature = JSON.stringify(['q', 'team', 'country', 'division', 'status'].map((name) =>
+                filterForm?.querySelector(`[name="${name}"]`)?.value || ''
+            ));
+            const readSelection = () => {
+                try {
+                    const previousFilterSignature = localStorage.getItem(filterStorageKey);
+                    if (previousFilterSignature !== null && previousFilterSignature !== filterSignature) {
+                        localStorage.setItem(storageKey, '[]');
+                    }
+                    localStorage.setItem(filterStorageKey, filterSignature);
+                    const value = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                    return new Set(Array.isArray(value) ? value.map(String).slice(0, maxSelected) : []);
+                } catch (_) { return new Set(); }
+            };
+            let selectedIds = readSelection();
+            const saveSelection = () => {
+                if (selectedIds.size > maxSelected) selectedIds = new Set([...selectedIds].slice(0, maxSelected));
+                try { localStorage.setItem(storageKey, JSON.stringify([...selectedIds])); } catch (_) { /* keep current-page selection usable */ }
+                boxes.forEach((box) => {
+                    const chosen = selectedIds.has(box.value);
+                    box.checked = chosen;
+                    box.closest('tr')?.classList.toggle('activity-rider-selected', chosen);
+                });
+                count.textContent = String(selectedIds.size);
+                const chosenBoxes = boxes.filter((box) => selectedIds.has(box.value));
+                openButton.disabled = selectedIds.size !== 1 || chosenBoxes.length !== 1;
+                openButton.dataset.href = openButton.disabled ? '' : chosenBoxes[0].dataset.detailUrl;
+            };
+            const eligibleBoxes = boxes.filter((box) => !box.disabled);
+            boxes.forEach((box) => box.addEventListener('change', () => {
+                if (box.checked) {
+                    if (selectedIds.size < maxSelected) selectedIds.add(box.value);
+                    else box.checked = false;
+                } else selectedIds.delete(box.value);
+                saveSelection();
+            }));
+
+            let drag = null;
+            const applyRange = (endBox) => {
+                if (!drag || !endBox) return;
+                const start = eligibleBoxes.indexOf(drag.anchor);
+                const end = eligibleBoxes.indexOf(endBox);
+                if (start < 0 || end < 0) return;
+                const next = new Set(drag.base);
+                const range = eligibleBoxes.slice(Math.min(start, end), Math.max(start, end) + 1);
+                if (drag.remove) range.forEach((box) => next.delete(box.value));
+                else {
+                    for (const box of range) {
+                        if (next.has(box.value)) continue;
+                        if (next.size >= maxSelected) break;
+                        next.add(box.value);
+                    }
+                }
+                selectedIds = next;
+                saveSelection();
+            };
+            form.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || !event.target.closest('.activity-rider-selection-cell')) return;
+                const box = event.target.closest('.activity-rider-selection-cell')?.querySelector('.activity-rider-select');
+                if (!box || box.disabled) return;
+                event.preventDefault();
+                drag = { anchor: box, base: new Set(selectedIds), remove: selectedIds.has(box.value) };
+                applyRange(box);
+            });
+            document.addEventListener('pointermove', (event) => {
+                if (!drag || !(event.buttons & 1)) return;
+                const row = document.elementFromPoint(event.clientX, event.clientY)?.closest('tr[data-rider-id]');
+                const box = row?.querySelector('.activity-rider-select');
+                if (box && !box.disabled) { event.preventDefault(); applyRange(box); }
+            });
+            document.addEventListener('pointerup', () => { drag = null; });
+            form.addEventListener('click', (event) => {
+                if (event.detail > 0 && event.target.closest('.activity-rider-select')) event.preventDefault();
+            });
+            const selectFilteredButton = document.getElementById('activity-select-filtered');
+            const selectionFeedback = document.getElementById('activity-selection-feedback');
+            selectFilteredButton.addEventListener('click', async () => {
+                selectFilteredButton.disabled = true;
+                selectionFeedback.textContent = 'Loading matching riders…';
+                try {
+                    const selectionUrl = new URL(window.location.href);
+                    selectionUrl.searchParams.set('select_filtered_ids', '1');
+                    const response = await fetch(selectionUrl, {
+                        headers: { 'Accept': 'application/json' },
+                        credentials: 'same-origin'
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !Array.isArray(result.ids)) {
+                        throw new Error(result.message || 'Matching riders could not be selected.');
+                    }
+                    selectedIds = new Set(result.ids.map(String).slice(0, maxSelected));
+                    saveSelection();
+                    selectionFeedback.textContent = result.truncated
+                        ? ''
+                        : `Selected ${result.ids.length} matching rider(s).`;
+                } catch (error) {
+                    selectionFeedback.textContent = error.message || 'Matching riders could not be selected.';
+                } finally {
+                    selectFilteredButton.disabled = false;
+                }
+            });
+            document.getElementById('activity-deselect-all').addEventListener('click', () => {
+                selectedIds.clear();
+                saveSelection();
+            });
+            openButton.addEventListener('click', () => {
+                if (openButton.dataset.href) window.location.assign(openButton.dataset.href);
+            });
+            form.addEventListener('submit', (event) => {
+                form.querySelectorAll('.activity-selection-hidden').forEach((input) => input.remove());
+                [...selectedIds].forEach((id) => {
+                    const hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = 'rider_ids';
+                    hidden.value = id;
+                    hidden.className = 'activity-selection-hidden';
+                    form.appendChild(hidden);
+                });
+            });
+            saveSelection();
+        })();
+        </script>
+        </form>
+        {% if total_pages > 1 %}
+        <nav class="mt-3" aria-label="Activity Monitor rider pages">
+            <ul class="pagination mb-0 flex-wrap">
+                {% for target_page, label in [(page - 1, 'Previous'), (page + 1, 'Next')] %}
+                {% if (label == 'Previous' and page > 1) or (label == 'Next' and page < total_pages) %}
+                <li class="page-item">
+                    <a class="page-link" href="{{ url_for('web.activity_monitor_riders', q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=target_page, sort=filters.sort, direction=filters.direction) }}">{{ label }}</a>
+                </li>
+                {% else %}
+                <li class="page-item disabled"><span class="page-link">{{ label }}</span></li>
+                {% endif %}
+                {% endfor %}
+                <li class="page-item disabled"><span class="page-link">Page {{ page }} of {{ total_pages }}</span></li>
+            </ul>
+        </nav>
+        {% endif %}
+        {% else %}
+        <p class="text-muted mb-0">No riders match these filters.</p>
+        {% endif %}
+        {% if riders %}<p class="text-muted small mt-3 mb-0"><strong>About these labels:</strong> Age is calculated for today. “Days ago” counts from the latest race result that matches the rider. “Activity documented” means a confirmed result matching this rider is saved. RD {{ current_year }} counts separate race dates found in PCS checks this year; “N/A” means no PCS check was completed this year. “Needs Review” means rider or profile details need a closer look. “No race evidence” means no confirmed result is saved; it does not prove the rider was inactive.</p>{% endif %}
+    </div>
+</section>
+{% endif %}
+{% else %}
+<div class="alert alert-info">Select an active namespace to open its Activity Monitor.</div>
+{% endif %}
+{% endblock %}
