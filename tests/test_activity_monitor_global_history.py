@@ -1,8 +1,11 @@
 """Global Activity Monitor history is isolated by namespace and linked by WorldDB ID."""
 import os
 import hashlib
+import json
 from datetime import datetime
 from uuid import uuid4
+
+import pytest
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -13,9 +16,13 @@ from webapp.models.ns.activity_monitor import ActivityMonitorBase
 from webapp.models.ns.schema import CDBCyclist, CDBTeam
 from webapp.tools.activity_monitor_global_history import (
     archive_namespace_history,
+    build_history_bundle,
+    import_and_restore_history_bundle,
     install_global_history_schema,
+    preview_history_bundle,
     restore_worlddb_history,
     sync_activity_monitor_roster,
+    validate_history_bundle,
 )
 
 
@@ -230,6 +237,103 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
         destination_engine.dispose()
         drop_database(destination_url)
         drop_database(source_url)
+
+
+def test_history_bundle_preview_import_and_restore_are_safe_and_repeatable(app):
+    base_url = make_url(os.environ["WORLDDB_TEST_DATABASE_URL"])
+    source_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    destination_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    target_main_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    source_engine = create_engine(source_url)
+    destination_engine = create_engine(destination_url)
+    target_main_engine = create_engine(target_main_url)
+    source_slug = f"bundle-{uuid4().hex[:12]}"
+    worlddb_id = 2905
+    now = datetime.utcnow()
+    bundle_hash = None
+    try:
+        create_database(source_url)
+        create_database(destination_url)
+        create_database(target_main_url)
+        ActivityMonitorBase.metadata.create_all(source_engine)
+        ActivityMonitorBase.metadata.create_all(destination_engine)
+        CDBTeam.__table__.create(destination_engine)
+        CDBCyclist.__table__.create(destination_engine)
+        with source_engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, source_worlddb_rider_id, identity_generation,
+                     first_name, last_name, team_name, identity_status, identity_hold,
+                     eligible, present_in_cdb, created_at, updated_at)
+                VALUES (:key, :worlddb_id, 0, 'Bundle', 'Rider', '', 'verified', FALSE,
+                        TRUE, TRUE, :now, :now)
+            """), {"key": f"worlddb:{worlddb_id}:g0", "worlddb_id": worlddb_id, "now": now})
+            connection.execute(text("""
+                INSERT INTO activity_monitor_source_checks
+                    (source_record_key, rider_id, source_worlddb_rider_id, identity_generation,
+                     source, source_status, coverage_status, identity_result, checked_at)
+                VALUES ('bundle-check-1', 1, :worlddb_id, 0, 'pcs', 'success', 'complete', 'verified', :now)
+            """), {"worlddb_id": worlddb_id, "now": now})
+        with destination_engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name)
+                VALUES (:worlddb_id, 77, 'Bundle', 'Rider')
+            """), {"worlddb_id": worlddb_id})
+
+        with app.app_context():
+            main_engine = db.engines["main"]
+            install_global_history_schema(main_engine)
+            install_global_history_schema(target_main_engine)
+            archive_namespace_history(source_engine, main_engine, source_slug, apply=True)
+            bundle_bytes = build_history_bundle(main_engine)
+            validated = validate_history_bundle(bundle_bytes)
+            preview = preview_history_bundle(target_main_engine, destination_engine, validated)
+            assert preview["records"] == len(validated["bundle"]["records"])
+            assert preview["records"] >= 1
+            assert preview["new_records"] == preview["records"]
+            assert preview["riders_matched"] == 0
+            with destination_engine.connect() as connection:
+                assert connection.execute(text(
+                    "SELECT COUNT(*) FROM activity_monitor_source_checks"
+                )).scalar_one() == 0
+
+            outcome = import_and_restore_history_bundle(
+                target_main_engine, destination_engine, validated, actor_user_id=17,
+            )
+            bundle_hash = outcome["bundle_sha256"]
+            assert outcome["records_imported"] == preview["records"]
+            assert outcome["riders_matched"] == 1
+            assert outcome["restored"]["activity_monitor_source_checks"] == 1
+            with destination_engine.connect() as connection:
+                assert connection.execute(text(
+                    "SELECT COUNT(*) FROM activity_monitor_source_checks WHERE source_worlddb_rider_id = :id"
+                ), {"id": worlddb_id}).scalar_one() == 1
+            with pytest.raises(ValueError, match="already been imported"):
+                import_and_restore_history_bundle(target_main_engine, destination_engine, validated)
+
+            altered = json.loads(bundle_bytes)
+            altered["records"][0]["record_data"]["message"] = "tampered"
+            with pytest.raises(ValueError, match="incomplete or has been changed"):
+                validate_history_bundle(json.dumps(altered).encode())
+    finally:
+        with app.app_context():
+            if bundle_hash:
+                with target_main_engine.begin() as connection:
+                    connection.execute(text("""
+                        DELETE FROM activity_monitor_global_history
+                        WHERE namespace_slug IN (:slug, '__pcm_manager_transfer__')
+                          AND (namespace_slug = :slug OR source_record_key = :bundle_hash)
+                    """), {"slug": source_slug, "bundle_hash": bundle_hash})
+            with db.engines["main"].begin() as connection:
+                connection.execute(text("""
+                    DELETE FROM activity_monitor_global_history WHERE namespace_slug = :slug
+                """), {"slug": source_slug})
+        source_engine.dispose()
+        destination_engine.dispose()
+        target_main_engine.dispose()
+        drop_database(destination_url)
+        drop_database(source_url)
+        drop_database(target_main_url)
 
 
 def test_roster_sync_starts_new_generation_after_reintroduction(app):
