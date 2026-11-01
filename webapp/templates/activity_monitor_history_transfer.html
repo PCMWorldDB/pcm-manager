@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Monitor history transfer - WDB{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <h2 class="mb-2">Activity Monitor history transfer</h2>
+    <p class="text-muted">Move saved history from your local PCM Manager to another PCM Manager installation.</p>
+
+    {% set activity_monitor_active = 'overview' %}
+    {% include 'activity_monitor_nav.html' %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ 'success' if category == 'success' else 'info' }}" role="status">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% if error %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endif %}
+
+    {% if not archive_ready or not namespace_history_ready %}
+    <section class="card mb-3">
+        <div class="card-header"><strong>Prepare history storage</strong></div>
+        <div class="card-body">
+            <p>This creates the shared history archive table and any missing Activity Monitor tables for the selected namespace. It does not import, delete, or replace rider history.</p>
+            <form method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-primary" type="submit" name="action" value="prepare">Prepare storage</button>
+            </form>
+        </div>
+    </section>
+    {% else %}
+    <section class="card mb-3">
+        <div class="card-header"><strong>1. Export history from this installation</strong></div>
+        <div class="card-body">
+            <p>The export gathers saved Activity Monitor history from all active namespaces into one file. It does not delete source records.</p>
+            <form method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline-primary" type="submit" name="action" value="export">Download history export</button>
+            </form>
+        </div>
+    </section>
+
+    {% if completed %}
+    <div class="alert alert-success" role="status">
+        The one-time history transfer has already completed in this installation. The import is now closed.
+    </div>
+    {% else %}
+    <section class="card mb-3">
+        <div class="card-header"><strong>2. Preview a history export for this installation</strong></div>
+        <div class="card-body">
+            <p>On the destination installation, upload the export file here. First you will see a preview; no history is written during preview.</p>
+            <form method="post" enctype="multipart/form-data" class="mb-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label class="form-label" for="history_bundle">Activity Monitor history export</label>
+                <input class="form-control mb-3" id="history_bundle" name="history_bundle" type="file" accept=".json,application/json" required>
+                <button class="btn btn-outline-primary" type="submit" name="action" value="preview">Preview import</button>
+            </form>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if preview %}
+    <section class="card border-primary">
+        <div class="card-header"><strong>Import preview</strong></div>
+        <div class="card-body">
+            <p class="mb-2">No records have been imported yet.</p>
+            <ul>
+                <li>{{ "{:,}".format(preview.records) }} history records in the file</li>
+                <li>{{ "{:,}".format(preview.new_records) }} records not already in the archive</li>
+                <li>{{ "{:,}".format(preview.riders_matched) }} of {{ "{:,}".format(preview.riders_in_bundle) }} riders matched in the selected namespace by WorldDB ID</li>
+                {% if preview.unmatched_riders %}<li>{{ "{:,}".format(preview.unmatched_riders) }} riders are not in this namespace and will remain in the shared archive without being attached here</li>{% endif %}
+            </ul>
+            <p class="text-muted">The file is imported into the shared archive, then history for matching riders is restored. Existing destination records are preserved.</p>
+            <form method="post" enctype="multipart/form-data" class="border-top pt-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="import">
+                <input type="hidden" name="confirm_import" value="yes">
+                <input type="hidden" name="preview_sha256" value="{{ preview.bundle_sha256 }}">
+                <label class="form-label" for="confirm_history_bundle">Choose the same export file again to confirm</label>
+                <input class="form-control mb-3" id="confirm_history_bundle" name="history_bundle" type="file" accept=".json,application/json" required>
+                <button class="btn btn-primary" type="submit">Import and restore history</button>
+            </form>
+        </div>
+    </section>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

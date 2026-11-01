@@ -69,13 +69,13 @@
                     <label for="{{ form.cdb_file.id }}" class="form-label">
                         {{ form.cdb_file.label.text }}
                     </label>
-                    {{ form.cdb_file(class="form-control", accept=".sqlite") }}
+                    {{ form.cdb_file(class="form-control", accept=".cdb,.sqlite") }}
                     {% if form.cdb_file.errors %}
                         <div class="invalid-feedback d-block">
                             {{ form.cdb_file.errors[0] }}
                         </div>
                     {% endif %}
-                    <small class="form-text text-muted">Upload a SQLite CDB database file (optional). File will be copied to the namespace import directory. Only .sqlite files are accepted.</small>
+                    <small class="form-text text-muted">Upload a PCM .cdb file or an already converted .sqlite file (optional). CDB files are converted locally before import; the original file is preserved.</small>
                 </div>
 
                 <div class="row">

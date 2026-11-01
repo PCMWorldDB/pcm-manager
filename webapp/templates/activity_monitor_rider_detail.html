@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}Rider Activity History - WDB{% endblock %}
+{% block body_class %}activity-monitor-page{% endblock %}
+
+{% block styles %}
+.activity-detail-table { min-width: 760px; }
+.activity-detail-results-table { min-width: 1040px; }
+.activity-detail-checks-table { min-width: 1180px; }
+.activity-detail-table th { white-space: nowrap; }
+.activity-detail-table td { vertical-align: middle; }
+.activity-detail-summary-card { border-top: 3px solid #128577; }
+.activity-detail-summary-card .card-body { padding: .7rem .8rem; }
+.activity-detail-summary-value { font-size: 1.05rem; font-weight: 700; line-height: 1.2; }
+.activity-detail-summary-card .text-muted { font-size: .9rem; }
+.activity-detail-extra-result[hidden] { display: none; }
+.activity-rider-detail-header { display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, 2fr) minmax(max-content, 1fr); align-items: center; gap: 1rem; }
+.activity-rider-detail-header-facts { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .5rem 1.4rem; }
+.activity-rider-detail-header-fact { min-width: 105px; }
+@media (max-width: 1199.98px) { .activity-rider-detail-header { grid-template-columns: 1fr auto; } .activity-rider-detail-header-facts { grid-column: 1 / -1; justify-content: flex-start; } }
+body.dark-mode .activity-detail-summary-card { background: #2d3748; }
+{% endblock %}
+
+{% block content %}
+{% if selected_namespace %}
+{% set activity_monitor_active = 'riders' %}
+{% include 'activity_monitor_nav.html' %}
+
+<div class="mb-3">
+    {% if rider %}
+    <div class="activity-rider-detail-header">
+          <div>
+            <h2 class="mb-1">{{ (rider.first_name ~ ' ' ~ rider.last_name).strip() or 'Unknown rider' }}</h2>
+            <p class="text-muted mb-0">WorldDB #{{ rider.worlddb_rider_id or '—' }}{% if rider.first_cycling_id %} · FirstCycling {{ rider.first_cycling_id }}{% endif %}</p>
+          </div>
+          <div class="activity-rider-detail-header-facts" aria-label="WorldDB identity details">
+            <div class="activity-rider-detail-header-fact"><div class="text-muted small">Team</div><div>{{ rider.team_name or '—' }}</div></div>
+            <div class="activity-rider-detail-header-fact"><div class="text-muted small">Division</div><div>{{ rider.division_name }}</div></div>
+            <div class="activity-rider-detail-header-fact"><div class="text-muted small">Nationality</div><div>{{ rider.nationality }}</div></div>
+            <div class="activity-rider-detail-header-fact"><div class="text-muted small">Date of birth</div><div>{{ rider.birth_date or '—' }}</div></div>
+          </div>
+        <a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary">← Back to riders</a>
+    </div>
+    {% if rider.identity_hold %}<div class="alert alert-warning mt-3 mb-0"><strong>Identity hold:</strong> {{ rider.identity_hold_reason or 'Review this rider identity before using new results.' }}</div>{% endif %}
+    {% else %}<a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary mb-3">← Back to riders</a>
+    {% endif %}
+</div>
+
+{% if load_error %}
+<div class="alert alert-warning">The imported rider history could not be loaded. No data was changed.</div>
+{% elif not rider %}
+<div class="alert alert-info">Select an active namespace to open rider history.</div>
+{% else %}
+<section class="row g-3 mb-3" aria-label="Activity summary">
+    <div class="col-12 col-md-6 col-xxl-3"><div class="panel-card card activity-detail-summary-card h-100"><div class="card-body">
+        <div class="text-muted small mb-1">Latest confirmed activity</div>
+        {% if latest_activity %}
+        <div class="activity-detail-summary-value">{{ latest_activity.race_name or 'Race result' }}</div>
+        <div>{{ latest_activity.result_date }}{% if latest_activity_days_ago is not none %} · {{ latest_activity_days_ago }} days ago{% endif %}{% if latest_activity.result_position or latest_activity.gc_position %} · Result {{ latest_activity.result_position or latest_activity.gc_position }}{% endif %}</div>
+        {% else %}<div class="activity-detail-summary-value">No confirmed race result</div><div class="text-muted">No confirmed activity is recorded.</div>{% endif %}
+    </div></div></div>
+    <div class="col-12 col-md-6 col-xxl-3"><div class="panel-card card activity-detail-summary-card h-100"><div class="card-body">
+        <div class="d-flex align-items-center justify-content-between gap-2 text-muted small mb-1"><span>Latest PCS check</span>{% if rider.pcs_url %}<a class="btn btn-sm btn-outline-primary py-0 px-2" href="{{ rider.pcs_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open PCS profile" title="Open PCS profile">↗</a>{% endif %}</div>
+        {% if latest_pcs_check %}
+        <div class="activity-detail-summary-value">{{ (latest_pcs_check.source_status_display or latest_pcs_check.source_status)|activity_check_status }}</div>
+        <div>{{ latest_pcs_check.checked_at.strftime('%Y-%m-%d') if latest_pcs_check.checked_at and latest_pcs_check.checked_at.strftime is defined else (latest_pcs_check.checked_at|string)[:10] }}</div>
+        {% else %}<div class="activity-detail-summary-value">Not checked</div><div class="text-muted">No PCS check is recorded.</div>{% endif %}
+    </div></div></div>
+    <div class="col-12 col-md-6 col-xxl-3"><div class="panel-card card activity-detail-summary-card h-100"><div class="card-body">
+        <div class="d-flex align-items-center justify-content-between gap-2 text-muted small mb-1"><span>Latest FirstCycling check</span>{% if rider.first_cycling_id %}<a class="btn btn-sm btn-outline-primary py-0 px-2" href="https://firstcycling.com/rider.php?r={{ rider.first_cycling_id|int }}" target="_blank" rel="noopener noreferrer" aria-label="Open FirstCycling profile" title="Open FirstCycling profile">↗</a>{% endif %}</div>
+        {% if latest_firstcycling_check %}
+        <div class="activity-detail-summary-value">{{ latest_firstcycling_check.source_status|activity_check_status }}</div>
+        <div>{{ latest_firstcycling_check.checked_at.strftime('%Y-%m-%d') if latest_firstcycling_check.checked_at and latest_firstcycling_check.checked_at.strftime is defined else (latest_firstcycling_check.checked_at|string)[:10] }}</div>
+        {% else %}<div class="activity-detail-summary-value">Not checked</div><div class="text-muted">No FirstCycling check is recorded.</div>{% endif %}
+    </div></div></div>
+    <div class="col-12 col-md-6 col-xxl-3"><div class="panel-card card activity-detail-summary-card h-100"><div class="card-body">
+        <div class="text-muted small mb-1">Race Days {{ current_year }}</div>
+        <div class="activity-detail-summary-value">{{ 'Checked' if rider.pcs_race_days_current_year is not none else 'Not Checked' }}</div>
+        <div>{{ rider.pcs_race_days_current_year if rider.pcs_race_days_current_year is not none else 'N/A' }}</div>
+    </div></div></div>
+</section>
+
+<section class="panel-card card mb-3">
+    <div class="card-header d-flex justify-content-between"><strong>Recorded race evidence</strong><span class="text-muted small">{{ results|length }} distinct results</span></div>
+    <div class="table-wrapper"><table class="table table-sm table-hover mb-0 activity-detail-table activity-detail-results-table">
+        <thead><tr><th>Date</th><th>Race / stage</th><th>Category</th><th>Result</th><th>Participation</th><th>Source</th><th>Identity</th></tr></thead>
+        <tbody id="activity-evidence-results">
+            {% for result in results %}
+            <tr{% if loop.index > 5 %} class="activity-detail-extra-result" hidden{% endif %}>
+                <td>{{ result.result_date or '—' }}</td>
+                <td>{% if result.safe_race_url %}<a href="{{ result.safe_race_url }}" target="_blank" rel="noopener noreferrer">{{ result.race_name or 'Race' }}</a>{% else %}{{ result.race_name or '—' }}{% endif %}{% if result.stage_name or result.stage_number %}<div class="text-muted small">{{ result.stage_name or ('Stage ' ~ result.stage_number) }}</div>{% endif %}</td>
+                <td>{{ result.race_category_display }}</td>
+                <td>{{ result.result_position or result.gc_position or '—' }} <span class="text-muted">{{ (result.row_type or '')|replace('_', ' ') }}</span></td>
+                <td>{% if result.activity_exclusion_reason %}<span class="badge text-bg-warning">Excluded</span><div class="small">{{ result.activity_exclusion_reason }}</div>{% else %}{{ result.participation_display or (result.participation_status or 'unknown')|replace('_', ' ')|title }}{% endif %}</td>
+                <td>{{ result.evidence_sources|join(' · ') }}</td>
+                <td>{% if result.identity_verified %}<span class="badge text-bg-success">Rider matched</span>{% else %}<span class="badge text-bg-secondary">Not confirmed</span>{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="7" class="text-muted">No imported race evidence is recorded for this rider.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+    {% if results|length > 5 %}<div class="card-body border-top"><button type="button" class="btn btn-sm btn-outline-primary" id="activity-evidence-toggle" aria-expanded="false" aria-controls="activity-evidence-results">More</button></div>{% endif %}
+</section>
+
+<section class="panel-card card mb-3">
+    <div class="card-header d-flex justify-content-between"><strong>Pro Cycling Stats Profile</strong><span class="text-muted small">Profile corrections are shared across this namespace</span></div>
+    {% set current_link = profile_links|selectattr('is_current')|first %}
+    {% if rider.pcs_profile_approval_matches %}
+    <div class="alert alert-success rounded-0 mb-0">
+        <strong>This PCS page was approved for this rider.</strong>
+        Results count as activity after a new check confirms the page still matches.
+        <div class="small mt-1">WorldDB birthdate: {{ rider.birth_date }} · PCS birthdate: {{ current_link.profile_birth_date if current_link else '—' }} · Approved: {{ current_link.approved_at|activity_datetime if current_link else '—' }}</div>
+    </div>
+    {% elif rider.pcs_profile_mismatch %}
+    <div class="alert alert-danger rounded-0 mb-0">
+        <strong>The saved PCS page may belong to someone else.</strong>
+        Its results will not count as activity until the rider’s identity is confirmed.
+        {% if not rider.pcs_profile_approval_available and (rider.pcs_profile_review_message or (current_link and (current_link.identity_reason or current_link.message))) %}<div class="small mt-1">{{ rider.pcs_profile_review_message or current_link.identity_reason or current_link.message }}</div>{% endif %}
+        {% if rider.pcs_profile_approval_available %}
+        <div class="mt-3">WorldDB birthdate: <strong>{{ rider.birth_date }}</strong> · PCS birthdate: <strong>{{ (current_link.profile_birth_date if current_link else none) or rider.pcs_profile_check_birth_date }}</strong></div>
+        <form method="post" action="{{ url_for('web.activity_monitor_approve_pcs_profile', rider_id=rider.id) }}" class="mt-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-warning" type="submit">Accept this PCS profile</button>
+            <span class="small ms-2">This approval applies only to this profile and these exact birthdates. A new PCS check is still required.</span>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+    <div class="card-body border-bottom">
+        {% set pcs_check_unconfirmed = latest_pcs_check and (
+            latest_pcs_check.source_status_display in ['identity_not_verified', 'identity_mismatch', 'invalid_response']
+            or latest_pcs_check.identity_result in ['mismatch', 'ambiguous', 'unavailable', 'unknown', 'manual_review', 'needs_review']
+        ) %}
+        {% if pcs_check_unconfirmed and not rider.pcs_profile_mismatch %}
+        <div class="alert alert-danger">
+            <span aria-hidden="true">🔺</span> <strong>This PCS profile could not be confirmed.</strong>
+        </div>
+        {% elif not current_link and not latest_pcs_check %}
+        <div class="alert alert-info">
+            <strong>This PCS page has not been checked here yet.</strong> Start a check with this rider to confirm his PCS profile and look for newer results.
+            <div class="mt-2"><a class="btn btn-outline-primary btn-sm" href="{{ url_for('web.activity_monitor_riders', q=rider.worlddb_rider_id, status='all') }}">Open this rider in Riders</a></div>
+        </div>
+        {% elif current_link and (current_link.get('http_status') != 200 or not current_link.get('checked_url')) %}
+        <div class="alert alert-info">
+            <strong>This PCS page has not been checked here yet.</strong> Start a check with this rider to confirm his PCS profile and look for newer results.
+        </div>
+        {% endif %}
+        <form method="post" action="{{ url_for('web.activity_monitor_save_pcs_profile', rider_id=rider.id) }}" class="row g-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="col-12 col-lg-8">
+                <label class="form-label" for="pcs-profile-input">PCS profile link or name</label>
+                <input class="form-control" id="pcs-profile-input" name="pcs_profile" type="text" maxlength="1000" value="{{ rider.pcs_edit_value }}" placeholder="Paste the rider’s PCS profile link" required>
+            </div>
+            <div class="col-12 col-lg-auto d-flex gap-2">
+                <button class="btn btn-primary" type="submit">Save PCS profile link</button>
+                {% if rider.pcs_has_override %}
+                <button class="btn btn-outline-danger" type="submit" formaction="{{ url_for('web.activity_monitor_clear_pcs_profile', rider_id=rider.id) }}" formmethod="post" formnovalidate>Clear override</button>
+                {% endif %}
+            </div>
+            <div class="col-12"><div class="form-text">Saving only stores the link; it does not contact PCS. To check it, open this rider in Riders and start a check.</div></div>
+        </form>
+    </div>
+</section>
+
+<h3 class="h5 mb-2">Website checks</h3>
+<section class="panel-card card mb-3">
+    <div class="card-header d-flex justify-content-between"><strong>Recent checks</strong><span class="text-muted small">{{ checks|length }} checks recorded</span></div>
+    <div class="table-wrapper"><table class="table table-sm mb-0 activity-detail-table activity-detail-checks-table">
+        <thead><tr><th>Date</th><th>Website</th><th>Check result</th><th>Rider match</th><th>New races found</th></tr></thead>
+        <tbody>
+            {% for check in checks %}<tr>
+                <td>{{ check.checked_at|activity_datetime }}</td><td>{{ check.source_display }}</td>
+                <td>{{ (check.source_status_display or check.source_status)|activity_check_status }}</td>
+                <td>{{ (check.identity_result_display or check.identity_result)|activity_check_history }}</td>
+                <td>{{ check.results_found or 0 }}</td>
+            </tr>{% else %}<tr><td colspan="5" class="text-muted">No checks have been recorded for this rider yet.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+</section>
+
+{% if alerts %}<section class="panel-card card mb-3">
+    <div class="card-header"><strong>Rider detail alerts</strong></div>
+    <div class="list-group list-group-flush">{% for alert in alerts %}<div class="list-group-item">
+        <div class="d-flex justify-content-between gap-2"><strong>{{ (alert.status or 'unknown')|replace('_', ' ')|title }}</strong><span class="text-muted small">{{ alert.created_at|activity_datetime }}</span></div>
+        <div>{{ alert.reason }}</div>{% if alert.resolution %}<div class="text-muted small mt-1">Resolution: {{ alert.resolution }}</div>{% endif %}
+    </div>{% endfor %}</div>
+</section>{% endif %}
+{% endif %}
+{% else %}
+<div class="alert alert-info">Select an active namespace to open its Activity Monitor.</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+(() => {
+    const button = document.getElementById('activity-evidence-toggle');
+    const extraRows = document.querySelectorAll('.activity-detail-extra-result');
+    if (!button || extraRows.length === 0) return;
+    button.addEventListener('click', () => {
+        const expanded = button.getAttribute('aria-expanded') === 'true';
+        extraRows.forEach((row) => { row.hidden = expanded; });
+        button.setAttribute('aria-expanded', String(!expanded));
+        button.textContent = expanded ? 'More' : 'Less';
+    });
+})();
+</script>
+{% endblock %}

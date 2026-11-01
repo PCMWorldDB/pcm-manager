@@ -1,0 +1,519 @@
+{% extends "base.html" %}
+
+{% block title %}Run Activity Checks - WDB{% endblock %}
+{% block body_class %}activity-monitor-page{% endblock %}
+
+{% block styles %}
+.activity-checks-table { min-width: 1000px; }
+.activity-checks-table th { white-space: nowrap; }
+.activity-check-outcomes-table { min-width: 980px; }
+.activity-check-outcomes-table th { white-space: nowrap; }
+.activity-selection-table { min-width: 760px; }
+.activity-due-table { min-width: 880px; }
+.activity-check-plan-fields { display: grid; grid-template-columns: 11rem 8rem; column-gap: 1.5rem; row-gap: .35rem; }
+.activity-run-stat { border-top: 3px solid #128577; }
+.activity-run-stat .card-body { padding: .7rem .8rem; }
+.activity-run-stat .stat-label { font-size: .9rem; margin-bottom: .25rem; }
+.activity-run-stat .stat-value { font-size: 1.05rem; font-weight: 700; line-height: 1.2; }
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 mb-3 flex-wrap">
+    <div>
+        <h2 class="mb-1">Run checks</h2>
+        <p class="text-muted mb-0">Check rider activity against FirstCycling and ProCyclingStats.</p>
+    </div>
+    <span class="badge text-bg-info">Preview and controlled start</span>
+</div>
+
+{% if selected_namespace %}
+{% set activity_monitor_active = 'run_checks' %}
+{% include 'activity_monitor_nav.html' %}
+
+{% if load_error %}
+<div class="alert alert-warning" role="status">The check plan could not be loaded. No data was changed.</div>
+{% elif history_unavailable %}
+<div class="alert alert-info" role="status">Activity Monitor history has not been installed for this namespace.</div>
+{% else %}
+{% if selection_error %}
+<div class="alert alert-warning" role="alert">{{ selection_error }}</div>
+{% endif %}
+
+{% if summary %}
+<div class="row g-3 mb-3">
+    <div class="col-6 col-xl-3"><div class="card panel-card activity-run-stat h-100"><div class="card-body"><div class="text-muted small stat-label">Monitored riders</div><div class="fw-bold stat-value">{{ "{:,}".format(summary.monitored) }}</div></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card panel-card activity-run-stat h-100"><div class="card-body"><div class="text-muted small stat-label">Awaiting first check</div><div class="fw-bold stat-value">{{ "{:,}".format(summary.awaiting_first_check) }}</div></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card panel-card activity-run-stat h-100"><div class="card-body"><div class="text-muted small stat-label">Overdue review date</div><div class="fw-bold stat-value">{{ "{:,}".format(summary.overdue_review_date) }}</div></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card panel-card activity-run-stat h-100"><div class="card-body"><div class="text-muted small stat-label">Needs Review</div><div class="fw-bold stat-value">{{ "{:,}".format(summary.needs_attention) }}</div></div></div></div>
+</div>
+{% endif %}
+
+{% set hide_manual_panel_once = hide_manual_panel or request.args.get('from_riders') == '1' %}
+<section class="panel-card card mb-3" id="activity-manual-check-panel" {% if hide_manual_panel_once %}hidden{% endif %}>
+    <div class="card-header"><strong>Start Manual Check</strong></div>
+    <div class="card-body">
+        <p class="text-muted">Riders are prioritized and suggested based on their scheduled check dates. Select <strong>Start Checks</strong> to begin, or preview the suggested riders first.</p>
+        <form method="post" action="{{ url_for('web.activity_monitor_run_checks') }}" class="d-flex align-items-end gap-5 flex-wrap">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="selection_mode" value="recommended">
+            <div class="activity-check-plan-fields">
+                <label class="form-label mb-0" for="activity-recommended-count">Riders to check</label>
+                <label class="form-label mb-0" for="activity-request-speed">Speed</label>
+                <div class="d-flex align-items-center gap-2">
+                    <input class="form-control" id="activity-recommended-count" name="recommended_count" type="number" min="1" max="25" value="25" style="width: 7rem" required>
+                    <small class="text-muted text-nowrap" style="font-size: .75rem">(max 25)</small>
+                </div>
+                <select class="form-select" id="activity-request-speed" name="request_speed" aria-label="Speed">
+                    <option value="fast" {% if requested_speed == 'fast' %}selected{% endif %}>Fast</option>
+                    <option value="medium" {% if requested_speed == 'medium' %}selected{% endif %}>Medium</option>
+                    <option value="slow" {% if requested_speed == 'slow' %}selected{% endif %}>Slow</option>
+                </select>
+            </div>
+            <div class="d-flex gap-2 pb-0">
+                <button class="btn btn-primary" type="submit" name="start_recommended" value="1" formaction="{{ url_for('web.activity_monitor_queue_checks') }}">Start Checks</button>
+                <button class="btn btn-outline-primary" type="submit" name="preview_action" value="{{ 'hide' if selected_plan else 'show' }}">Preview Suggested riders</button>
+            </div>
+        </form>
+    </div>
+</section>
+<script>
+(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('from_riders')) {
+        url.searchParams.delete('from_riders');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    const navigation = performance.getEntriesByType('navigation')[0];
+    if (navigation?.type === 'reload') {
+        document.getElementById('activity-manual-check-panel')?.removeAttribute('hidden');
+    }
+})();
+</script>
+
+{% if selected_plan %}
+<section class="panel-card card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>Selected check preview · {{ selected_plan.riders|length }} riders{% if selected_plan.selection_strategy == 'recommended' %} of {{ selected_plan.requested_count }} requested{% endif %}</strong>
+        <span class="badge text-bg-secondary">Sources assigned automatically</span>
+    </div>
+    <div class="card-body">
+        {% if selected_plan.selection_strategy == 'recommended' %}
+        <p class="text-muted">PCM Manager suggested {{ selected_plan.riders|length }} rider(s) for checking: riders due for review first, followed by other eligible riders. {% if selected_plan.upcoming_count %}{{ selected_plan.upcoming_count }} other eligible rider(s) were added to the list. {% endif %}{% if selected_plan.riders|length < selected_plan.requested_count %}Only {{ selected_plan.riders|length }} eligible riders were available out of the {{ selected_plan.requested_count }} requested.{% endif %} Riders already checked today were skipped. This is a preview; no checks have started yet.</p>
+        {% else %}
+        <p class="text-muted">This is a review of your selection only. No request has been sent and nothing has been queued yet. PCM Manager will apply the available source rules for each rider automatically.</p>
+        {% endif %}
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover mb-0 activity-selection-table">
+                <thead><tr><th>Rider</th><th>WorldDB ID</th><th>Team</th><th>FC profile</th><th>PCS profile</th><th>Last Check</th><th>Scheduled</th></tr></thead>
+                <tbody>
+                    {% for rider in selected_plan.riders %}
+                    <tr>
+                        <td>{{ (rider.first_name ~ ' ' ~ rider.last_name).strip() or 'Unknown rider' }}</td>
+                        <td>{{ rider.worlddb_rider_id or '—' }}</td>
+                        <td>{{ rider.team_name or '—' }}</td>
+                        <td>{% if rider.firstcycling_profile_url %}<a class="btn btn-sm btn-outline-primary" href="{{ rider.firstcycling_profile_url }}" target="_blank" rel="noopener noreferrer">Open FC profile</a>{% else %}—{% endif %}</td>
+                        <td>{% if rider.pcs_profile_url %}<a class="btn btn-sm btn-outline-primary" href="{{ rider.pcs_profile_url }}" target="_blank" rel="noopener noreferrer" title="{% if rider.pcs_profile_path %}Open saved PCS profile{% else %}Open suggested PCS profile based on the rider's name{% endif %}">Open PCS profile</a>{% else %}—{% endif %}</td>
+                        <td>{{ rider.last_check_date.strftime('%Y-%m-%d') if rider.last_check_date else 'Not checked yet' }}</td>
+                        <td>{{ rider.scheduled_date or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% set rider_count = selected_plan.riders|length %}
+        {% set source_gaps = namespace(no_source=0) %}
+        {% for rider in selected_plan.riders %}
+            {% if not rider.source_scope %}
+                {% set source_gaps.no_source = source_gaps.no_source + 1 %}
+            {% endif %}
+        {% endfor %}
+        {% set sources_ready = source_settings.pcs_enabled
+            and (selected_plan.source_mode == 'pcs_only' or source_settings.firstcycling_enabled) %}
+        {% set manual_batch_ready = selected_plan.source_mode in ['pcs_only', 'combined']
+            and 1 <= rider_count <= (250 if selected_plan.selection_origin == 'riders_page_bulk' else 25)
+            and source_gaps.no_source == 0
+            and sources_ready %}
+        <div class="alert {{ 'alert-success' if manual_batch_ready else 'alert-warning' }} mt-3 mb-0" role="status">
+            {% if rider_count < 1 or rider_count > (250 if selected_plan.selection_origin == 'riders_page_bulk' else 25) %}
+                A manual run must contain between 1 and {{ 250 if selected_plan.selection_origin == 'riders_page_bulk' else 25 }} riders. Return to Riders and adjust your selection.
+            {% elif source_gaps.no_source > 0 %}
+                {{ source_gaps.no_source }} selected rider(s) have no usable source link. Remove them or add the missing profile details before starting.
+            {% elif not sources_ready %}
+                One or more selected sources are switched off. Nothing will be queued until the chosen sources are enabled.
+            {% else %}
+                Ready: {{ rider_count }} rider(s) are ready to be checked using their available profile pages. Free Agents are checked on PCS only.
+            {% endif %}
+        </div>
+        <div class="d-flex gap-2 flex-wrap mt-3">
+            <a class="btn btn-outline-primary" href="{{ url_for('web.activity_monitor_riders') }}">Back to riders</a>
+            <a class="btn btn-outline-secondary" href="{{ url_for('web.activity_monitor_run_checks') }}">Close preview</a>
+            <form method="post" action="{{ url_for('web.activity_monitor_queue_checks') }}" class="ms-md-auto">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% if selected_plan.selection_origin == 'riders_page_bulk' %}<input type="hidden" name="selection_origin" value="riders_page_bulk">{% endif %}
+                {% for rider in selected_plan.riders %}<input type="hidden" name="rider_ids" value="{{ rider.monitor_rider_id }}">{% endfor %}
+                <label class="visually-hidden" for="activity-start-speed">Check speed</label>
+                <select class="form-select d-inline-block w-auto me-2" id="activity-start-speed" name="request_speed" aria-label="Check speed">
+                    <option value="fast" {% if selected_plan.request_speed == 'fast' %}selected{% endif %}>Fast</option>
+                    <option value="medium" {% if selected_plan.request_speed == 'medium' %}selected{% endif %}>Medium</option>
+                    <option value="slow" {% if selected_plan.request_speed == 'slow' %}selected{% endif %}>Slow</option>
+                </select>
+                <button class="btn btn-success" type="submit" {% if not manual_batch_ready %}disabled{% endif %}>Start checks ({{ rider_count }})</button>
+            </form>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+
+
+<section class="panel-card card mb-3" id="activity-automatic-checks">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>Start Automated Checks</strong>
+        <span class="badge {{ 'text-bg-success' if automation_settings.enabled else 'text-bg-secondary' }}">{{ 'Enabled' if automation_settings.enabled else 'Off' }}</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted">Automated checks start with the next 25 riders due, at randomized times based on your preferences.</p>
+        {% if not source_settings.pcs_enabled %}<div class="alert alert-warning">PCS checks are disabled for this server. Automatic checks cannot be enabled until they are turned on.</div>{% endif %}
+        <form method="post" action="{{ url_for('web.activity_monitor_save_automation') }}" class="row g-3 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="col-12 col-md-4 col-lg-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="activity-automation-enabled" name="enabled" value="yes" {{ 'checked' if automation_settings.enabled else '' }} {{ 'disabled' if not source_settings.pcs_enabled else '' }}>
+                    <label class="form-check-label" for="activity-automation-enabled">Enable Automated Checks</label>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <label class="form-label" for="activity-checks-per-hour">Rounds per hour</label>
+                <select class="form-select" id="activity-checks-per-hour" name="checks_per_hour">
+                    {% for value in range(1, 6) %}<option value="{{ value }}" {{ 'selected' if automation_settings.checks_per_hour == value else '' }}>{{ value }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <label class="form-label" for="activity-window-start">Start time</label>
+                <input class="form-control" id="activity-window-start" name="window_start" type="time" value="{{ automation_settings.window_start }}" required>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <label class="form-label" for="activity-window-end">End time</label>
+                <input class="form-control" id="activity-window-end" name="window_end" type="time" value="{{ automation_settings.window_end }}" required>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <label class="form-label" for="activity-automation-speed">Speed</label>
+                <select class="form-select" id="activity-automation-speed" name="automation_speed" required>
+                    <option value="fast" {{ 'selected' if automation_settings.request_speed == 'fast' else '' }}>Fast</option>
+                    <option value="medium" {{ 'selected' if automation_settings.request_speed == 'medium' else '' }}>Medium</option>
+                    <option value="slow" {{ 'selected' if automation_settings.request_speed == 'slow' else '' }}>Slow</option>
+                    <option value="very_slow" {{ 'selected' if automation_settings.request_speed == 'very_slow' else '' }}>Very Slow</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4 col-lg-1"><button class="btn btn-primary w-100" type="submit">Save</button></div>
+        </form>
+        <div class="small text-muted mt-3" aria-live="polite">
+            <span id="activity-next-round-status">{% if automation_settings.next_run_at %}Next round: {{ automation_settings.next_run_at|activity_datetime }}{% else %}No round is currently scheduled.{% endif %}</span>
+            <span id="activity-last-round-status">{% if automation_settings.last_run_at %} · Last round: {{ automation_settings.last_run_at|activity_datetime }}{% endif %}</span>
+        </div>
+        <div class="small mt-2"><strong>Today's planned rounds:</strong>
+            <span id="activity-planned-rounds">{% if automation_rounds %}{{ automation_rounds|join(', ') }}{% else %}None fit in this time window.{% endif %}</span>
+        </div>
+    </div>
+</section>
+
+<section class="panel-card card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>Queue</strong>
+        <span class="badge {{ 'text-bg-warning' if due_plan_count else 'text-bg-secondary' }}">{{ "{:,}".format(due_plan_count) }} due</span>
+    </div>
+    {% if due_plan %}
+    <form method="post" action="{{ url_for('web.activity_monitor_run_checks') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0 activity-due-table">
+                <thead><tr><th>Select</th><th>Rider</th><th>Team</th><th>Latest confirmed activity</th><th>Latest Check</th><th>Due date</th><th>Review reason</th><th>Details</th></tr></thead>
+                <tbody>
+                    {% for rider in due_plan %}
+                    <tr class="{{ 'd-none activity-extra-due-row' if loop.index > 5 else '' }}">
+                        <td><input class="form-check-input" type="checkbox" name="rider_ids" value="{{ rider.monitor_rider_id }}" aria-label="Select {{ (rider.first_name ~ ' ' ~ rider.last_name).strip() }}"></td>
+                        <td>{{ (rider.first_name ~ ' ' ~ rider.last_name).strip() or 'Unknown rider' }}</td>
+                        <td>{{ rider.team_name or '—' }}</td>
+                        <td>{{ rider.latest_participation_date or 'No confirmed activity in saved plan' }}</td>
+                        <td>{{ rider.last_check_date or '—' }}</td>
+                        <td><span class="badge {{ 'text-bg-danger' if rider.next_research_date < due_plan_as_of else 'text-bg-warning' }}">{{ rider.next_research_date }}</span>{% if rider.plan_recalculated %}<div class="small text-primary">Updated from current activity and research</div>{% endif %}</td>
+                        <td>{{ rider.research_reason or 'Scheduled review' }}</td>
+                        <td><a href="{{ url_for('web.activity_monitor_rider_detail', rider_id=rider.monitor_rider_id) }}">Rider Profile</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap p-3">
+            {% if due_plan_count > due_plan|length %}<span class="small text-muted">Showing the first {{ due_plan|length }} of {{ due_plan_count }} due riders.</span>{% else %}<span class="small text-muted">No rider is selected automatically.</span>{% endif %}
+            <div class="d-flex gap-2">
+                {% if due_plan|length > 5 %}<button class="btn btn-outline-secondary" type="button" data-reveal-rows="activity-extra-due-row">Show more</button>{% endif %}
+                <button class="btn btn-outline-primary" type="submit">Preview selected checks</button>
+            </div>
+        </div>
+    </form>
+    {% else %}
+    <div class="card-body pt-0"><p class="text-muted mb-0">No eligible riders are due according to the latest saved planning snapshots.</p></div>
+    {% endif %}
+</section>
+
+<section class="panel-card card">
+    <div class="card-header"><strong>Recent check runs</strong></div>
+    <div class="table-wrapper"><table class="table table-sm table-hover mb-0 activity-checks-table">
+        <thead><tr><th>Run</th><th>Date</th><th>Run type</th><th>Status</th><th>Requested</th><th>Completed</th><th>Succeeded</th><th>Need Review</th></tr></thead>
+        <tbody>
+            {% for run in latest_runs %}<tr class="{{ 'd-none activity-extra-run-row' if loop.index > 5 else '' }}">
+                <td>{% if run.id is defined and run.id %}<a href="{{ url_for('web.activity_monitor_run_checks', run_id=run.id) }}">#{{ run.id }}</a>{% else %}—{% endif %}</td>
+                <td>{{ run.run_at|activity_datetime }}</td>
+                <td>{{ (run.run_type or 'unknown')|replace('_', ' ')|title }}</td>
+                <td>{{ (run.status or 'unknown')|replace('_', ' ')|title }}{% if run.resumed_count %}<div><span class="badge text-bg-info">{{ run.resumed_count }} resumed</span></div>{% endif %}</td>
+                <td>{{ run.requested_count }}</td><td>{{ run.completed_count }}</td>
+                <td>{{ run.succeeded_count }}</td><td>{{ run.needs_review_count }}</td>
+            </tr>{% else %}<tr><td colspan="8" class="text-muted py-4 text-center">No saved check runs in this namespace.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+    {% if latest_runs|length > 5 %}<div class="card-body py-2"><button class="btn btn-sm btn-outline-secondary" type="button" data-reveal-rows="activity-extra-run-row">Show more</button></div>{% endif %}
+</section>
+<script>
+(() => {
+    const speedChoices = [
+        document.getElementById('activity-request-speed'),
+        document.getElementById('activity-start-speed'),
+    ].filter(Boolean);
+    speedChoices.forEach((choice) => {
+        choice.addEventListener('change', () => {
+            speedChoices.forEach((otherChoice) => {
+                if (otherChoice !== choice) otherChoice.value = choice.value;
+            });
+        });
+    });
+})();
+
+document.querySelectorAll('[data-reveal-rows]').forEach((button) => {
+    button.addEventListener('click', () => {
+        document.querySelectorAll(`.${button.dataset.revealRows}`).forEach((row) => row.classList.remove('d-none'));
+        button.hidden = true;
+    });
+});
+</script>
+
+{% if selected_run %}
+{% if selected_run.status in ['queued', 'running', 'retry_wait'] %}
+<script>
+(() => {
+    const panelId = 'activity-run-details-panel';
+    const runStatusUrl = {{ url_for('web.activity_monitor_run_checks', run_id=selected_run.id)|tojson }};
+    const refreshDelay = {{ '3000' if selected_run.status in ['queued', 'running'] else '10000' }};
+    let refreshing = false;
+    let stopped = false;
+
+    const refreshRunStatus = async () => {
+        if (refreshing || stopped || document.hidden) return;
+        const currentPanel = document.getElementById(panelId);
+        if (!currentPanel) return;
+        refreshing = true;
+        try {
+            const response = await fetch(runStatusUrl, {
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) return;
+            const html = await response.text();
+            const refreshedDocument = new DOMParser().parseFromString(html, 'text/html');
+            const refreshedPanel = refreshedDocument.getElementById(panelId);
+            if (!refreshedPanel) return;
+
+            const details = currentPanel.querySelector('#activity-run-details-table');
+            const detailsWereOpen = Boolean(details?.open);
+            const oldStatus = currentPanel.dataset.runStatus;
+            const newStatus = refreshedPanel.dataset.runStatus;
+            currentPanel.replaceWith(refreshedPanel);
+
+            const refreshedDetails = refreshedPanel.querySelector('#activity-run-details-table');
+            if (refreshedDetails) {
+                refreshedDetails.open = detailsWereOpen;
+                const storageKey = `activity-monitor-run-details:${{ selected_namespace.slug|tojson }}:${{ selected_run.id }}`;
+                refreshedDetails.addEventListener('toggle', () => {
+                    try { sessionStorage.setItem(storageKey, refreshedDetails.open ? 'open' : 'closed'); }
+                    catch (_) { /* Keep the run details usable without browser storage. */ }
+                });
+            }
+
+            if (!['queued', 'running', 'retry_wait'].includes(newStatus)) {
+                stopped = true;
+                if (oldStatus !== newStatus) window.location.reload();
+            }
+        } catch (_) {
+            // A temporary connection issue is retried at the next interval.
+        } finally {
+            refreshing = false;
+        }
+    };
+
+    window.setInterval(refreshRunStatus, Number(refreshDelay));
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshRunStatus();
+    });
+})();
+</script>
+{% endif %}
+{% if selected_run.status in ['completed', 'partial'] %}
+<script>
+(() => {
+    const storageKey = {{ ('activity-monitor-selection:' ~ selected_namespace.slug)|tojson }};
+    const handledKey = storageKey + ':finished-run:{{ selected_run.id }}';
+    const completedIds = new Set({{ selected_run.finished_rider_ids|tojson }}.map(String));
+    try {
+        if (localStorage.getItem(handledKey)) return;
+        const selected = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        if (!Array.isArray(selected)) return;
+        localStorage.setItem(storageKey, JSON.stringify(selected.map(String).filter((id) => !completedIds.has(id))));
+        localStorage.setItem(handledKey, '1');
+    } catch (_) { /* Keep selection usable if browser storage is unavailable. */ }
+})();
+</script>
+{% endif %}
+<section class="panel-card card mt-3" id="activity-run-details-panel" data-run-status="{{ selected_run.status }}">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>Run #{{ selected_run.id }} details</strong>
+        <span class="badge {{ 'text-bg-success' if selected_run.status == 'completed' else 'text-bg-danger' if selected_run.status in ['failed', 'cancelled'] else 'text-bg-info' }}">{{ (selected_run.status or 'unknown')|replace('_', ' ')|title }}</span>
+        {% if selected_run.status in ['queued', 'running', 'retry_wait'] and selected_run.stop_reason %}
+        <span class="small text-warning-emphasis" role="status">Stop requested. Any request already in progress will finish; riders not started are being skipped.</span>
+        {% elif selected_run.status in ['completed', 'partial', 'failed', 'cancelled'] and selected_run.stop_reason and selected_run.cancelled_count > 0 %}
+        <form method="post" action="{{ url_for('web.activity_monitor_resume_run', run_id=selected_run.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-primary" type="submit">Resume</button>
+        </form>
+        {% elif selected_run.status in ['queued', 'running', 'retry_wait'] and not selected_run.stop_reason %}
+        <form method="post" action="{{ url_for('web.activity_monitor_stop_run', run_id=selected_run.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('Stop this run after the current source request finishes? Riders who have not started will be left unchecked.')">Stop after current request</button>
+        </form>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% set progress = ((selected_run.completed_count / selected_run.requested_count * 100)|round(0, 'floor')|int) if selected_run.requested_count else 0 %}
+        <div class="d-flex justify-content-between gap-3 flex-wrap mb-1"><strong>{{ selected_run.completed_count }} of {{ selected_run.requested_count }} checks completed</strong><span>{{ selected_run.succeeded_count }} succeeded · {{ selected_run.needs_review_count }} need review</span></div>
+        <div class="progress mb-2" role="progressbar" aria-label="Run progress" aria-valuenow="{{ progress }}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width: {{ progress }}%">{{ progress }}%</div></div>
+        <p class="text-muted small mb-3" aria-live="polite">{{ selected_run.queued_count }} queued · {{ selected_run.running_count }} running · {{ selected_run.retry_wait_count - selected_run.setup_wait_count }} waiting for retry time · {{ selected_run.setup_wait_count }} waiting for source setup · {{ selected_run.failed_task_count }} failed · {{ selected_run.cancelled_count }} cancelled.{% if selected_run.status in ['queued', 'running'] %} Progress refreshes automatically every 5 seconds.{% elif selected_run.status == 'retry_wait' %} This run will refresh automatically every 30 seconds while it waits.{% elif selected_run.stop_reason %} The run was stopped at your request; cancelled riders remain selected.{% else %} Refresh the page to check for updates.{% endif %}</p>
+        {% if selected_run.resumed_count %}<div class="alert alert-info py-2" role="status">{{ selected_run.resumed_count }} rider check(s) resumed after an interrupted background run. Previously saved source results were kept.</div>{% endif %}
+        {% if selected_run.error_message %}<div class="alert alert-warning">{{ selected_run.error_message }}</div>{% endif %}
+        <details class="mt-3" id="activity-run-details-table">
+            <summary class="btn btn-sm btn-outline-primary">Show details</summary>
+            <div class="table-wrapper mt-2"><table class="table table-sm table-hover align-middle mb-0">
+            <thead><tr><th>Rider</th><th>Sources</th><th>Last update</th><th>New Race results found</th><th>Check status</th><th>Details</th></tr></thead>
+            <tbody>
+                {% for task in selected_run_tasks %}<tr>
+                    <td>{% if task.monitor_rider_id %}<a href="{{ url_for('web.activity_monitor_rider_detail', rider_id=task.monitor_rider_id) }}">{{ (task.first_name ~ ' ' ~ task.last_name).strip() or 'Unknown rider' }}</a>{% else %}{{ (task.first_name ~ ' ' ~ task.last_name).strip() or 'Rider unavailable' }}{% endif %}<div class="text-muted small">WorldDB #{{ task.worlddb_rider_id or '—' }}</div></td>
+                    <td>{{ task.source_scope|join(', ') if task.source_scope else '—' }}</td>
+                    <td>{{ task.updated_at|activity_datetime }}</td>
+                    <td>{% for check in task.source_check_rows %}{% if check.source == 'pcs' %}PCS{% elif check.source == 'firstcycling' %}FirstCycling{% else %}{{ check.source|replace('_', ' ')|title }}{% endif %}: {{ check.evidence_count }}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+                    <td class="text-break">
+                        {{ task.outcome_summary }}
+                        {% if task.resumed_after_interruption %}<div class="small text-info-emphasis">Resumed after interruption</div>{% endif %}
+                        {% if task.state == 'retry_wait' %}<div class="text-muted small">{{ 'Retry after ' ~ (task.next_retry_at|activity_datetime) if task.next_retry_at else task.setup_wait_message }}</div>{% endif %}
+                        {% if task.outcome_details %}<details class="mt-1 small"><summary class="btn btn-sm btn-link p-0">Show details</summary><div class="text-muted mt-1">{{ task.outcome_details }}</div></details>{% endif %}
+                    </td>
+                    <td>{% if task.monitor_rider_id %}<a href="{{ url_for('web.activity_monitor_rider_detail', rider_id=task.monitor_rider_id) }}">Review evidence</a>{% else %}<span class="text-muted">Rider unavailable</span>{% endif %}</td>
+                </tr>{% else %}<tr><td colspan="6" class="text-muted py-3 text-center">No rider tasks are attached to this run.</td></tr>{% endfor %}
+            </tbody>
+            </table></div>
+        </details>
+    </div>
+</section>
+<script>
+(() => {
+    const details = document.getElementById('activity-run-details-table');
+    if (details) {
+        const storageKey = `activity-monitor-run-details:${{ selected_namespace.slug|tojson }}:${{ selected_run.id }}`;
+        try {
+            if (sessionStorage.getItem(storageKey) === 'open') details.open = true;
+            details.addEventListener('toggle', () => {
+                sessionStorage.setItem(storageKey, details.open ? 'open' : 'closed');
+            });
+        } catch (_) { /* The table remains usable when browser storage is unavailable. */ }
+    }
+    const runPanel = document.getElementById('activity-run-details-panel');
+    const automaticPanel = document.getElementById('activity-automatic-checks');
+    if (runPanel && automaticPanel) automaticPanel.before(runPanel);
+})();
+</script>
+{% endif %}
+
+{% endif %}
+{% else %}
+<div class="alert alert-info">Select an active namespace to view its check plan.</div>
+{% endif %}
+<script>
+(() => {
+    const amsterdamDateKey = (value = new Date()) => {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Europe/Amsterdam',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        }).formatToParts(value);
+        const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+        return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    };
+
+    const pageAmsterdamDate = amsterdamDateKey();
+    const refreshIfAmsterdamDayChanged = () => {
+        if (amsterdamDateKey() !== pageAmsterdamDate) window.location.reload();
+    };
+    const now = Date.now();
+    let afterMidnight = now + 30 * 60 * 60 * 1000;
+    let beforeMidnight = now;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+        const middle = Math.floor((beforeMidnight + afterMidnight) / 2);
+        if (amsterdamDateKey(new Date(middle)) === pageAmsterdamDate) beforeMidnight = middle;
+        else afterMidnight = middle;
+    }
+    window.setTimeout(
+        refreshIfAmsterdamDayChanged,
+        Math.max(250, afterMidnight - now + 250),
+    );
+    document.addEventListener('visibilitychange', refreshIfAmsterdamDayChanged);
+})();
+</script>
+{% if selected_namespace %}
+<script>
+(() => {
+    const nextRound = document.getElementById('activity-next-round-status');
+    const lastRound = document.getElementById('activity-last-round-status');
+    const plannedRounds = document.getElementById('activity-planned-rounds');
+    if (!nextRound || !lastRound || !plannedRounds) return;
+
+    const statusUrl = {{ url_for('web.activity_monitor_run_checks_schedule_status')|tojson }};
+    let updating = false;
+    const refreshScheduleStatus = async () => {
+        if (updating || document.hidden) return;
+        updating = true;
+        try {
+            const response = await fetch(statusUrl, {
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) return;
+            const status = await response.json();
+            nextRound.textContent = status.enabled && status.next_round
+                ? `Next round: ${status.next_round}`
+                : 'No round is currently scheduled.';
+            lastRound.textContent = status.last_round ? ` · Last round: ${status.last_round}` : '';
+            plannedRounds.textContent = status.planned_rounds.length
+                ? status.planned_rounds.join(', ')
+                : 'None fit in this time window.';
+        } catch (_) {
+            // Keep the current schedule visible if a brief status refresh fails.
+        } finally {
+            updating = false;
+        }
+    };
+
+    refreshScheduleStatus();
+    window.setInterval(refreshScheduleStatus, 30000);
+    document.addEventListener('visibilitychange', refreshScheduleStatus);
+})();
+</script>
+{% endif %}
+{% endblock %}

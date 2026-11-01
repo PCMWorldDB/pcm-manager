@@ -5,9 +5,9 @@ Publishing a release will generate the files to distribute with the latest chang
 
 ## Release artifacts
 
-- CDB SQLite file
-- rider stats in a standalone sql file for FirstCycling
-- a release overview HTML file (should we change to pdf?)
+- packed PCM `.cdb` file
+- a rider SQL table dump
+- a release overview HTML file
 
 ## How to create a new release
 
