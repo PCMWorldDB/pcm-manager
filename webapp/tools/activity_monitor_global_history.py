@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sqlalchemy import Date as SQLDate, DateTime as SQLDateTime, inspect, text
 
 
 ARCHIVE_TABLE = "activity_monitor_global_history"
+TRANSFER_MARKER_TYPE = "__history_bundle_import__"
+HISTORY_BUNDLE_FORMAT = "worlddb-activity-monitor-history"
+HISTORY_BUNDLE_VERSION = 1
 
 RECOVERABLE_TABLES = (
     "activity_monitor_source_checks",
@@ -63,6 +67,191 @@ def install_global_history_schema(main_engine):
             CREATE INDEX IF NOT EXISTS idx_activity_monitor_global_history_namespace
             ON activity_monitor_global_history (namespace_slug, record_type)
         """))
+
+
+def _canonical_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def build_history_bundle(main_engine):
+    """Build a portable bundle from the installed shared archive, without changing it."""
+    if not inspect(main_engine).has_table(ARCHIVE_TABLE):
+        raise RuntimeError("The shared Activity Monitor history archive is not installed.")
+    with main_engine.connect() as connection:
+        rows = connection.execute(text(f"""
+            SELECT namespace_slug, worlddb_rider_id, record_type,
+                   source_record_key, occurred_at, record_data, archived_at
+            FROM {ARCHIVE_TABLE}
+            WHERE record_type != :marker_type
+            ORDER BY namespace_slug, record_type, source_record_key
+        """), {"marker_type": TRANSFER_MARKER_TYPE}).mappings().all()
+    records = []
+    for row in rows:
+        records.append({
+            "namespace_slug": row["namespace_slug"],
+            "worlddb_rider_id": row["worlddb_rider_id"],
+            "record_type": row["record_type"],
+            "source_record_key": row["source_record_key"],
+            "occurred_at": row["occurred_at"].isoformat() if row["occurred_at"] else None,
+            "record_data": row["record_data"],
+            "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
+        })
+    digest = hashlib.sha256(_canonical_json(records).encode("utf-8")).hexdigest()
+    bundle = {
+        "format": HISTORY_BUNDLE_FORMAT,
+        "version": HISTORY_BUNDLE_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "record_count": len(records),
+        "records_sha256": digest,
+        "records": records,
+    }
+    return _canonical_json(bundle).encode("utf-8")
+
+
+def validate_history_bundle(raw_bytes):
+    """Validate an uploaded bundle before any database writes."""
+    try:
+        bundle = json.loads(raw_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("The file is not a valid Activity Monitor history bundle.") from exc
+    if not isinstance(bundle, dict) or bundle.get("format") != HISTORY_BUNDLE_FORMAT:
+        raise ValueError("This file is not an Activity Monitor history export.")
+    if bundle.get("version") != HISTORY_BUNDLE_VERSION:
+        raise ValueError("This history export uses an unsupported format version.")
+    records = bundle.get("records")
+    if not isinstance(records, list) or bundle.get("record_count") != len(records):
+        raise ValueError("The history export record count is invalid.")
+    digest = hashlib.sha256(_canonical_json(records).encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(str(bundle.get("records_sha256", "")), digest):
+        raise ValueError("The history export is incomplete or has been changed.")
+    unique = set()
+    rider_ids = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("The history export contains an invalid record.")
+        namespace_slug = record.get("namespace_slug")
+        record_type = record.get("record_type")
+        source_key = record.get("source_record_key")
+        data = record.get("record_data")
+        if (not isinstance(namespace_slug, str) or not namespace_slug or len(namespace_slug) > 100
+                or not isinstance(record_type, str) or not record_type.startswith("activity_monitor_")
+                or record_type in EXCLUDED_TABLES or record_type == TRANSFER_MARKER_TYPE
+                or len(record_type) > 80 or not isinstance(source_key, str) or not source_key
+                or len(source_key) > 240 or not isinstance(data, dict)):
+            raise ValueError("The history export contains a record with invalid fields.")
+        key = (namespace_slug, record_type, source_key)
+        if key in unique:
+            raise ValueError("The history export contains duplicate records.")
+        unique.add(key)
+        worlddb_id = record.get("worlddb_rider_id")
+        if worlddb_id is not None:
+            try:
+                rider_ids.add(int(worlddb_id))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("The history export contains an invalid WorldDB ID.") from exc
+        if record.get("occurred_at") is not None:
+            try:
+                datetime.fromisoformat(record["occurred_at"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("The history export contains an invalid date.") from exc
+    return {"bundle": bundle, "rider_ids": rider_ids}
+
+
+def preview_history_bundle(main_engine, namespace_engine, validated):
+    """Report import and rider-match counts without writing to either database."""
+    if not inspect(main_engine).has_table(ARCHIVE_TABLE):
+        raise RuntimeError("The shared Activity Monitor history archive is not installed.")
+    if not inspect(namespace_engine).has_table("activity_monitor_riders"):
+        raise RuntimeError("Activity Monitor history has not been installed for this namespace.")
+    records = validated["bundle"]["records"]
+    rider_ids = sorted(validated["rider_ids"])
+    with main_engine.connect() as connection:
+        existing = connection.execute(text(f"""
+            SELECT COUNT(*) FROM {ARCHIVE_TABLE} a
+            JOIN jsonb_to_recordset(CAST(:records AS JSONB)) AS r(
+                namespace_slug TEXT, record_type TEXT, source_record_key TEXT
+            ) ON a.namespace_slug = r.namespace_slug
+             AND a.record_type = r.record_type
+             AND a.source_record_key = r.source_record_key
+        """), {"records": json.dumps([
+            {"namespace_slug": item["namespace_slug"], "record_type": item["record_type"],
+             "source_record_key": item["source_record_key"]} for item in records
+        ])}).scalar_one() if records else 0
+    with namespace_engine.connect() as connection:
+        matched = connection.execute(text("""
+            SELECT COUNT(DISTINCT source_worlddb_rider_id)
+            FROM activity_monitor_riders
+            WHERE present_in_cdb = TRUE AND source_worlddb_rider_id = ANY(:ids)
+        """), {"ids": rider_ids}).scalar_one() if rider_ids else 0
+    return {
+        "records": len(records), "already_present": int(existing),
+        "new_records": len(records) - int(existing), "riders_in_bundle": len(rider_ids),
+        "riders_matched": int(matched), "unmatched_riders": len(rider_ids) - int(matched),
+        "bundle_sha256": hashlib.sha256(_canonical_json(validated["bundle"]).encode("utf-8")).hexdigest(),
+    }
+
+
+def import_and_restore_history_bundle(main_engine, namespace_engine, validated, *, actor_user_id=None):
+    """Import archive rows once, then restore matching rider history idempotently."""
+    bundle = validated["bundle"]
+    bundle_hash = hashlib.sha256(_canonical_json(bundle).encode("utf-8")).hexdigest()
+    if not inspect(main_engine).has_table(ARCHIVE_TABLE):
+        raise RuntimeError("The shared Activity Monitor history archive is not installed.")
+    if not inspect(namespace_engine).has_table("activity_monitor_riders"):
+        raise RuntimeError("Activity Monitor history has not been installed for this namespace.")
+    with main_engine.begin() as connection:
+        marker = connection.execute(text(f"""
+            SELECT record_data FROM {ARCHIVE_TABLE}
+            WHERE namespace_slug = '__pcm_manager_transfer__'
+              AND record_type = :marker_type AND source_record_key = :bundle_hash
+        """), {"marker_type": TRANSFER_MARKER_TYPE, "bundle_hash": bundle_hash}).scalar_one_or_none()
+        if marker and marker.get("status") == "complete":
+            raise ValueError("This history bundle has already been imported successfully.")
+        rows = []
+        for item in bundle["records"]:
+            rows.append({
+                "namespace_slug": item["namespace_slug"],
+                "worlddb_rider_id": item["worlddb_rider_id"],
+                "record_type": item["record_type"],
+                "source_record_key": item["source_record_key"],
+                "occurred_at": datetime.fromisoformat(item["occurred_at"]) if item["occurred_at"] else None,
+                "record_data": json.dumps(item["record_data"], ensure_ascii=False),
+            })
+        if rows:
+            connection.execute(text(f"""
+                INSERT INTO {ARCHIVE_TABLE}
+                    (namespace_slug, worlddb_rider_id, record_type, source_record_key, occurred_at, record_data)
+                VALUES
+                    (:namespace_slug, :worlddb_rider_id, :record_type, :source_record_key,
+                     :occurred_at, CAST(:record_data AS JSONB))
+                ON CONFLICT (namespace_slug, record_type, source_record_key) DO NOTHING
+            """), rows)
+        connection.execute(text(f"""
+            INSERT INTO {ARCHIVE_TABLE}
+                (namespace_slug, worlddb_rider_id, record_type, source_record_key, record_data)
+            VALUES ('__pcm_manager_transfer__', NULL, :marker_type, :bundle_hash,
+                    CAST(:record_data AS JSONB))
+            ON CONFLICT (namespace_slug, record_type, source_record_key)
+            DO UPDATE SET record_data = EXCLUDED.record_data, archived_at = CURRENT_TIMESTAMP
+        """), {"marker_type": TRANSFER_MARKER_TYPE, "bundle_hash": bundle_hash,
+               "record_data": json.dumps({"status": "importing", "record_count": len(rows),
+                                          "imported_by_user_id": actor_user_id})})
+
+    from webapp.tools.activity_monitor_global_history import sync_activity_monitor_roster
+    synced_ids = sync_activity_monitor_roster(namespace_engine)
+    restored = restore_worlddb_history(main_engine, namespace_engine, synced_ids)
+    with main_engine.begin() as connection:
+        connection.execute(text(f"""
+            UPDATE {ARCHIVE_TABLE} SET record_data = CAST(:record_data AS JSONB), archived_at = CURRENT_TIMESTAMP
+            WHERE namespace_slug = '__pcm_manager_transfer__'
+              AND record_type = :marker_type AND source_record_key = :bundle_hash
+        """), {"marker_type": TRANSFER_MARKER_TYPE, "bundle_hash": bundle_hash,
+               "record_data": json.dumps({"status": "complete", "record_count": len(rows),
+                                          "restored": restored["restored"],
+                                          "imported_by_user_id": actor_user_id,
+                                          "completed_at": datetime.now(timezone.utc).isoformat()})})
+    return {"records_imported": len(rows), "riders_matched": restored["riders"],
+            "restored": restored["restored"], "bundle_sha256": bundle_hash}
 
 
 def _json_value(value):

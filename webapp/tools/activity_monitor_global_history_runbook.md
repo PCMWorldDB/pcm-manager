@@ -48,6 +48,32 @@
 These commands are manual; neither startup nor normal namespace creation runs
 the archive-table installation or migrates existing history automatically.
 
+## Moving local history to another PCM Manager installation
+
+The Activity Monitor overview includes a protected **History transfer** page for
+users with namespace write access. On the source installation, choose **Download
+history export**. The export first synchronizes every active namespace into its
+shared archive, then downloads a versioned JSON bundle containing the shared
+archive, including records previously collected from other namespaces.
+
+On the destination installation, open the same page, upload the bundle, and
+review the preview. Preview is read-only. Confirming the import adds missing
+archive records without overwriting existing archive rows, synchronizes the
+selected namespace roster from its current CDB, and restores history for riders
+matched by WorldDB ID. Records for riders absent from the selected CDB remain in
+the shared archive and can be restored when those riders are present in a later
+CDB update. The completed transfer is recorded in the shared archive and the
+one-time import action is then closed. The export remains available.
+
+Both installations must already have the shared archive table installed in
+their **main** database, and the destination namespace must have its Activity
+Monitor tables installed. The source export does not delete or alter its
+namespace records. A failed destination restore can be retried with the same
+bundle; imported archive records are idempotent and are never deleted by this
+workflow. The export is not a full database backup and does not include queued
+tasks, scheduler configuration, or namespace-only state that is not in the
+shared history archive.
+
 ## Ongoing operation
 
 - Once the main archive table is installed, each completed online Activity
