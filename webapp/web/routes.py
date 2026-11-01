@@ -7127,7 +7127,7 @@ def activity_monitor_rider_detail(rider_id):
                     (checks_by_id.get(result.get('source_check_id')) or {}).get('source')
                 )
             )
-            and (
+            and any(
                 candidate.get('result_date') == result.get('result_date')
                 and result_kind(candidate) == result_kind(result)
                 and race_identities_match(candidate.get('race_name'), result.get('race_name'))
