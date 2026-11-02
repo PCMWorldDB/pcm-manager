@@ -6978,21 +6978,6 @@ def activity_monitor_rider_detail(rider_id):
         tokens = re.findall(r'[a-z0-9]+', ascii_name)
         return ' '.join(token for token in tokens if token not in {'elite', 'men', 'women'})
 
-    def race_identities_match(left, right):
-        left_tokens = normalized_race_identity(left).split()
-        right_tokens = normalized_race_identity(right).split()
-        if not left_tokens or not right_tokens:
-            return False
-        if left_tokens == right_tokens:
-            return True
-        shorter, longer = sorted((left_tokens, right_tokens), key=len)
-        if len(shorter) < 2:
-            return False
-        return any(
-            longer[index:index + len(shorter)] == shorter
-            for index in range(len(longer) - len(shorter) + 1)
-        )
-
     def result_kind(result):
         stage_number = result.get('stage_number')
         stage_name = ' '.join(str(result.get('stage_name') or '').split()).casefold()
@@ -7010,8 +6995,9 @@ def activity_monitor_rider_detail(rider_id):
             return 'general_classification'
         return 'race_result'
 
-    # A PCS result replaces only the matching race result type on that date.
-    # In stage races, preserve both a final-stage result and a separate GC.
+    # Any PCS result replaces FirstCycling evidence for that date. PCS is the
+    # preferred source for a date even when the sources label the result type
+    # differently (for example a stage result versus a classification).
     current_generation = rider.get('identity_generation')
     pcs_primary_results = [
         result
@@ -7033,8 +7019,6 @@ def activity_monitor_rider_detail(rider_id):
             )
             and any(
                 candidate.get('result_date') == result.get('result_date')
-                and result_kind(candidate) == result_kind(result)
-                and race_identities_match(candidate.get('race_name'), result.get('race_name'))
                 for candidate in pcs_primary_results
             )
         ):
