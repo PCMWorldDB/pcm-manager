@@ -1,5 +1,6 @@
 """Generate real release files from a synthetic CDB; mock only data selection."""
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,7 +45,16 @@ def test_release_generates_three_artifacts_and_preserves_cdb(app, monkeypatch, c
         "table_name": table, "id_column": fields["id"], "updates": {(1, fields["stat_mo"]): 80},
     })
     monkeypatch.setattr(routes, "_load_release_dyn_cyclist_rows", lambda *_: [{"id": 1, "first_name": "Fixture", "last_name": "Rider", "stat_mo": 80}])
-    monkeypatch.setattr(routes, "_load_namespace_approved_release_items", lambda *a, **kw: [{"is_selected": True, "name": "Included race", "total_edits": 1}])
+    monkeypatch.setattr(routes, "_load_namespace_approved_release_items", lambda *a, **kw: [
+        {
+            "is_selected": True, "name": "Included race", "total_edits": 1,
+            "approved_on": datetime(2026, 10, 31, 15, 4, 5, 123456),
+            "approval_requested_on": datetime(2026, 10, 30, 9, 2, 3, 654321),
+            "classification": "2.UWT", "classification_label": "Old classification",
+            "category": "Old category",
+        },
+        {"is_selected": True, "name": "Missing dates"},
+    ])
     recorded = []
     monkeypatch.setattr(routes, "_replace_namespace_release_files", lambda ns, rid, files: recorded.extend(files))
     with app.app_context():
@@ -62,3 +72,10 @@ def test_release_generates_three_artifacts_and_preserves_cdb(app, monkeypatch, c
     assert "Fixture" in sql and "'80'" in sql
     overview = files["release_overview_html"].read_text(encoding="utf-8")
     assert "Included race" in overview and "&lt;test&gt;" in overview
+    assert "<th>Approved On</th><th>Approval Requested On</th>" in overview
+    assert "<th>Date</th>" not in overview and "<th>Category</th>" not in overview
+    assert "<td>2026-10-31 15:04:05</td><td>2026-10-30 09:02:03</td>" in overview
+    assert "123456" not in overview and "654321" not in overview
+    assert "<td>2.UWT</td>" in overview
+    assert "Old classification" not in overview and "Old category" not in overview
+    assert "<td>-</td><td>-</td><td>-</td><td>Missing dates</td>" in overview

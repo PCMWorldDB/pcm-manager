@@ -20,6 +20,10 @@ body > .container {
     grid-template-columns: repeat(4, minmax(140px, 1fr));
     gap: 12px;
 }
+.summary-grid.stats-summary-grid {
+    grid-template-columns: repeat(5, minmax(140px, 1fr));
+    overflow-x: auto;
+}
 .summary-card {
     border: 1px solid #e5e7eb;
     border-radius: 8px;
@@ -187,12 +191,6 @@ body.dark-mode .lifecycle-arrow {
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'stats' %}active{% endif %} {% if not selected_release %}disabled{% endif %}" href="{{ url_for('web.releases', tab='stats', release_id=selected_release_id) if selected_release else '#' }}">Stats</a>
                 </li>
-                <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'palmares' %}active{% endif %} {% if not selected_release %}disabled{% endif %}" href="{{ url_for('web.releases', tab='palmares', release_id=selected_release_id) if selected_release else '#' }}">Palmares</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'photos' %}active{% endif %} {% if not selected_release %}disabled{% endif %}" href="{{ url_for('web.releases', tab='photos', release_id=selected_release_id) if selected_release else '#' }}">Photos</a>
-                </li>
             </ul>
 
             {% if active_tab != 'catalog' %}
@@ -299,14 +297,6 @@ body.dark-mode .lifecycle-arrow {
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="create_change_type_stats" name="included_change_types" value="stats_editor" checked>
                             <label class="form-check-label" for="create_change_type_stats">Stats</label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="create_change_type_palmares" name="included_change_types" value="palmares">
-                            <label class="form-check-label" for="create_change_type_palmares">Palmares</label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="create_change_type_photos" name="included_change_types" value="photos">
-                            <label class="form-check-label" for="create_change_type_photos">Photos</label>
                         </div>
                     </div>
                 </div>
@@ -429,14 +419,6 @@ body.dark-mode .lifecycle-arrow {
                         <input class="form-check-input" type="checkbox" id="change_type_stats_overview" name="included_change_types" value="stats_editor" {% if selected_release.include_stats_editor_changes %}checked{% endif %} {% if not can_update_releases %}disabled{% endif %}>
                         <label class="form-check-label" for="change_type_stats_overview">Stats Editor</label>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="change_type_palmares_overview" name="included_change_types" value="palmares" {% if selected_release.include_palmares_changes %}checked{% endif %} {% if not can_update_releases %}disabled{% endif %}>
-                        <label class="form-check-label" for="change_type_palmares_overview">Palmares</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="change_type_photos_overview" name="included_change_types" value="photos" {% if selected_release.include_photo_changes %}checked{% endif %} {% if not can_update_releases %}disabled{% endif %}>
-                        <label class="form-check-label" for="change_type_photos_overview">Photos</label>
-                    </div>
                 </div>
                 <div class="mt-2">
                     <button type="submit" class="btn btn-sm btn-primary" {% if not can_update_releases %}disabled title="Save Change Types locked"{% endif %}>Save Change Types{% if not can_update_releases %} &#128274;{% endif %}</button>
@@ -490,7 +472,7 @@ body.dark-mode .lifecycle-arrow {
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Stats Editor Changes</h5>
-        <div class="summary-grid mb-3">
+        <div class="summary-grid stats-summary-grid mb-3">
             <div class="summary-card">
                 <div class="summary-label">Race Results Included</div>
                 <div class="summary-value">{{ stats_release_summary.race_results_included or 0 }}</div>
@@ -498,6 +480,10 @@ body.dark-mode .lifecycle-arrow {
             <div class="summary-card">
                 <div class="summary-label">Stat Lists Included</div>
                 <div class="summary-value">{{ stats_release_summary.stat_lists_included or 0 }}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Individuals Included</div>
+                <div class="summary-value">{{ stats_release_summary.individuals_included or 0 }}</div>
             </div>
             <div class="summary-card">
                 <div class="summary-label">Riders with Edits</div>
@@ -509,26 +495,27 @@ body.dark-mode .lifecycle-arrow {
             </div>
         </div>
         <hr>
-        <h6 class="mb-3">Included Race Results and Stat Lists</h6>
+        <h6 class="mb-3">All Edits Since the Last Release</h6>
         {% if stats_included_items %}
         <div class="table-wrapper">
             <table class="table table-sm table-striped align-middle mb-0">
                 <thead>
                     <tr>
                         <th>Type</th>
-                        <th>Date</th>
+                        <th>Approved On</th>
+                        <th>Approval Requested On</th>
                         <th>Name</th>
                         <th>Riders Edited</th>
                         <th>Total Edits</th>
-                        <th>Category</th>
                         <th>Classification</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in stats_included_items %}
                     <tr>
-                        <td>{{ item.type_label or ('List' if item.scope_type == 'list' else 'Race') }}</td>
-                        <td>{{ item.date or '-' }}</td>
+                        <td>{{ item.type_label or {'list': 'List', 'individual': 'Individual'}.get(item.scope_type, 'Race Result') }}</td>
+                        <td>{{ item.approved_on.strftime('%Y-%m-%d %H:%M:%S') if item.approved_on else '-' }}</td>
+                        <td>{{ item.approval_requested_on.strftime('%Y-%m-%d %H:%M:%S') if item.approval_requested_on else '-' }}</td>
                         <td>
                             {% if item.detail_url %}
                             <a href="{{ item.detail_url }}">{{ item.name or '-' }}</a>
@@ -538,15 +525,14 @@ body.dark-mode .lifecycle-arrow {
                         </td>
                         <td>{{ item.riders_edited or 0 }}</td>
                         <td>{{ item.total_edits or 0 }}</td>
-                        <td>{{ item.category or '-' }}</td>
-                        <td>{{ item.classification_label or '-' }}</td>
+                        <td>{{ item.classification or '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
         {% else %}
-        <p class="text-muted mb-0">No race results or stat lists are included in this release yet.</p>
+        <p class="text-muted mb-0">No race results, stat lists or individual edits are included in this release yet.</p>
         {% endif %}
     </div>
 </div>

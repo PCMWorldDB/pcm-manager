@@ -34,19 +34,17 @@
         <div class="card-header">{{ entries.total }} matching {{ 'entry' if entries.total == 1 else 'entries' }}</div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
-                <thead><tr><th scope="col">ID</th><th scope="col">Time (UTC)</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Resource</th><th scope="col">IP address</th><th scope="col">Details</th></tr></thead>
+                <thead><tr><th scope="col">Time (UTC)</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Resource</th><th scope="col">Details</th></tr></thead>
                 <tbody>
                     {% for entry in entries.items %}
                     <tr>
-                        <td>{{ entry.id }}</td>
                         <td class="text-nowrap">{{ entry.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                         <td>{{ entry.username }}</td>
                         <td>{{ entry.action }}</td>
-                        <td>{{ entry.resource_type or '—' }}{% if entry.resource_id is not none %} #{{ entry.resource_id }}{% endif %}{% if entry.resource_name %}<div class="text-muted">{{ entry.resource_name }}</div>{% endif %}</td>
-                        <td>{{ entry.ip_address or '—' }}</td>
-                        <td><details><summary>View details</summary><pre class="text-wrap mb-2">{{ entry.details | tojson(indent=2) }}</pre><strong>User agent:</strong> {{ entry.user_agent or '—' }}</details></td>
+                        <td>{% for resource in resource_links[entry.id] %}<div>{% if resource.url %}<a href="{{ resource.url }}">{{ resource.label }}</a>{% else %}{{ resource.label }}{% endif %}</div>{% endfor %}</td>
+                        <td><details><summary>View details</summary><pre class="text-wrap mb-2">{{ entry.details | tojson(indent=2) }}</pre></details></td>
                     </tr>
-                    {% else %}<tr><td colspan="7" class="text-center text-muted py-4">No audit entries match these filters.</td></tr>{% endfor %}
+                    {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No audit entries match these filters.</td></tr>{% endfor %}
                 </tbody>
             </table>
         </div>

@@ -1,0 +1,40 @@
+<div class="panel-card card">
+    <div class="card-body">
+        <h5 class="mb-3">Stat Edit Log</h5>
+        {% if not selected_namespace %}
+        <p class="text-muted mb-0">Select a namespace to view stat edit history.</p>
+        {% elif log_entries %}
+        <p class="text-muted">Approved On, newest first. Showing up to 100 groups per page.</p>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead>
+                    <tr><th>Type</th><th>Approved On</th><th>Approval Requested On</th><th>Name</th><th>Riders Edited</th><th>Total Edits</th><th>Classification</th><th>Release</th></tr>
+                </thead>
+                <tbody>
+                    {% for edit in log_entries %}
+                    <tr>
+                        <td>{{ edit.type_label }}</td>
+                        <td>{{ edit.approved_on.strftime('%Y-%m-%d %H:%M:%S') if edit.approved_on else '-' }}</td>
+                        <td>{{ edit.approval_requested_on.strftime('%Y-%m-%d %H:%M:%S') if edit.approval_requested_on else '-' }}</td>
+                        <td>{% if edit.detail_url %}<a href="{{ edit.detail_url }}">{{ edit.name }}</a>{% else %}{{ edit.name }}{% endif %}</td>
+                        <td>{{ edit.riders_edited }}</td>
+                        <td>{{ edit.total_edits }}</td>
+                        <td>{{ edit.classification or '-' }}</td>
+                        <td>{% for release in edit.releases %}<a href="{{ release.url }}">{{ release.name }}</a>{% if not loop.last %}, {% endif %}{% else %}Not Released{% endfor %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No stat edit groups found.</p>
+        {% endif %}
+        {% if selected_namespace and (log_page > 1 or log_has_next) %}
+        <nav aria-label="Stat edit log pages" class="d-flex align-items-center gap-3 mt-3">
+            {% if log_page > 1 %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', log_page=log_page - 1) }}">Previous</a>{% endif %}
+            <span>Page {{ log_page }}</span>
+            {% if log_has_next %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', log_page=log_page + 1) }}">Next</a>{% endif %}
+        </nav>
+        {% endif %}
+    </div>
+</div>

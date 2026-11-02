@@ -144,7 +144,7 @@ class CDBRegion(NamespaceBase):
 
 
 class StatChange(NamespaceBase):
-    """Stat changes captured from race/stage review and ad-hoc list workflows."""
+    """Stat edits: race result, list, or individual (both source IDs are NULL)."""
 
     __tablename__ = 'stat_changes'
 
@@ -190,7 +190,7 @@ class StatChange(NamespaceBase):
 
 
 class StatChangeSnapshot(NamespaceBase):
-    """CDB rider stat snapshot captured before stat changes are approved."""
+    """CDB baseline per source; NULL source IDs identify an individual rider scope."""
 
     __tablename__ = 'stat_change_snapshot'
 

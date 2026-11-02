@@ -1359,7 +1359,10 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     stage = stage_map.get(stage_id)
     race_name = race.name if race is not None and race.name else f'Race #{race_id or mapped_result.race_result_id}'
     if stage_id is not None:
-        stage_label = stage.stage_name or f'Stage #{stage.stage_number or "?"}'
+        stage_label = (
+            stage.stage_name or f'Stage #{stage.stage_number or stage_id}'
+            if stage is not None else f'Stage #{stage_id}'
+        )
         label = f'{race_name} - {stage_label}'
         url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id) if race_id is not None else None
     else:
@@ -1373,19 +1376,23 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     }
 
 
-def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
-    if namespace is None or cdb_cyclist_id is None:
+def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None, offset=0):
+    """Load newest edits for a rider, or a page of the namespace-wide stat log."""
+    if namespace is None:
         return []
 
     connection_string = namespace.build_connection_string()
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            if cdb_cyclist_id is None:
+                _ensure_namespace_database_connection(conn, namespace)
             rows = conn.execute(
                 text(
                     """
                     SELECT
                         sc.id,
+                        sc.cdb_cyclist_id,
                         sc.race_result_id,
                         sc.stat_list_id,
                         sc.release_id,
@@ -1397,16 +1404,19 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
                         sl.list_name,
                         sl.season_year AS list_season_year,
                         sl.gender AS list_gender,
+                        COALESCE(NULLIF(c.first_last_name, ''), CONCAT_WS(' ', c.first_name, c.last_name)) AS rider_name,
                         rel.version AS release_version,
                         rel.release_name
                     FROM stat_changes sc
                     LEFT JOIN stat_lists sl ON sl.id = sc.stat_list_id
+                    LEFT JOIN cdb_cyclist c ON c.id = sc.cdb_cyclist_id
                     LEFT JOIN releases rel ON rel.id = sc.release_id
-                    WHERE sc.cdb_cyclist_id = :cdb_cyclist_id
+                    WHERE (CAST(:cdb_cyclist_id AS INTEGER) IS NULL OR sc.cdb_cyclist_id = :cdb_cyclist_id)
                     ORDER BY sc.id DESC
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'cdb_cyclist_id': cdb_cyclist_id},
+                {'cdb_cyclist_id': cdb_cyclist_id, 'limit': limit, 'offset': offset},
             ).mappings().all()
     except Exception:
         logger.exception('Failed to load stat edits for cyclist %s from namespace %s', cdb_cyclist_id, namespace.slug)
@@ -1452,7 +1462,14 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
 
     edits = []
     for row in rows:
-        if row.get('stat_list_id') is not None:
+        row_rider_id = row['cdb_cyclist_id']
+        if row.get('stat_list_id') is None and row.get('race_result_id') is None:
+            source = {
+                'type': 'Individual',
+                'label': row.get('rider_name') or f'Rider #{row_rider_id}',
+                'url': url_for('web.rider_detail', rider_id=row_rider_id),
+            }
+        elif row.get('stat_list_id') is not None:
             source = {
                 'type': 'Stat List',
                 'label': row.get('list_name') or f'List #{row.get("stat_list_id")}',
@@ -1473,6 +1490,8 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id):
         stat_code = stat_name[5:] if stat_name.startswith('stat_') else stat_name
         edits.append({
             'id': row.get('id'),
+            'rider_name': row.get('rider_name') or f'Rider #{row_rider_id}',
+            'rider_url': url_for('web.rider_detail', rider_id=row_rider_id),
             'source': source,
             'stat': stat_code.upper() if stat_code else '-',
             'original_value': row.get('original_value'),
@@ -1841,8 +1860,11 @@ def _load_namespace_approved_release_items(
     gender=None,
     selected_release_id=None,
     release_status=None,
+    log_mode=False,
+    limit=None,
+    offset=0,
 ):
-    """Return approved inclusion candidates across race/stage/list scopes."""
+    """Return release candidates, or paginated edit groups of every status for the log."""
     if namespace is None:
         return []
 
@@ -1850,6 +1872,8 @@ def _load_namespace_approved_release_items(
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            if log_mode:
+                _ensure_namespace_database_connection(conn, namespace)
             release_scope_id = _safe_int(selected_release_id) or 0
             draft_release = _is_draft_release_status(release_status)
             release_filter = (
@@ -1862,33 +1886,48 @@ def _load_namespace_approved_release_items(
                 if draft_release
                 else 'SUM(CASE WHEN release_id = :selected_release_id THEN 1 ELSE 0 END)'
             )
+            if log_mode:
+                release_filter = 'TRUE'
+            having_sql = '' if log_mode else 'HAVING BOOL_AND(COALESCE(is_approved, FALSE))'
             rows = conn.execute(
                 text(
                     f"""
                     SELECT
                         COALESCE(race_result_id, 0) AS race_result_id,
                         COALESCE(stat_list_id, 0) AS stat_list_id,
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id,
                         {selected_rows_sql} AS selected_rows,
                         COUNT(*) AS total_edits,
-                        COUNT(DISTINCT cdb_cyclist_id) AS riders_edited
+                        COUNT(DISTINCT cdb_cyclist_id) AS riders_edited,
+                        BOOL_AND(COALESCE(is_approved, FALSE)) AS is_approved,
+                        BOOL_AND(release_id IS NOT NULL) AS is_released,
+                        ARRAY_AGG(DISTINCT release_id) FILTER (WHERE release_id IS NOT NULL) AS release_ids,
+                        MAX(id) AS latest_edit_id
                     FROM stat_changes
                     WHERE {release_filter}
-                      AND (
-                            (COALESCE(stat_list_id, 0) = 0 AND COALESCE(race_result_id, 0) > 0)
-                            OR (
-                                COALESCE(stat_list_id, 0) > 0
-                                AND COALESCE(race_result_id, 0) = 0
-                            )
-                      )
+                      AND (race_result_id IS NULL OR stat_list_id IS NULL)
                     GROUP BY
                         COALESCE(race_result_id, 0),
-                        COALESCE(stat_list_id, 0)
-                    HAVING BOOL_AND(COALESCE(is_approved, FALSE))
+                        COALESCE(stat_list_id, 0),
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
+                    {having_sql}
+                    ORDER BY MAX(id) DESC
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'selected_release_id': release_scope_id},
+                {'selected_release_id': release_scope_id,
+                 'limit': None if log_mode else limit, 'offset': 0 if log_mode else offset},
             ).mappings().all()
 
+            release_names = {}
+            if log_mode:
+                release_ids = {release_id for row in rows for release_id in (row.get('release_ids') or [])}
+                if release_ids:
+                    release_names = {
+                        release['id']: ' '.join(str(value) for value in (release['release_name'], release['version']) if value)
+                        for release in conn.execute(text('SELECT id, release_name, version FROM releases WHERE id = ANY(:ids)'),
+                                                    {'ids': list(release_ids)}).mappings()
+                    }
             list_ids = {
                 int(row['stat_list_id'])
                 for row in rows
@@ -1951,6 +1990,18 @@ def _load_namespace_approved_release_items(
         stages = FirstCyclingRaceStage.query.filter(FirstCyclingRaceStage.id.in_(stage_ids)).all()
         stage_map = {int(stage.id): stage for stage in stages if stage.id is not None}
 
+    approval_events = AuditLog.query.filter(
+        AuditLog.resource_type.in_([
+            f'namespace:{namespace.id}:race',
+            f'namespace:{namespace.id}:stat_list',
+            f'namespace:{namespace.id}:individual',
+        ]),
+        AuditLog.action.in_([
+            AuditAction.RACE_STATS_SUBMITTED, AuditAction.RACE_STATS_APPROVED,
+            AuditAction.STAT_LIST_SUBMITTED, 'individual_stats_submitted', 'individual_stats_approved',
+        ]),
+    ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).all()
+
     items = []
     for row in rows:
         mapped_result = race_result_map.get(int(row.get('race_result_id') or 0))
@@ -1958,8 +2009,22 @@ def _load_namespace_approved_release_items(
         stage_id = (_safe_int(mapped_result.external_stage_id) if mapped_result is not None else 0) or 0
         list_id = int(row.get('stat_list_id') or 0)
 
-        if list_id > 0:
+        individual_rider_id = int(row.get('individual_rider_id') or 0)
+        race_obj = None
+        if individual_rider_id:
+            rider = _load_namespace_roster_rider(namespace, individual_rider_id)
+            if rider is None and not log_mode:
+                continue
+            scope_type = 'individual'
+            display_name = rider.name if rider is not None else f'Rider #{individual_rider_id}'
+            item_date = '-'
+            category = '-'
+            classification_label = '-'
+            detail_url = url_for('web.rider_detail', rider_id=individual_rider_id)
+        elif list_id > 0:
             list_meta = list_name_map.get(list_id)
+            if not list_meta and log_mode:
+                list_meta = {'list_name': f'List #{list_id}'}
             if not list_meta:
                 continue
             if season_year is not None and _safe_int(list_meta.get('season_year')) != season_year:
@@ -1977,40 +2042,69 @@ def _load_namespace_approved_release_items(
         elif stage_id > 0:
             race_obj = race_map.get(race_id)
             stage_obj = stage_map.get(stage_id)
-            if race_obj is None or stage_obj is None:
+            if (race_obj is None or stage_obj is None) and not log_mode:
                 continue
             scope_type = 'stage'
-            stage_name = stage_obj.stage_name or f'Stage {stage_obj.stage_number or "?"}'
-            display_name = f"{race_obj.name or f'Race #{race_id}'} - {stage_name}"
+            source = _race_result_source_info(mapped_result, race_map, stage_map)
+            display_name = source['label']
             item_date = stage_obj.stage_date if stage_obj is not None else (race_obj.start_date if race_obj is not None else '-')
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
             detail_url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id)
         else:
             race_obj = race_map.get(race_id)
-            if race_obj is None:
+            if race_obj is None and not log_mode:
                 continue
             scope_type = 'race'
-            display_name = race_obj.name or f'Race #{race_id}'
+            display_name = race_obj.name if race_obj is not None and race_obj.name else f'Race #{race_id}'
             item_date = race_obj.start_date if race_obj is not None else '-'
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
             detail_url = url_for('web.stats_editor_race_detail', race_id=race_id)
 
+        if not list_id and not individual_rider_id and mapped_result is None and log_mode:
+            display_name = f"Race Result #{row['race_result_id']}"
+            detail_url = None
+
+        resource_kind = 'individual' if individual_rider_id else ('stat_list' if list_id else 'race')
+        resource_id = individual_rider_id or list_id or race_id
+        approval_dates = {}
+        for event in approval_events:
+            if event.resource_type != f'namespace:{namespace.id}:{resource_kind}' or event.resource_id != resource_id:
+                continue
+            if event.action == AuditAction.RACE_STATS_APPROVED:
+                event_stage_id = (event.details or {}).get('stage_id')
+                if event_stage_id and int(event_stage_id) != stage_id:
+                    continue
+            date_key = 'approval_requested_on' if event.action.endswith('_submitted') else 'approved_on'
+            approval_dates.setdefault(date_key, event.created_at)
+
         items.append({
-            'item_key': _encode_release_item_key(scope_type, race_id, stage_id, list_id),
+            'item_key': _encode_release_item_key(scope_type, race_id, stage_id, individual_rider_id or list_id),
             'scope_type': scope_type,
-            'type_label': 'List' if scope_type == 'list' else 'Race',
+            'type_label': {'list': 'List', 'individual': 'Individual'}.get(scope_type, 'Race Result'),
             'is_selected': (int(row.get('selected_rows') or 0) > 0) if selected_release_id is not None else False,
             'date': item_date,
+            'approved_on': approval_dates.get('approved_on'),
+            'approval_requested_on': approval_dates.get('approval_requested_on'),
             'name': display_name,
             'detail_url': detail_url,
             'category': category,
+            'classification': race_obj.classification if race_obj is not None else '-',
             'classification_label': classification_label,
             'riders_edited': int(row.get('riders_edited') or 0),
             'total_edits': int(row.get('total_edits') or 0),
+            'is_approved': bool(row.get('is_approved')),
+            'is_released': bool(row.get('is_released')),
+            'latest_edit_id': row.get('latest_edit_id') or 0,
+            'releases': [{'name': release_names.get(release_id) or f'Release #{release_id}',
+                          'url': url_for('web.releases', release_id=release_id, tab='stats')}
+                         for release_id in sorted(row.get('release_ids') or [])] if log_mode else [],
         })
 
+    if log_mode:
+        items.sort(key=lambda item: (item['approved_on'] or datetime.min, item['latest_edit_id']), reverse=True)
+        return items[offset:offset + limit if limit is not None else None]
     return sorted(
         items,
         key=lambda item: (
@@ -2026,6 +2120,7 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
         return {
             'race_results_included': 0,
             'stat_lists_included': 0,
+            'individuals_included': 0,
             'riders_with_edits': 0,
             'total_edits': 0,
         }
@@ -2051,19 +2146,15 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
                     WITH approved_scopes AS (
                         SELECT
                             COALESCE(race_result_id, 0) AS race_result_id,
-                            COALESCE(stat_list_id, 0) AS stat_list_id
+                            COALESCE(stat_list_id, 0) AS stat_list_id,
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id
                         FROM stat_changes
                         WHERE {release_filter}
-                          AND (
-                                (COALESCE(stat_list_id, 0) = 0 AND COALESCE(race_result_id, 0) > 0)
-                                OR (
-                                    COALESCE(stat_list_id, 0) > 0
-                                    AND COALESCE(race_result_id, 0) = 0
-                                )
-                          )
+                          AND (race_result_id IS NULL OR stat_list_id IS NULL)
                         GROUP BY
                             COALESCE(race_result_id, 0),
-                            COALESCE(stat_list_id, 0)
+                            COALESCE(stat_list_id, 0),
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
                         HAVING BOOL_AND(COALESCE(is_approved, FALSE))
                     )
                     SELECT
@@ -2074,12 +2165,16 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
                         COUNT(DISTINCT sc.stat_list_id) FILTER (
                             WHERE sc.stat_list_id IS NOT NULL
                         ) AS stat_lists_included,
+                        COUNT(DISTINCT sc.cdb_cyclist_id) FILTER (
+                            WHERE sc.stat_list_id IS NULL AND sc.race_result_id IS NULL
+                        ) AS individuals_included,
                         COUNT(DISTINCT sc.cdb_cyclist_id) AS riders_with_edits,
                         COUNT(*) AS total_edits
                     FROM stat_changes sc
                     JOIN approved_scopes approved
                       ON COALESCE(sc.race_result_id, 0) = approved.race_result_id
                      AND COALESCE(sc.stat_list_id, 0) = approved.stat_list_id
+                     AND (approved.individual_rider_id = 0 OR sc.cdb_cyclist_id = approved.individual_rider_id)
                     WHERE {qualified_release_filter}
                     """
                 ),
@@ -2090,6 +2185,7 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
         return {
             'race_results_included': 0,
             'stat_lists_included': 0,
+            'individuals_included': 0,
             'riders_with_edits': 0,
             'total_edits': 0,
         }
@@ -2099,6 +2195,7 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
     return {
         'race_results_included': int((row or {}).get('race_results_included') or 0),
         'stat_lists_included': int((row or {}).get('stat_lists_included') or 0),
+        'individuals_included': int((row or {}).get('individuals_included') or 0),
         'riders_with_edits': int((row or {}).get('riders_with_edits') or 0),
         'total_edits': int((row or {}).get('total_edits') or 0),
     }
@@ -2119,19 +2216,15 @@ def _sync_release_stats_change_type(namespace, release_id, include_stats):
                         WITH approved_scopes AS (
                             SELECT
                                 COALESCE(race_result_id, 0) AS race_result_id,
-                                COALESCE(stat_list_id, 0) AS stat_list_id
+                                COALESCE(stat_list_id, 0) AS stat_list_id,
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id
                             FROM stat_changes
                             WHERE COALESCE(release_id, 0) = 0
-                              AND (
-                                    (COALESCE(stat_list_id, 0) = 0 AND COALESCE(race_result_id, 0) > 0)
-                                    OR (
-                                        COALESCE(stat_list_id, 0) > 0
-                                        AND COALESCE(race_result_id, 0) = 0
-                                    )
-                              )
+                              AND (race_result_id IS NULL OR stat_list_id IS NULL)
                             GROUP BY
                                 COALESCE(race_result_id, 0),
-                                COALESCE(stat_list_id, 0)
+                                COALESCE(stat_list_id, 0),
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
                             HAVING BOOL_AND(COALESCE(is_approved, FALSE))
                         )
                         UPDATE stat_changes
@@ -2142,6 +2235,7 @@ def _sync_release_stats_change_type(namespace, release_id, include_stats):
                                 FROM approved_scopes approved
                                 WHERE COALESCE(stat_changes.race_result_id, 0) = approved.race_result_id
                                   AND COALESCE(stat_changes.stat_list_id, 0) = approved.stat_list_id
+                                  AND (approved.individual_rider_id = 0 OR stat_changes.cdb_cyclist_id = approved.individual_rider_id)
                           )
                         """
                     ),
@@ -3041,15 +3135,17 @@ def _build_release_overview_html_for_release(
     release_notes = html.escape(release.release_notes or '-')
     item_rows = []
     for item in selected_items:
+        approved_on = item.get('approved_on')
+        approval_requested_on = item.get('approval_requested_on')
         item_rows.append(
             '<tr>'
             f'<td>{html.escape(item.get("type_label") or "-")}</td>'
-            f'<td>{html.escape(str(item.get("date") or "-"))}</td>'
+            f'<td>{approved_on.strftime("%Y-%m-%d %H:%M:%S") if approved_on else "-"}</td>'
+            f'<td>{approval_requested_on.strftime("%Y-%m-%d %H:%M:%S") if approval_requested_on else "-"}</td>'
             f'<td>{html.escape(item.get("name") or "-")}</td>'
             f'<td>{int(item.get("riders_edited") or 0)}</td>'
             f'<td>{int(item.get("total_edits") or 0)}</td>'
-            f'<td>{html.escape(item.get("category") or "-")}</td>'
-            f'<td>{html.escape(item.get("classification_label") or "-")}</td>'
+            f'<td>{html.escape(item.get("classification") or "-")}</td>'
             '</tr>'
         )
 
@@ -3098,7 +3194,7 @@ def _build_release_overview_html_for_release(
   <h2>Included Items</h2>
   <table>
     <thead>
-      <tr><th>Type</th><th>Date</th><th>Name</th><th>Rider Edits</th><th>Total Edits</th><th>Category</th><th>Classification</th></tr>
+      <tr><th>Type</th><th>Approved On</th><th>Approval Requested On</th><th>Name</th><th>Rider Edits</th><th>Total Edits</th><th>Classification</th></tr>
     </thead>
     <tbody>
       {''.join(item_rows) or '<tr><td colspan="7">No included items assigned.</td></tr>'}
@@ -4384,8 +4480,7 @@ def rider_detail(rider_id):
         and _load_team_panel_active_method(selected_namespace) == 'riders'
     )
 
-    return render_template(
-        'rider_detail.html',
+    profile_context = dict(
         rider=rider,
         team=team,
         rider_stats=rider_stats,
@@ -4400,7 +4495,153 @@ def rider_detail(rider_id):
             'division': request.args.get('division', type=str) or '',
         },
     )
+    individual = _load_individual_stat_editor(selected_namespace, rider.cyclist_id, rider_stats)
+    return render_template(
+        'stat_list_detail.html', profile_context=profile_context, **profile_context,
+        stat_list={'id': 0, 'list_name': rider.name},
+        rows=[{'rider_id': rider.cyclist_id, 'rider_link_id': rider.cyclist_id,
+               'rider_name': rider.name, 'rider_in_namespace': True,
+               'stats': individual['stats'], 'original_stats': individual['original_stats']}],
+        scope_delta_status=individual['status'],
+        stat_conflicts=individual['conflicts'], is_submitted_for_approval=individual['submitted'],
+        can_update_stats=_can_update_stats(), can_approve_stats=_can_approve_stats(),
+    )
 
+
+INDIVIDUAL_STAT_SCOPE = 'race_result_id IS NULL AND stat_list_id IS NULL AND cdb_cyclist_id = :rider_id'
+
+
+def _individual_pending_fingerprint(conn, rider_id):
+    rows = conn.execute(text(f'''
+        SELECT row_to_json(changes)::text FROM stat_changes changes
+        WHERE {INDIVIDUAL_STAT_SCOPE} AND is_approved = FALSE ORDER BY id
+    '''), {'rider_id': rider_id}).scalars().all()
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest() if rows else None
+
+
+def _individual_submission_matches(namespace, rider_id, fingerprint):
+    if not fingerprint:
+        return False
+    submission = AuditLog.query.filter_by(
+        action='individual_stats_submitted',
+        resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
+    ).order_by(AuditLog.id.desc()).first()
+    return submission is not None and (submission.details or {}).get('fingerprint') == fingerprint
+
+
+def _load_individual_stat_editor(namespace, rider_id, current_stats):
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            edits = conn.execute(text(f'''
+                SELECT stat_name, original_value, final_value, is_approved
+                FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE} AND release_id IS NULL ORDER BY id
+            '''), {'rider_id': rider_id}).mappings().all()
+            conflicts = _load_scope_stat_change_conflicts(conn, INDIVIDUAL_STAT_SCOPE, {'rider_id': rider_id})
+            fingerprint = _individual_pending_fingerprint(conn, rider_id)
+        original = dict(current_stats)
+        final = dict(current_stats)
+        for edit in edits:
+            original[edit['stat_name']] = edit['original_value']
+            final[edit['stat_name']] = edit['final_value']
+        return {
+            'original_stats': original, 'stats': final, 'conflicts': conflicts,
+            'submitted': _individual_submission_matches(namespace, rider_id, fingerprint),
+            'status': {'approved_changes': sum(bool(edit['is_approved']) for edit in edits),
+                       'unapproved_changes': sum(not edit['is_approved'] for edit in edits)},
+        }
+    finally:
+        engine.dispose()
+
+
+@web_bp.route('/riders/<int:rider_id>/stats/<action>', methods=['POST'])
+@login_required
+def rider_stats_action(rider_id, action):
+    if action not in ('save', 'submit', 'approve'):
+        abort(404)
+    if not (_can_approve_stats() if action == 'approve' else _can_update_stats()):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None or _load_namespace_roster_rider(namespace, rider_id) is None:
+        abort(404)
+    changes = []
+    if action == 'save':
+        try:
+            changes = json.loads(request.form.get('changes_json', ''))
+            if not isinstance(changes, list) or any(
+                not isinstance(item, dict)
+                or _safe_int(item.get('first_cycling_rider_id')) != rider_id
+                or item.get('stat_name') not in STAT_DELTA_FIELDS
+                or _safe_int(item.get('final_value')) is None
+                or not STAT_MIN_VALUE <= _safe_int(item['final_value']) <= STAT_MAX_VALUE
+                for item in changes
+            ):
+                abort(400)
+        except (ValueError, TypeError):
+            abort(400)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            # Serialize individual saves and approvals for this rider within this namespace.
+            _ensure_namespace_database_connection(conn, namespace)
+            conn.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': -rider_id})
+            params = {'rider_id': rider_id}
+            if action == 'save':
+                if not conn.execute(text(f'SELECT 1 FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE} AND release_id IS NULL LIMIT 1'), params).first():
+                    conn.execute(text(f'DELETE FROM stat_change_snapshot WHERE {INDIVIDUAL_STAT_SCOPE}'), params)
+                _ensure_scope_stat_snapshots(conn, cdb_cyclist_ids=[rider_id])
+                snapshot = conn.execute(text(f'''
+                    SELECT {_snapshot_stat_select_list()} FROM stat_change_snapshot
+                    WHERE {INDIVIDUAL_STAT_SCOPE}
+                '''), params).mappings().one()
+                for item in changes:
+                    stat = item['stat_name']
+                    final = _safe_int(item['final_value'])
+                    original = snapshot[STAT_COLUMN_MAP[stat]]
+                    conn.execute(text(f'''
+                        DELETE FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE}
+                        AND stat_name = :stat AND release_id IS NULL
+                    '''), {**params, 'stat': stat})
+                    if final != original or item.get('is_confilict_override'):
+                        conn.execute(text('''
+                            INSERT INTO stat_changes (cdb_cyclist_id, stat_name, original_value,
+                                final_value, delta_value, is_approved, is_confilict_override)
+                            VALUES (:rider_id, :stat, :original, :final, :delta, FALSE, :override)
+                        '''), {**params, 'stat': stat, 'original': original, 'final': final,
+                               'delta': final - original, 'override': bool(item.get('is_confilict_override'))})
+                flash('Saved stat changes.', 'success')
+            else:
+                fingerprint = _individual_pending_fingerprint(conn, rider_id)
+                if action == 'submit':
+                    if fingerprint:
+                        AuditLog.log_action(
+                            'individual_stats_submitted', current_user,
+                            resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
+                            details={'fingerprint': fingerprint}, ip_address=request.remote_addr,
+                            user_agent=request.headers.get('User-Agent'),
+                        )
+                        db.session.commit()
+                        flash('Submitted for approval.', 'success')
+                    else:
+                        flash('No pending stat edits to submit.', 'info')
+                elif not _individual_submission_matches(namespace, rider_id, fingerprint):
+                    flash('Submit the current saved changes for approval before approving.', 'warning')
+                elif _load_scope_stat_change_conflicts(conn, INDIVIDUAL_STAT_SCOPE, params):
+                    flash('Resolve stat conflicts before approving.', 'warning')
+                else:
+                    _apply_scope_stat_changes_to_cdb(conn, INDIVIDUAL_STAT_SCOPE, params)
+                    conn.execute(text(f'UPDATE stat_changes SET is_approved = TRUE WHERE {INDIVIDUAL_STAT_SCOPE} AND is_approved = FALSE'), params)
+                    AuditLog.log_action(
+                        'individual_stats_approved', current_user,
+                        resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
+                        ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'),
+                    )
+                    db.session.commit()
+                    flash('Approved stat changes.', 'success')
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.rider_detail', rider_id=rider_id))
 
 STATS_EDITOR_FILTER_FIELDS = (
     'race_name',
@@ -4432,7 +4673,7 @@ def _load_stats_editor_state(namespace):
     states = session.get('stats_editor_state_by_namespace') or {}
     state = states.get(_stats_editor_session_key(namespace)) or {}
     active_method = (state.get('active_method') or 'by_race').strip().lower()
-    if active_method not in ('by_race', 'by_list'):
+    if active_method not in ('by_race', 'by_list', 'log'):
         active_method = 'by_race'
 
     filters = _default_stats_editor_race_filters()
@@ -4458,7 +4699,7 @@ def _save_stats_editor_state(namespace, state):
 
 
 def _set_stats_editor_active_method(namespace, active_method):
-    if active_method not in ('by_race', 'by_list'):
+    if active_method not in ('by_race', 'by_list', 'log'):
         return
     state = _load_stats_editor_state(namespace)
     state['active_method'] = active_method
@@ -4538,7 +4779,7 @@ def _save_team_panel_active_method(namespace, active_method):
 @web_bp.route('/stats-editor', methods=['GET', 'POST'])
 @login_required
 def stats_editor():
-    """Stats editor panel with two methods: by race result and by ad-hoc list."""
+    """Stats editor with race results, lists, and a namespace-wide edit log."""
     if not _can_access_panel('stat_editor'):
         abort(403)
 
@@ -4565,7 +4806,7 @@ def stats_editor():
             })
         elif action == 'set_method':
             requested_method = (request.form.get('method', type=str) or 'by_race').strip().lower()
-            if requested_method in ('by_race', 'by_list'):
+            if requested_method in ('by_race', 'by_list', 'log'):
                 next_state['active_method'] = requested_method
         elif action == 'clear_filters':
             next_state['active_method'] = 'by_race'
@@ -4776,8 +5017,18 @@ def stats_editor():
     if active_method == 'by_list':
         list_entries = _load_namespace_stat_lists(selected_namespace)
 
+    log_page = max(1, request.args.get('log_page', 1, type=int))
+    log_entries = []
+    if active_method == 'log' and selected_namespace is not None:
+        log_entries = _load_namespace_approved_release_items(
+            selected_namespace, log_mode=True, limit=101, offset=(log_page - 1) * 100,
+        )
+
     return render_template(
         'stats_editor.html',
+        log_entries=log_entries[:100],
+        log_has_next=len(log_entries) > 100,
+        log_page=log_page,
         active_method=active_method,
         selected_namespace=selected_namespace,
         selected_year=selected_year,
@@ -5895,6 +6146,7 @@ def releases():
     stats_release_summary = {
         'race_results_included': 0,
         'stat_lists_included': 0,
+            'individuals_included': 0,
         'riders_with_edits': 0,
         'total_edits': 0,
     }
@@ -6763,6 +7015,77 @@ def settings():
     )
 
 
+def _audit_resource_links(entries):
+    """Format historical resource references without relying on the selected namespace."""
+    namespaces = {ns.id: ns for ns in Namespace.query.all()}
+    resources = {}
+    name_cache = {}
+    for entry in entries:
+        kind = entry.resource_type or ''
+        namespace = None
+        parts = kind.split(':')
+        if len(parts) == 3 and parts[0] == 'namespace':
+            namespace = namespaces.get(_safe_int(parts[1]))
+            kind = parts[2]
+        links = []
+        if len(parts) == 3 and parts[0] == 'namespace':
+            links.append({
+                'label': f'ns:{namespace.slug if namespace else parts[1]}',
+                'url': url_for('web.admin_namespace_detail', namespace_id=namespace.id) if namespace else None,
+            })
+        name = entry.resource_name
+        resource_id = entry.resource_id
+        key = (namespace.id if namespace else None, kind, resource_id)
+        if not name and resource_id is not None:
+            if key not in name_cache:
+                resolved_name = None
+                if kind == 'race':
+                    race = FirstCyclingRace.query.filter_by(race_id=resource_id).first()
+                    resolved_name = race.name if race else None
+                elif kind == 'user':
+                    user = db.session.get(User, resource_id)
+                    resolved_name = user.username if user else None
+                elif kind == 'namespace':
+                    ns = namespaces.get(resource_id)
+                    resolved_name = ns.slug if ns else None
+                elif namespace and not namespace.is_deleted and kind in ('release', 'stat_list', 'individual'):
+                    try:
+                        if kind == 'individual':
+                            rider = _load_namespace_roster_rider(namespace, resource_id)
+                            resolved_name = rider.name if rider else None
+                        elif kind == 'release':
+                            release = _load_namespace_release(namespace, resource_id)
+                            resolved_name = (release.release_name or release.version) if release else None
+                        else:
+                            resolved_name = next((row['list_name'] for row in _load_namespace_stat_lists(namespace)
+                                                  if row['id'] == resource_id), None)
+                    except Exception:
+                        logger.exception('Failed to resolve audit resource name for %s', key)
+                name_cache[key] = resolved_name
+            name = name_cache[key]
+        endpoint, values = None, {}
+        if resource_id is not None:
+            if namespace and not namespace.is_deleted:
+                if kind == 'race':
+                    endpoint, values = 'web.stats_editor_race_detail', {'race_id': resource_id}
+                elif kind == 'release':
+                    endpoint, values = 'web.releases', {'tab': 'overview', 'release_id': resource_id}
+                elif kind == 'stat_list':
+                    endpoint, values = 'web.stats_editor_list_detail', {'list_id': resource_id}
+                elif kind == 'individual':
+                    endpoint, values = 'web.rider_detail', {'rider_id': resource_id}
+                if endpoint:
+                    values['namespace_slug'] = namespace.slug
+            elif kind == 'user':
+                endpoint, values = 'web.admin_user_detail', {'user_id': resource_id}
+            elif kind == 'namespace' and resource_id in namespaces:
+                endpoint, values = 'web.admin_namespace_detail', {'namespace_id': resource_id}
+        label = f'{"ns" if kind == "namespace" else kind}:{name or resource_id}' if kind and (name or resource_id is not None) else (name or kind or '—')
+        links.append({'label': label, 'url': url_for(endpoint, **values) if endpoint else None})
+        resources[entry.id] = links
+    return resources
+
+
 @web_bp.route('/admin/audit-log')
 @login_required
 def admin_audit_log():
@@ -6783,6 +7106,7 @@ def admin_audit_log():
     )
     return render_template(
         'admin/audit_log.html', entries=entries,
+        resource_links=_audit_resource_links(entries.items),
         actions=[row[0] for row in db.session.query(AuditLog.action).distinct().order_by(AuditLog.action)],
         usernames=[row[0] for row in db.session.query(AuditLog.username).distinct().order_by(AuditLog.username)],
         selected_action=selected_action, selected_user=selected_user,
@@ -7756,6 +8080,7 @@ def _register_namespace_scoped_routes():
         ('/teams/<int:team_id>', 'team_detail', team_detail, ['GET']),
         ('/riders', 'riders', riders, ['GET', 'POST']),
         ('/riders/<int:rider_id>', 'rider_detail', rider_detail, ['GET']),
+        ('/riders/<int:rider_id>/stats/<action>', 'rider_stats_action', rider_stats_action, ['POST']),
         ('/stats-editor', 'stats_editor', stats_editor, ['GET', 'POST']),
         ('/stats-editor/lists/create', 'stats_editor_create_list', stats_editor_create_list, ['POST']),
         ('/stats-editor/lists/<int:list_id>/add-rider', 'stats_editor_add_list_rider', stats_editor_add_list_rider, ['POST']),
