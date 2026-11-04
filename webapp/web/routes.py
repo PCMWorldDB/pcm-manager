@@ -241,6 +241,12 @@ def activity_datetime_filter(value):
     return _activity_datetime_label(value)
 
 
+@web_bp.app_template_filter('activity_time')
+def activity_time_filter(value):
+    label = _activity_datetime_label(value)
+    return label[-8:] if re.fullmatch(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', label) else label
+
+
 _NAME_SEARCH_TRANSLATE_FROM = 'àáâãäåāăąǎçćĉċčďđèéêëēĕėęěĝğġģìíîïĩīĭįıĵķĺļľłñńņňòóôõöōŏőøŕŗřśŝşšţťŧùúûüũūŭůűųŵýÿŷźżžð'
 _NAME_SEARCH_TRANSLATE_TO = ''.join(
     'a' if ch in 'àáâãäåāăąǎ' else

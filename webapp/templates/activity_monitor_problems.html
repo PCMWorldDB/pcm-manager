@@ -46,12 +46,11 @@
         <thead><tr>
             <th class="sortable-col" data-sort-type="date">Date</th>
             <th class="sortable-col" data-sort-type="text">Rider</th>
+            <th class="sortable-col" data-sort-type="date">Birth date</th>
             <th class="sortable-col" data-sort-type="number">WorldDB ID</th>
             <th class="sortable-col" data-sort-type="text">Website</th>
             <th class="sortable-col" data-sort-type="text">Team</th>
             <th class="sortable-col" data-sort-type="text">Division</th>
-            <th class="sortable-col" data-sort-type="text">Check result</th>
-            <th class="sortable-col" data-sort-type="text">Race history</th>
             <th class="sortable-col" data-sort-type="text">Rider match</th>
             <th class="sortable-col" data-sort-type="date">Next Check</th>
             <th class="sortable-col" data-sort-type="text">PCS profile</th>
@@ -61,13 +60,12 @@
             <tr>
                 <td data-sort-value="{{ check.checked_at.isoformat() if check.checked_at else '' }}">{{ check.checked_at|activity_datetime }}</td>
                 <td data-sort-value="{{ ((check.first_name ~ ' ' ~ check.last_name).strip() or 'Unknown rider')|lower }}">{% if check.rider_id %}<a href="{{ url_for('web.activity_monitor_rider_detail', rider_id=check.rider_id) }}">{{ (check.first_name ~ ' ' ~ check.last_name).strip() or 'Unknown rider' }}</a>{% else %}Unknown rider{% endif %}</td>
+                <td data-sort-value="{{ check.birth_date.isoformat() if check.birth_date else '' }}">{{ check.birth_date.isoformat() if check.birth_date else '—' }}</td>
                 <td data-sort-value="{{ check.source_worlddb_rider_id or '' }}">{{ check.source_worlddb_rider_id or '—' }}</td>
                 {% set website_label = (check.source or 'unknown')|lower %}
                 <td data-sort-value="{{ website_label }}">{{ 'FC' if website_label in ['firstcycling', 'fc_json', 'firstcycling_json'] else website_label|upper }}</td>
                 <td data-sort-value="{{ (check.team_name or '')|lower }}">{{ check.team_name or '—' }}</td>
                 <td data-sort-value="{{ (check.division_name or '')|lower }}">{{ check.division_name or '—' }}</td>
-                <td data-sort-value="{{ check.source_status|activity_check_status|lower }}">{{ check.source_status|activity_check_status }}</td>
-                <td data-sort-value="{{ check.coverage_status|activity_check_history|lower }}">{{ check.coverage_status|activity_check_history }}</td>
                 <td data-sort-value="{{ check.identity_result|activity_check_history|lower }}">{{ check.identity_result|activity_check_history }}</td>
                 <td data-sort-value="{{ check.next_check_date or '' }}">{{ check.next_check_date or '—' }}</td>
                 <td class="pcs-profile-cell" data-sort-value="{{ check.pcs_slug|lower }}">
@@ -86,7 +84,7 @@
                     <span class="pcs-profile-save-status visually-hidden" aria-live="polite"></span>
                 </td>
             </tr>
-            {% else %}<tr><td colspan="11" class="text-muted py-4 text-center">No recent checks need a closer look. A website being unavailable or showing no race results does not by itself mean there is a problem with the rider.</td></tr>{% endfor %}
+            {% else %}<tr><td colspan="10" class="text-muted py-4 text-center">No recent checks need a closer look. A website being unavailable or showing no race results does not by itself mean there is a problem with the rider.</td></tr>{% endfor %}
         </tbody>
     </table></div>
     {% endif %}

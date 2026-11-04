@@ -208,7 +208,7 @@
             <div class="col-12 col-md-4 col-lg-1"><button class="btn btn-primary w-100" type="submit">Save</button></div>
         </form>
         <div class="small text-muted mt-3" aria-live="polite">
-            <span id="activity-next-round-status">{% if automation_settings.next_run_at %}Next round: {{ automation_settings.next_run_at|activity_datetime }}{% else %}No round is currently scheduled.{% endif %}</span>
+            <span id="activity-next-round-status">{% if automation_settings.next_run_at %}Next round: {{ automation_settings.next_run_at|activity_time }}{% else %}No round is currently scheduled.{% endif %}</span>
             <span id="activity-last-round-status">{% if automation_settings.last_run_at %} · Last round: {{ automation_settings.last_run_at|activity_datetime }}{% endif %}</span>
         </div>
         <div class="small mt-2"><strong>Today's planned rounds:</strong>
@@ -497,7 +497,7 @@ document.querySelectorAll('[data-reveal-rows]').forEach((button) => {
             if (!response.ok) return;
             const status = await response.json();
             nextRound.textContent = status.enabled && status.next_round
-                ? `Next round: ${status.next_round}`
+                ? `Next round: ${status.next_round.slice(-8)}`
                 : 'No round is currently scheduled.';
             lastRound.textContent = status.last_round ? ` · Last round: ${status.last_round}` : '';
             plannedRounds.textContent = status.planned_rounds.length

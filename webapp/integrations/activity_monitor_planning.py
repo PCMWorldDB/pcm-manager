@@ -31,7 +31,12 @@ def due_activity_riders(
     connection, as_of, limit=100, source_mode=None, include_upcoming=False,
     include_checked_today=False, count_through=None, rider_ids=None,
 ):
-    """Return due riders, optionally followed by the next scheduled riders."""
+    """Return riders by plan date, independent of profile confirmation.
+
+    Source availability is decided when tasks are built. A missing saved link
+    does not remove an otherwise due rider from the check plan; PCS can try its
+    unverified name-based candidate and verify identity before saving results.
+    """
     as_of = date.fromisoformat(as_of[:10]) if isinstance(as_of, str) else as_of
     amsterdam = ZoneInfo('Europe/Amsterdam')
     day_start = datetime.combine(as_of, time.min, tzinfo=amsterdam).astimezone(timezone.utc).replace(tzinfo=None)
@@ -230,19 +235,10 @@ def due_activity_riders(
         if is_due or (include_upcoming and is_upcoming):
             if item.get('not_checked_today') or include_checked_today:
                 item['is_due'] = is_due
-                source_is_available = (
-                    not source_mode
-                    or (
-                        bool(item.get('has_pcs_link'))
-                        if source_mode == 'pcs_only' or item.get('team_id') == 119
-                        else item.get('first_cycling_id') is not None
-                        or bool(item.get('has_pcs_link'))
-                    )
-                )
                 if count_through is not None:
-                    if source_is_available and next_date and next_date[:10] <= count_through.isoformat():
+                    if next_date and next_date[:10] <= count_through.isoformat():
                         due_count += 1
-                elif source_is_available:
+                else:
                     due_rows.append(item)
 
     if count_through is not None:
@@ -254,15 +250,6 @@ def due_activity_riders(
         item.get('worlddb_rider_id') or 0,
         item.get('monitor_rider_id') or 0,
     ))
-    if source_mode:
-        due_rows = [
-            item for item in due_rows
-            if (
-                bool(item.get('has_pcs_link'))
-                if source_mode == 'pcs_only' or item.get('team_id') == 119
-                else item.get('first_cycling_id') is not None or bool(item.get('has_pcs_link'))
-            )
-        ]
     return len(due_rows), due_rows[:max(0, int(limit))]
 
 
