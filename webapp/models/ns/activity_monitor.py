@@ -220,6 +220,17 @@ class ActivityMonitorResult(ActivityMonitorBase):
             postgresql_where=identity_verified.is_(True),
         ),
         Index(
+            'idx_activity_monitor_result_rider_latest_verified',
+            'rider_id',
+            result_date.desc().nulls_last(),
+            id.desc(),
+            postgresql_include=[
+                'participation_status', 'result_position', 'source',
+                'source_check_id', 'race_name',
+            ],
+            postgresql_where=identity_verified.is_(True) & rider_id.is_not(None),
+        ),
+        Index(
             'idx_activity_monitor_result_source_check',
             'source_check_id',
             postgresql_where=source_check_id.is_not(None),
