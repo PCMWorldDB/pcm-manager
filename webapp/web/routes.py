@@ -241,6 +241,12 @@ def activity_datetime_filter(value):
     return _activity_datetime_label(value)
 
 
+@web_bp.app_template_filter('activity_time')
+def activity_time_filter(value):
+    label = _activity_datetime_label(value)
+    return label[-8:] if re.fullmatch(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', label) else label
+
+
 _NAME_SEARCH_TRANSLATE_FROM = 'àáâãäåāăąǎçćĉċčďđèéêëēĕėęěĝğġģìíîïĩīĭįıĵķĺļľłñńņňòóôõöōŏőøŕŗřśŝşšţťŧùúûüũūŭůűųŵýÿŷźżžð'
 _NAME_SEARCH_TRANSLATE_TO = ''.join(
     'a' if ch in 'àáâãäåāăąǎ' else
@@ -5038,6 +5044,111 @@ def activity_monitor_riders():
                         {where_sql}
                     """), params).scalar_one()
                     rider_limit_sql = '' if export_csv or show_all else 'LIMIT :limit OFFSET :offset'
+                    detail_where_sql = where_sql
+                    if not export_csv and not show_all:
+                        # Pick the visible page before loading the many per-rider
+                        # details below. Most sort columns need only CDB fields;
+                        # derived sorts join only the one value they actually need.
+                        sort_joins = []
+                        if filters['sort'] in {'checked', 'status'}:
+                            sort_joins.append("""LEFT JOIN LATERAL (
+                                SELECT c.checked_at
+                                FROM activity_monitor_source_checks c
+                                WHERE c.rider_id = r.id
+                                ORDER BY c.checked_at DESC, c.id DESC
+                                LIMIT 1
+                            ) latest_check ON TRUE""")
+                        if filters['sort'] in {'race', 'result', 'days', 'status'}:
+                            sort_joins.append("""LEFT JOIN LATERAL (
+                                SELECT e.result_date, e.race_name
+                                FROM activity_monitor_results e
+                                WHERE e.rider_id = r.id
+                                  AND e.identity_verified
+                                  AND (
+                                      e.participation_status IN ('confirmed_participation', 'confirmed')
+                                      OR UPPER(TRIM(COALESCE(e.result_position, ''))) = 'DSQ'
+                                  )
+                                  AND e.result_date <= CURRENT_DATE
+                                  AND (
+                                      LOWER(TRIM(COALESCE(e.source, ''))) NOT IN ('pcs', 'pcs_html', 'procyclingstats')
+                                      OR EXISTS (
+                                          SELECT 1 FROM activity_monitor_source_checks pcs_check
+                                          WHERE pcs_check.id = e.source_check_id
+                                            AND pcs_check.rider_id = r.id
+                                            AND pcs_check.identity_generation = r.identity_generation
+                                            AND LOWER(TRIM(COALESCE(pcs_check.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
+                                            AND LOWER(REPLACE(TRIM(COALESCE(pcs_check.source_status, '')), '_', ' '))
+                                                IN ('success', 'results parsed', 'results table empty')
+                                            AND (
+                                                regexp_replace(lower(COALESCE(pcs_check.request_path, '')), '/+$', '') LIKE '%/road'
+                                                OR pcs_check.source_record_key LIKE 'source_checks:%'
+                                            )
+                                      )
+                                  )
+                                ORDER BY e.result_date DESC NULLS LAST, e.id DESC
+                                LIMIT 1
+                            ) latest_result ON TRUE""")
+                        if filters['sort'] == 'race_days':
+                            sort_joins.append("""LEFT JOIN LATERAL (
+                                SELECT BOOL_OR(
+                                           LOWER(TRIM(COALESCE(c.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
+                                           AND LOWER(REPLACE(TRIM(COALESCE(c.source_status, '')), '_', ' '))
+                                               IN ('success', 'results parsed', 'results table empty')
+                                           AND c.checked_at >= date_trunc('year', CURRENT_DATE)
+                                           AND c.checked_at < date_trunc('year', CURRENT_DATE) + interval '1 year'
+                                           AND (
+                                               regexp_replace(lower(COALESCE(c.request_path, '')), '/+$', '') LIKE '%/road'
+                                               OR c.source_record_key LIKE 'source_checks:%'
+                                           )
+                                       ) AS checked_this_year,
+                                       COUNT(DISTINCT e.result_date) FILTER (
+                                           WHERE LOWER(TRIM(COALESCE(e.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
+                                             AND e.identity_verified
+                                             AND (
+                                                 e.participation_status IN ('confirmed_participation', 'confirmed')
+                                                 OR UPPER(TRIM(COALESCE(e.result_position, ''))) = 'DSQ'
+                                             )
+                                             AND e.result_date >= date_trunc('year', CURRENT_DATE)::date
+                                             AND e.result_date <= CURRENT_DATE
+                                             AND LOWER(TRIM(COALESCE(c.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
+                                             AND LOWER(REPLACE(TRIM(COALESCE(c.source_status, '')), '_', ' '))
+                                                 IN ('success', 'results parsed', 'results table empty')
+                                             AND (
+                                                 regexp_replace(lower(COALESCE(c.request_path, '')), '/+$', '') LIKE '%/road'
+                                                 OR c.source_record_key LIKE 'source_checks:%'
+                                             )
+                                       )::integer AS race_days
+                                FROM activity_monitor_source_checks c
+                                LEFT JOIN activity_monitor_results e
+                                  ON e.source_check_id = c.id
+                                 AND e.rider_id = r.id
+                                 AND e.identity_generation = r.identity_generation
+                                WHERE c.rider_id = r.id
+                                  AND c.identity_generation = r.identity_generation
+                                  AND LOWER(TRIM(COALESCE(c.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
+                            ) pcs_year_activity ON TRUE""")
+
+                        candidate_sort_sql = {
+                            'checked': 'latest_check.checked_at',
+                            'race': 'latest_result.race_name',
+                            'result': 'latest_result.result_date',
+                        }.get(filters['sort'], sort_sql)
+                        page_ids = conn.execute(text(f"""
+                            SELECT r.id
+                            FROM activity_monitor_riders r
+                            LEFT JOIN cdb_team t ON t.id = r.team_id
+                            LEFT JOIN cdb_division d ON d.id = t.division_id
+                            {' '.join(sort_joins)}
+                            {where_sql}
+                            ORDER BY {candidate_sort_sql} {sort_direction} NULLS LAST,
+                                     r.id ASC
+                            LIMIT :limit OFFSET :offset
+                        """), params).scalars().all()
+                        params['page_ids'] = page_ids
+                        detail_where_sql = (
+                            f"{where_sql} {'AND' if where_sql else 'WHERE'} "
+                            "r.id = ANY(CAST(:page_ids AS bigint[]))"
+                        )
                     rider_rows = conn.execute(text(f"""
                         SELECT r.id AS monitor_rider_id,
                                r.source_worlddb_rider_id AS worlddb_rider_id,
@@ -5184,7 +5295,7 @@ def activity_monitor_riders():
                                      p.id DESC
                             LIMIT 1
                         ) latest_profile ON TRUE
-                        {where_sql}
+                        {detail_where_sql}
                         ORDER BY {sort_sql} {sort_direction} NULLS LAST,
                                  r.id ASC
                         {rider_limit_sql}
@@ -6978,21 +7089,6 @@ def activity_monitor_rider_detail(rider_id):
         tokens = re.findall(r'[a-z0-9]+', ascii_name)
         return ' '.join(token for token in tokens if token not in {'elite', 'men', 'women'})
 
-    def race_identities_match(left, right):
-        left_tokens = normalized_race_identity(left).split()
-        right_tokens = normalized_race_identity(right).split()
-        if not left_tokens or not right_tokens:
-            return False
-        if left_tokens == right_tokens:
-            return True
-        shorter, longer = sorted((left_tokens, right_tokens), key=len)
-        if len(shorter) < 2:
-            return False
-        return any(
-            longer[index:index + len(shorter)] == shorter
-            for index in range(len(longer) - len(shorter) + 1)
-        )
-
     def result_kind(result):
         stage_number = result.get('stage_number')
         stage_name = ' '.join(str(result.get('stage_name') or '').split()).casefold()
@@ -7010,8 +7106,9 @@ def activity_monitor_rider_detail(rider_id):
             return 'general_classification'
         return 'race_result'
 
-    # A PCS result replaces only the matching race result type on that date.
-    # In stage races, preserve both a final-stage result and a separate GC.
+    # Any PCS result replaces FirstCycling evidence for that date. PCS is the
+    # preferred source for a date even when the sources label the result type
+    # differently (for example a stage result versus a classification).
     current_generation = rider.get('identity_generation')
     pcs_primary_results = [
         result
@@ -7033,8 +7130,6 @@ def activity_monitor_rider_detail(rider_id):
             )
             and any(
                 candidate.get('result_date') == result.get('result_date')
-                and result_kind(candidate) == result_kind(result)
-                and race_identities_match(candidate.get('race_name'), result.get('race_name'))
                 for candidate in pcs_primary_results
             )
         ):

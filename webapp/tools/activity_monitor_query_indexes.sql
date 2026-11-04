@@ -17,6 +17,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_activity_monitor_result_rider_genera
     (rider_id, identity_generation, result_date DESC)
     WHERE identity_verified = TRUE AND rider_id IS NOT NULL;
 
+-- Supports the Riders table's latest verified race lookup and sorting.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_activity_monitor_result_rider_latest_verified
+    ON activity_monitor_results
+    (rider_id, result_date DESC NULLS LAST, id DESC)
+    INCLUDE (participation_status, result_position, source, source_check_id, race_name)
+    WHERE identity_verified = TRUE AND rider_id IS NOT NULL;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_activity_monitor_result_source_check
     ON activity_monitor_results (source_check_id)
     WHERE source_check_id IS NOT NULL;

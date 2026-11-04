@@ -3,9 +3,11 @@
 Target: each **namespace PostgreSQL database** that has the Activity Monitor
 tables. Do not run this against `main` or the shared provisioner database.
 
-The Overview and planning screens repeatedly ask for the newest schedule, source
-check, result, legacy research record, or open identity alert for each rider.
-These composite indexes match those lookups. The SQL uses `CONCURRENTLY`, so run
+The Overview, Riders, and planning screens repeatedly ask for the newest schedule,
+source check, result, legacy research record, or open identity alert for each rider.
+These composite indexes match those lookups. The Riders table's latest-race sort
+uses a covering result index so PostgreSQL can find each rider's newest verified
+race without sorting all of their saved results. The SQL uses `CONCURRENTLY`, so run
 the statements against the target namespace while not wrapping the file in a
 transaction. PostgreSQL can then build the indexes without blocking normal writes.
 The result-to-check index also avoids repeatedly scanning all saved results when

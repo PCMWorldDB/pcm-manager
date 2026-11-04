@@ -590,9 +590,13 @@ def poll_activity_monitor_schedules():
 
                     source_mode = 'combined' if fc_enabled else 'pcs_only'
                     with engine.connect() as planning_connection:
+                        # Include upcoming checks as well as overdue checks; the
+                        # planner sorts both by their scheduled date. Riders
+                        # already checked today remain excluded by the planner.
                         candidate_count, due_rows = due_activity_riders(
                             planning_connection, now.date(), limit=25,
-                            source_mode=source_mode, include_upcoming=True,
+                            source_mode=source_mode,
+                            include_upcoming=True,
                         )
                     selected_ids = [row['monitor_rider_id'] for row in due_rows]
                     settings = {
