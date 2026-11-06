@@ -5129,6 +5129,8 @@ def activity_monitor_riders():
                             ) pcs_year_activity ON TRUE""")
 
                         candidate_sort_sql = {
+                            'country': "COALESCE(NULLIF(r.nationality, ''), r.nationality_code, '—')",
+                            'division': division_label_sql,
                             'checked': 'latest_check.checked_at',
                             'race': 'latest_result.race_name',
                             'result': 'latest_result.result_date',
@@ -5149,6 +5151,10 @@ def activity_monitor_riders():
                             f"{where_sql} {'AND' if where_sql else 'WHERE'} "
                             "r.id = ANY(CAST(:page_ids AS bigint[]))"
                         )
+                        # Pagination already happened in the page-ID query.
+                        # Applying the same OFFSET again here empties every
+                        # page after the first one.
+                        rider_limit_sql = ''
                     rider_rows = conn.execute(text(f"""
                         SELECT r.id AS monitor_rider_id,
                                r.source_worlddb_rider_id AS worlddb_rider_id,
