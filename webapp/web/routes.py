@@ -140,7 +140,6 @@ def _activity_pcs_slug_color(profile, latest_check, selected_path, worlddb_birth
     approved_pair_matches = bool(
         approved_path == selected
         and profile.get('approved_at')
-        and profile.get('approved_pcs_birth_date')
         and profile.get('approved_worlddb_birth_date') == worlddb_birth_date
         and profile.get('profile_birth_date') == profile.get('approved_pcs_birth_date')
     )
@@ -6872,7 +6871,7 @@ def activity_monitor_rider_detail(rider_id):
         rider['pcs_profile_approval_matches'] = bool(
             current_link
             and current_link.get('approved_profile_path')
-            and current_link.get('approved_pcs_birth_date')
+            and current_link.get('approved_at')
             and current_link.get('approved_worlddb_birth_date') == rider.get('birth_date')
             and current_link.get('profile_birth_date') == current_link.get('approved_pcs_birth_date')
         )
@@ -7010,6 +7009,14 @@ def activity_monitor_rider_detail(rider_id):
         and latest_pcs_check.get('message')
         else None
     )
+    pcs_missing_birthdate_check = (
+        latest_pcs_check
+        if latest_pcs_check
+        and latest_pcs_check.get('identity_result') == 'ambiguous'
+        and 'pcs date of birth missing' in str(latest_pcs_check.get('message') or '').casefold()
+        and latest_pcs_check.get('http_status') == 200
+        else None
+    )
     pcs_check_birth_date = None
     if pcs_mismatch_check:
         date_match = re.search(r"PCS '?(\d{4}-\d{2}-\d{2})'?", str(pcs_mismatch_check['message']))
@@ -7043,6 +7050,11 @@ def activity_monitor_rider_detail(rider_id):
         rider['pcs_profile_review_message'] = pcs_mismatch_check.get('message')
         if not rider.get('pcs_profile_approval_matches'):
             rider['pcs_profile_mismatch'] = True
+    if rider and pcs_missing_birthdate_check:
+        rider['pcs_profile_check_path'] = pcs_missing_birthdate_check.get('request_path')
+        rider['pcs_profile_review_message'] = pcs_missing_birthdate_check.get('message')
+        if not rider.get('pcs_profile_approval_matches'):
+            rider['pcs_profile_mismatch'] = True
     if rider and current_link:
         selected_path = urllib.parse.urlsplit(rider.get('pcs_url') or '').path.rstrip('/').casefold()
         checked_path = urllib.parse.urlsplit(current_link.get('checked_url') or '').path.rstrip('/').casefold()
@@ -7053,13 +7065,22 @@ def activity_monitor_rider_detail(rider_id):
             and (
                 current_link.get('check_result') in {'identity_mismatch', 'mismatch', 'rider_details_dont_match'}
                 or (
+                    not current_link.get('profile_birth_date')
+                    and 'pcs date of birth missing' in (
+                        f"{current_link.get('identity_reason') or ''} {current_link.get('message') or ''}"
+                    ).casefold()
+                )
+                or (
                     pcs_mismatch_check
                     and rider.get('pcs_profile_check_birth_date')
                 )
+                or pcs_missing_birthdate_check
             )
             and (
                 current_link.get('http_status') == 200
                 or (pcs_mismatch_check and pcs_mismatch_check.get('http_status') == 200)
+                or (pcs_missing_birthdate_check
+                    and pcs_missing_birthdate_check.get('http_status') == 200)
             )
             and selected_path.endswith('/road')
             and (selected_path == checked_path or selected_path == checked_mismatch_path)
@@ -7069,6 +7090,13 @@ def activity_monitor_rider_detail(rider_id):
                  and rider.get('birth_date') != current_link.get('profile_birth_date'))
                 or (rider.get('pcs_profile_check_birth_date')
                     and rider.get('birth_date') != rider.get('pcs_profile_check_birth_date'))
+                or pcs_missing_birthdate_check
+                or (
+                    not current_link.get('profile_birth_date')
+                    and 'pcs date of birth missing' in (
+                        f"{current_link.get('identity_reason') or ''} {current_link.get('message') or ''}"
+                    ).casefold()
+                )
             )
         )
     elif rider:
@@ -7083,6 +7111,15 @@ def activity_monitor_rider_detail(rider_id):
             and urllib.parse.urlsplit(rider['pcs_url']).path.rstrip('/').casefold()
                 == str(pcs_mismatch_check.get('request_path') or '').rstrip('/').casefold()
         )
+        if not rider.get('pcs_profile_approval_available') and pcs_missing_birthdate_check:
+            rider['pcs_profile_approval_available'] = bool(
+                not rider.get('identity_hold')
+                and not rider.get('pcs_profile_approval_matches')
+                and rider.get('birth_date')
+                and rider.get('pcs_url')
+                and urllib.parse.urlsplit(rider['pcs_url']).path.rstrip('/').casefold()
+                    == str(pcs_missing_birthdate_check.get('request_path') or '').rstrip('/').casefold()
+            )
     latest_firstcycling_check = next((
         check for check in checks
         if check.get('identity_generation') == rider.get('identity_generation')
@@ -7576,7 +7613,8 @@ def activity_monitor_approve_pcs_profile(rider_id):
             link = conn.execute(text("""
                 SELECT id, approved_profile_path, override_url, profile_path,
                        check_result, checked_url, http_status, profile_birth_date,
-                       approved_pcs_birth_date, approved_worlddb_birth_date
+                       approved_pcs_birth_date, approved_worlddb_birth_date,
+                       approved_at, identity_reason, message
                 FROM activity_monitor_profile_links
                 WHERE rider_id = :rider_id
                   AND identity_generation = :generation
@@ -7586,12 +7624,12 @@ def activity_monitor_approve_pcs_profile(rider_id):
                 FOR UPDATE
             """), {'rider_id': rider_id, 'generation': rider['identity_generation']}).mappings().first()
             mismatch_check = conn.execute(text("""
-                SELECT request_path, http_status, message
+                SELECT request_path, http_status, message, identity_result
                 FROM activity_monitor_source_checks
                 WHERE rider_id = :rider_id
                   AND identity_generation = :generation
                   AND source IN ('pcs', 'pcs_html', 'procyclingstats')
-                  AND identity_result = 'mismatch'
+                  AND identity_result IN ('mismatch', 'ambiguous')
                   AND http_status = 200
                 ORDER BY checked_at DESC, id DESC
                 LIMIT 1
@@ -7620,8 +7658,22 @@ def activity_monitor_approve_pcs_profile(rider_id):
                     except ValueError:
                         profile_dob = None
             worlddb_dob = rider['birth_date']
+            missing_pcs_birthdate = bool(
+                profile_dob is None
+                and (
+                    'pcs date of birth missing' in str(
+                        f"{link['identity_reason'] or ''} {link['message'] or ''}" if link else ''
+                    ).casefold()
+                    or (
+                        mismatch_check
+                        and mismatch_check['identity_result'] == 'ambiguous'
+                        and 'pcs date of birth missing' in str(mismatch_check['message'] or '').casefold()
+                    )
+                )
+            )
             already_approved = bool(
                 link and link['approved_profile_path']
+                and link['approved_at']
                 and link['approved_pcs_birth_date'] == profile_dob
                 and link['approved_worlddb_birth_date'] == worlddb_dob
             )
@@ -7637,10 +7689,16 @@ def activity_monitor_approve_pcs_profile(rider_id):
                 and checked.path.rstrip('/').casefold() == selected.path.rstrip('/').casefold()
                 and ((link and link['http_status'] == 200
                       and link['check_result'] in {'identity_mismatch', 'mismatch', 'rider_details_dont_match'})
-                     or (mismatch_check and mismatch_check['http_status'] == 200))
-                and worlddb_dob and profile_dob and worlddb_dob != profile_dob
+                     or (mismatch_check and mismatch_check['http_status'] == 200
+                         and mismatch_check['identity_result'] == 'mismatch')
+                     or missing_pcs_birthdate)
+                and worlddb_dob
+                and (
+                    missing_pcs_birthdate
+                    or (profile_dob and worlddb_dob != profile_dob)
+                )
             ):
-                flash('Approval requires a current successful /road check with a confirmed, differing birthdate.', 'error')
+                flash('Approval requires a successful /road check and either a differing birthdate or a missing PCS birthdate.', 'error')
                 return redirect(url_for('web.activity_monitor_rider_detail', rider_id=rider_id))
 
             if link:
@@ -7694,7 +7752,7 @@ def activity_monitor_approve_pcs_profile(rider_id):
         logger.exception('Failed to approve PCS profile for rider %s', rider_id)
         flash('The PCS profile could not be approved. No results were changed.', 'error')
     else:
-        flash('PCS profile approved for this exact profile and birthdate pair. Run a new PCS check before its results count as verified activity.', 'success')
+        flash('PCS profile approved for this profile and the rider’s current WorldDB birthdate. Run a new PCS check before its results count as verified activity.', 'success')
     finally:
         if engine is not None:
             engine.dispose()

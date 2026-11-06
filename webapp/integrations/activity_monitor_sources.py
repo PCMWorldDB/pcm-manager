@@ -274,7 +274,6 @@ def _load_task_rider(engine, task_id):
                 }
                 for link in links
                 if link.approved_profile_path
-                and link.approved_pcs_birth_date
                 and link.approved_worlddb_birth_date
             ],
         }
@@ -410,14 +409,17 @@ def _record_pcs_outcome(engine, task, rider, url, status, body, checked_at):
             item for item in rider.get("pcs_approvals", [])
             if urlsplit(_pcs_url(item.get("profile_path")) or "").path.rstrip("/").casefold() == parsed_path
             and item.get("worlddb_birth_date") == rider["birth_date"]
-            and item.get("pcs_birth_date")
-            and str(item["pcs_birth_date"])[:10] == str(parsed["identity"].get("birthdate") or "")[:10]
+            and (
+                str(item["pcs_birth_date"])[:10] == str(parsed["identity"].get("birthdate") or "")[:10]
+                if item.get("pcs_birth_date") is not None
+                else not parsed["identity"].get("birthdate")
+            )
         ), None)
-        if approval and original_identity == "mismatch":
+        if approval and original_identity in {"mismatch", "ambiguous"}:
             parsed["identity"]["identity_status"] = "verified"
             parsed["identity"]["identity_matches"] = True
             parsed["identity"]["identity_reasons"] = [
-                "Manually approved for this exact PCS profile and WorldDB/PCS birthdate pair."
+                "Manually approved for this exact PCS profile and WorldDB birthdate."
             ]
             if parsed.get("status") == "identity_not_verified":
                 if parsed.get("rows"):

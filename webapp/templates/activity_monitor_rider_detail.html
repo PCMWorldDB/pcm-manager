@@ -108,7 +108,7 @@ body.dark-mode .activity-detail-summary-card { background: #2d3748; }
     <div class="alert alert-success rounded-0 mb-0">
         <strong>This PCS page was approved for this rider.</strong>
         Results count as activity after a new check confirms the page still matches.
-        <div class="small mt-1">WorldDB birthdate: {{ rider.birth_date }} · PCS birthdate: {{ current_link.profile_birth_date if current_link else '—' }} · Approved: {{ current_link.approved_at|activity_datetime if current_link else '—' }}</div>
+        <div class="small mt-1">WorldDB birthdate: {{ rider.birth_date }} · PCS birthdate: {{ (current_link.profile_birth_date if current_link else none) or 'Not listed' }} · Approved: {{ current_link.approved_at|activity_datetime if current_link else '—' }}</div>
     </div>
     {% elif rider.pcs_profile_mismatch %}
     <div class="alert alert-danger rounded-0 mb-0">
@@ -116,11 +116,11 @@ body.dark-mode .activity-detail-summary-card { background: #2d3748; }
         Its results will not count as activity until the rider’s identity is confirmed.
         {% if not rider.pcs_profile_approval_available and (rider.pcs_profile_review_message or (current_link and (current_link.identity_reason or current_link.message))) %}<div class="small mt-1">{{ rider.pcs_profile_review_message or current_link.identity_reason or current_link.message }}</div>{% endif %}
         {% if rider.pcs_profile_approval_available %}
-        <div class="mt-3">WorldDB birthdate: <strong>{{ rider.birth_date }}</strong> · PCS birthdate: <strong>{{ (current_link.profile_birth_date if current_link else none) or rider.pcs_profile_check_birth_date }}</strong></div>
+        <div class="mt-3">WorldDB birthdate: <strong>{{ rider.birth_date }}</strong> · PCS birthdate: <strong>{{ (current_link.profile_birth_date if current_link else none) or rider.pcs_profile_check_birth_date or 'Not listed' }}</strong></div>
         <form method="post" action="{{ url_for('web.activity_monitor_approve_pcs_profile', rider_id=rider.id) }}" class="mt-2">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-warning" type="submit">Accept this PCS profile</button>
-            <span class="small ms-2">This approval applies only to this profile and these exact birthdates. A new PCS check is still required.</span>
+            <span class="small ms-2">This approval applies to this PCS profile and the rider’s current WorldDB birthdate. A new PCS check is still required.</span>
         </form>
         {% endif %}
     </div>
