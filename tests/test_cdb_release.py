@@ -9,6 +9,17 @@ from webapp.integrations.cdb import apply_updates_to_sqlite, get_field_mapping
 from webapp.web import routes
 
 
+@pytest.mark.parametrize("slug", ["julian-i.-otero-gonzalez", "rider_123", "plain-rider"])
+def test_pcs_slug_with_supported_punctuation_is_preserved(slug):
+    assert routes._activity_pcs_slug_is_valid(slug)
+    assert routes._activity_pcs_slug_from_path(f"/rider/{slug}/road") == slug
+
+
+@pytest.mark.parametrize("slug", ["", ".", "..", "bad/slug", "bad?slug", "bad#slug"])
+def test_invalid_pcs_slugs_are_rejected(slug):
+    assert not routes._activity_pcs_slug_is_valid(slug)
+
+
 @pytest.fixture
 def cdb(tmp_path):
     mapping = get_field_mapping("PCM2026", "cyclist")

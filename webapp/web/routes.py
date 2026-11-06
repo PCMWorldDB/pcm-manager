@@ -69,6 +69,29 @@ from webapp.web.wiki_content import find_wiki_page, find_wiki_section, load_wiki
 from functools import wraps
 
 
+_PCS_SLUG_PATTERN = re.compile(r'[A-Za-z0-9_.-]+')
+
+
+def _activity_pcs_slug_from_path(path):
+    """Extract a safe PCS rider slug, preserving punctuation used by PCS."""
+    match = re.fullmatch(
+        r'/rider/([A-Za-z0-9_.-]+)(?:/road)?/?', str(path or ''), re.IGNORECASE
+    )
+    if not match:
+        return ''
+    slug = match.group(1)
+    return slug if slug not in {'.', '..'} else ''
+
+
+def _activity_pcs_slug_is_valid(slug):
+    value = str(slug or '')
+    return (
+        len(value) <= 255
+        and value not in {'.', '..'}
+        and bool(_PCS_SLUG_PATTERN.fullmatch(value))
+    )
+
+
 def _activity_check_status_label(value):
     key = str(value or '').strip().casefold().replace(' ', '_')
     labels = {
@@ -3153,11 +3176,9 @@ def _load_release_pcs_slug_updates(namespace, sqlite_path):
         )
         if parsed.hostname not in {'www.procyclingstats.com', 'procyclingstats.com'}:
             continue
-        slug_match = re.fullmatch(
-            r'/rider/([A-Za-z0-9_-]+)(?:/road)?/?', parsed.path, re.IGNORECASE
-        )
-        if slug_match:
-            exportable_by_fc[first_cycling_id] = slug_match.group(1)
+        slug = _activity_pcs_slug_from_path(parsed.path)
+        if slug:
+            exportable_by_fc[first_cycling_id] = slug
 
     if not exportable_by_fc:
         return {}
@@ -5343,8 +5364,7 @@ def activity_monitor_riders():
         )
         rider['pcs_slug'] = ''
         if rider['pcs_url']:
-            slug_match = re.fullmatch(r'/rider/([A-Za-z0-9_-]+)(?:/road)?/?', path, re.IGNORECASE)
-            rider['pcs_slug'] = slug_match.group(1) if slug_match else ''
+            rider['pcs_slug'] = _activity_pcs_slug_from_path(path)
         rider['pcs_slug_assumed'] = False
         if not rider['pcs_url'] and not rider.get('identity_hold'):
             rider['pcs_slug'], rider['pcs_url'] = _assumed_pcs_profile(
@@ -5689,8 +5709,7 @@ def activity_monitor_problems():
                             raw_profile_path if '://' in raw_profile_path else ''
                         )
                         profile_path = parsed_profile.path if parsed_profile.scheme else f"/{raw_profile_path.lstrip('/')}"
-                        slug_match = re.fullmatch(r'/rider/([A-Za-z0-9_-]+)(?:/road)?/?', profile_path, re.IGNORECASE)
-                        check['pcs_slug'] = slug_match.group(1) if slug_match else ''
+                        check['pcs_slug'] = _activity_pcs_slug_from_path(profile_path)
                         check['pcs_url'] = (
                             f"https://www.procyclingstats.com/rider/{check['pcs_slug']}/road"
                             if check['pcs_slug'] else ''
@@ -7496,7 +7515,7 @@ def activity_monitor_save_pcs_profile(rider_id):
             parsed_port = parsed.port
         except ValueError:
             return respond('Enter a valid PCS rider slug or profile URL.', status_code=400)
-        match = re.fullmatch(r'/rider/([A-Za-z0-9_-]+)(?:/road)?/?', parsed.path, re.IGNORECASE)
+        slug = _activity_pcs_slug_from_path(parsed.path)
         if (
             parsed.scheme.lower() not in {'http', 'https'}
             or parsed.hostname not in {'www.procyclingstats.com', 'procyclingstats.com'}
@@ -7505,12 +7524,11 @@ def activity_monitor_save_pcs_profile(rider_id):
             or parsed.password is not None
             or parsed.query
             or parsed.fragment
-            or not match
+            or not slug
         ):
             return respond('Enter a PCS rider slug or a PCS rider profile URL. Other URLs are not accepted.', status_code=400)
-        slug = match.group(1)
 
-    if len(slug) > 255 or not re.fullmatch(r'[A-Za-z0-9_-]+', slug):
+    if not _activity_pcs_slug_is_valid(slug):
         return respond('Enter only the PCS rider slug, for example kahiri-endeler, or its PCS profile URL.', status_code=400)
 
     profile_url = f'https://www.procyclingstats.com/rider/{slug}/road'
