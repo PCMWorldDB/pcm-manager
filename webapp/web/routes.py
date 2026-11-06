@@ -5680,6 +5680,33 @@ def activity_monitor_problems():
                                       AND (latest.checked_at, latest.id) > (newer.checked_at, newer.id)
                                 )
                           )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM activity_monitor_source_checks newer_problem
+                              JOIN activity_monitor_runs newer_problem_run
+                                ON newer_problem_run.id = newer_problem.run_id
+                              WHERE newer_problem.rider_id = c.rider_id
+                                AND newer_problem.identity_generation = c.identity_generation
+                                AND (newer_problem_run.source_record_key LIKE 'manual-run:%'
+                                     OR newer_problem_run.source_record_key LIKE 'scheduled-run:%')
+                                AND (
+                                    newer_problem.source_status IN (
+                                        'missing_link', 'profile_not_found',
+                                        'identity_not_verified', 'identity_mismatch'
+                                    )
+                                    OR (
+                                        newer_problem.source_status NOT IN (
+                                            'http_error', 'network_error', 'invalid_response'
+                                        )
+                                        AND newer_problem.identity_result IN (
+                                            'mismatch', 'ambiguous', 'unverified',
+                                            'unknown', 'unavailable', 'manual_review',
+                                            'needs_review'
+                                        )
+                                    )
+                                )
+                                AND (newer_problem.checked_at, newer_problem.id) > (c.checked_at, c.id)
+                          )
                         ORDER BY c.checked_at DESC, c.id DESC
                         LIMIT 300
                     """)).mappings().all()]
