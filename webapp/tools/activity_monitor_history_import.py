@@ -248,7 +248,7 @@ def _validate_source(path: Path):
 def _target_rider_map(connection, source_riders):
     cdb_rows = connection.execute(text(
         "SELECT id, first_cycling_id, birth_date, team_id "
-        "FROM cdb_cyclist WHERE first_cycling_id IS NOT NULL"
+        "FROM rider WHERE first_cycling_id IS NOT NULL"
     )).mappings().all()
     by_fc = defaultdict(list)
     for row in cdb_rows:
@@ -971,7 +971,7 @@ def run_history_import(namespace_engine, source_path: Path, *, apply: bool = Fal
                 if nonempty and not existing_import:
                     raise RuntimeError("Target Activity Monitor tables are not empty and no matching import ledger exists.")
                 cdb_rows = connection.execute(text(
-                    "SELECT first_cycling_id, birth_date FROM cdb_cyclist "
+                    "SELECT first_cycling_id, birth_date FROM rider "
                     "WHERE first_cycling_id IS NOT NULL"
                 )).mappings().all()
                 by_fc = defaultdict(list)

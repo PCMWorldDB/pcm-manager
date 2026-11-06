@@ -1,0 +1,24 @@
+<div class="mt-4">
+  <div class="d-flex justify-content-between align-items-center gap-3 mb-2">
+    <h2 class="mb-0">Review changes for {{ namespace.name }}</h2>
+    <form method="POST" action="{{ url_for('web.admin_namespace_update_cdb', namespace_id=namespace.id) }}" class="flex-shrink-0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="confirm" value="yes">
+      <button type="submit" class="btn btn-primary" {% if analysis.errors %}disabled{% endif %}>Confirm import</button>
+    </form>
+  </div>
+  <p>Preserved differences will keep the current app value. Missing records will be soft-deleted. Previously deleted records stay deleted.</p>
+  <table class="table"><thead><tr><th>Table</th><th>New records</th><th>Updated records</th><th>Soft-deleted records</th><th>Preserved fields</th></tr></thead>
+  <tbody>{% for table, counts in analysis.tables.items() %}<tr><td>{{ table }}</td><td>{{ counts.inserted }}</td><td>{{ counts.updated }}</td><td>{{ counts.deleted }}</td><td>{{ counts.preserved }}</td></tr>{% endfor %}</tbody></table>
+  {% for error in analysis.errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+  <div class="table-responsive" style="max-height: 60vh; overflow: auto;">
+    <table class="table table-sm"><thead><tr><th>Table</th><th>ID</th><th>Field</th><th>Current</th><th>CDB</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for change in analysis.changes if change.action in ['insert', 'soft_delete', 'overwrite'] %}
+      <tr><td>{{ change.table }}</td><td>{{ change.id }}</td><td>{{ change.field }}</td><td>{{ change.old }}</td><td>{{ change.new }}</td><td>{{ {'insert': 'Insert', 'soft_delete': 'Soft-delete', 'overwrite': 'Update'}[change.action] }}</td></tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted">No changes to apply.</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+</div>

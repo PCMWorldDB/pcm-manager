@@ -42,8 +42,8 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
         NamespaceBase.metadata.create_all(engine)
         with engine.begin() as conn:
             conn.execute(text("INSERT INTO stat_lists (id,list_name,season_year,gender) VALUES (1,'Test list',2026,'Men'),(2,'Other list',2026,'Men')"))
-            conn.execute(text("INSERT INTO cdb_cyclist (id,stat_mo) VALUES (1,70)"))
-            conn.execute(text('INSERT INTO stat_list_items (stat_list_id,cdb_cyclist_id) VALUES (1,1)'))
+            conn.execute(text("INSERT INTO rider (id,first_cycling_id,stat_mo) VALUES (1,2,70),(2,1,70)"))
+            conn.execute(text('INSERT INTO stat_list_items (stat_list_id,rider_id) VALUES (1,1)'))
         user = User(username=uuid4().hex, is_active=True)
         user.roles.append(Role.query.filter_by(name=role).one())
         db.session.add(user)
@@ -62,6 +62,22 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
         with client.session_transaction() as session:
             session['_user_id'] = str(user_id)
             session['_fresh'] = True
+        # Namespace and FirstCycling IDs overlap and point at different riders.
+        list_two = '/stats-editor/lists/2/'
+        for data, expected in (({'rider_id': 1, 'first_cycling_id': 1}, [1]),
+                               ({'first_cycling_id': 1}, [1, 2])):
+            assert client.post(list_two + 'add-rider', data=data).status_code == 302
+            with engine.connect() as conn:
+                assert conn.execute(text(
+                    'SELECT rider_id FROM stat_list_items WHERE stat_list_id=2 ORDER BY rider_id'
+                )).scalars().all() == expected
+        for data, expected in (({'rider_id': 1, 'is_checked': 'false'}, [2]),
+                               ({'first_cycling_id': 1, 'is_checked': 'false'}, [])):
+            assert client.post(list_two + 'toggle-rider', data=data).status_code == 302
+            with engine.connect() as conn:
+                assert conn.execute(text(
+                    'SELECT rider_id FROM stat_list_items WHERE stat_list_id=2 ORDER BY rider_id'
+                )).scalars().all() == expected
         assert client.post(base + 'submit-for-approval').status_code == 302
         assert not sent
         for value in (72, 73):
@@ -73,7 +89,7 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
             if role == 'admin':
                 assert client.post(base + 'approve-stat-deltas').status_code == 302
                 with engine.connect() as conn:
-                    assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 70
+                    assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 70
             assert client.post(base + 'submit-for-approval').status_code == 302
             assert sent[-1][0] is namespace
             assert sent[-1][4] == 1
@@ -85,7 +101,7 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
         if role == 'admin':
             assert client.post(base + 'approve-stat-deltas').status_code == 302
             with engine.connect() as conn:
-                assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 73
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 73
         else:
             assert client.post(base + 'approve-stat-deltas').status_code == 403
     finally:

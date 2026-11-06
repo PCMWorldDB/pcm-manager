@@ -28,7 +28,7 @@ def test_rider_reads_and_writes_stay_in_selected_namespace(app):
             NamespaceBase.metadata.create_all(engine)
             with engine.begin() as conn:
                 conn.execute(text(
-                    "INSERT INTO cdb_cyclist (id, first_name, last_name, stat_mo) "
+                    "INSERT INTO rider (id, first_name, last_name, stat_mo) "
                     "VALUES (1, :name, 'Rider', 70)"
                 ), {"name": label})
             namespaces.append(Namespace(name=label, slug=label.lower(), database_name=name))
@@ -37,7 +37,7 @@ def test_rider_reads_and_writes_stay_in_selected_namespace(app):
             _ensure_namespace_database_connection(conn, namespaces[0])
             with pytest.raises(RuntimeError, match="expected namespace database"):
                 _ensure_namespace_database_connection(conn, namespaces[1])
-            conn.execute(text("UPDATE cdb_cyclist SET stat_mo = 80 WHERE id = 1"))
+            conn.execute(text("UPDATE rider SET stat_mo = 80 WHERE id = 1"))
 
         with app.app_context():
             alpha = _load_namespace_roster_rider(namespaces[0], 1)
@@ -46,7 +46,7 @@ def test_rider_reads_and_writes_stay_in_selected_namespace(app):
             assert alpha.first_name == "Alpha" and alpha.stat_mo == 80
             assert beta.first_name == "Beta" and beta.stat_mo == 70
         with engines[1].connect() as conn:
-            assert conn.execute(text("SELECT stat_mo FROM cdb_cyclist WHERE id = 1")).scalar() == 70
+            assert conn.execute(text("SELECT stat_mo FROM rider WHERE id = 1")).scalar() == 70
     finally:
         for engine in engines:
             engine.dispose()

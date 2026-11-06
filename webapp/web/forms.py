@@ -2,7 +2,7 @@
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
 from wtforms import StringField, PasswordField, BooleanField, SubmitField, TextAreaField, SelectField, IntegerField
-from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError
+from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError, NumberRange
 from webapp.security import PasswordPolicy
 
 
@@ -69,9 +69,16 @@ class AdminPasswordResetForm(FlaskForm):
     submit = SubmitField('Create Reset Link')
 
 
+class NamespaceMetadataForm(FlaskForm):
+    """Current season and game version; neither changes namespace identity."""
+    database_year = IntegerField('Database Year', validators=[DataRequired(), NumberRange(min=1900, max=9999)])
+    pcm_version = SelectField('PCM Version', validators=[DataRequired()])
+    submit = SubmitField('Save current season and version')
+
+
 class NamespaceForm(FlaskForm):
     """Namespace creation/edit form"""
-    name = StringField('Name', validators=[
+    name = StringField('Name', default='WDBO', validators=[
         DataRequired(message='Name is required'),
         Length(min=3, max=100, message='Name must be between 3 and 100 characters')
     ])

@@ -17,7 +17,7 @@
                         <label for="{{ form.name.id }}" class="form-label">
                             {{ form.name.label.text }} <span class="text-danger">*</span>
                         </label>
-                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WDB") }}
+                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else "")) }}
                         {% if form.name.errors %}
                             <div class="invalid-feedback">
                                 {{ form.name.errors[0] }}
@@ -26,7 +26,7 @@
                         <small class="form-text text-muted">User-friendly display name</small>
                     </div>
 
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-2 mb-3">
                         <label for="{{ form.database_year.id }}" class="form-label">
                             Season
                         </label>
@@ -34,12 +34,28 @@
                         <small class="form-text text-muted">Database season year</small>
                     </div>
 
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-2 mb-3">
                         <label for="{{ form.gender.id }}" class="form-label">
                             {{ form.gender.label.text }}
                         </label>
                         {{ form.gender(class="form-select") }}
                         <small class="form-text text-muted">Database season gender</small>
+                    </div>
+
+                    <div class="col-md-2 mb-3">
+                        <label for="{{ form.pcm_version.id }}" class="form-label">
+                            {{ form.pcm_version.label.text }}
+                        </label>
+                        {{ form.pcm_version(class="form-select") }}
+                        <small class="form-text text-muted">Game version</small>
+                    </div>
+
+                    <div class="col-md-2 mb-3">
+                        <label for="{{ form.status.id }}" class="form-label">
+                            {{ form.status.label.text }}
+                        </label>
+                        {{ form.status(class="form-select") }}
+                        <small class="form-text text-muted">Initial status</small>
                     </div>
                 </div>
 
@@ -48,13 +64,13 @@
                         <label for="{{ form.slug.id }}" class="form-label">
                             {{ form.slug.label.text }} <span class="text-danger">*</span>
                         </label>
-                        {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-2024", readonly=true) }}
+                        {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-men", readonly=true) }}
                         {% if form.slug.errors %}
                             <div class="invalid-feedback">
                                 {{ form.slug.errors[0] }}
                             </div>
                         {% endif %}
-                        <small class="form-text text-muted">Auto-generated from Name, Season, and Gender.</small>
+                        <small class="form-text text-muted">Auto-generated from Name and Gender. Stays the same when the season or PCM version changes.</small>
                     </div>
                 </div>
 
@@ -78,30 +94,32 @@
                     <small class="form-text text-muted">Upload a PCM .cdb file or an already converted .sqlite file (optional). CDB files are converted locally before import; the original file is preserved.</small>
                 </div>
 
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label for="{{ form.pcm_version.id }}" class="form-label">
-                            {{ form.pcm_version.label.text }}
-                        </label>
-                        {{ form.pcm_version(class="form-select") }}
-                        <small class="form-text text-muted">Game version</small>
-                    </div>
-
-                    <div class="col-md-6 mb-3">
-                        <label for="{{ form.status.id }}" class="form-label">
-                            {{ form.status.label.text }}
-                        </label>
-                        {{ form.status(class="form-select") }}
-                        <small class="form-text text-muted">Initial status</small>
-                    </div>
-                </div>
-
                 <div class="d-flex justify-content-between">
                     <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-secondary">
                         Cancel
                     </a>
+                    <div class="d-flex gap-2">
+                    {% if initial_analysis is defined %}
+                    <button class="btn btn-secondary" type="submit" name="analyze_import" value="yes">Analyze another file</button>
+                    <button class="btn btn-primary" type="submit" name="confirm_import" value="yes" {% if initial_analysis.errors %}disabled{% endif %}>Confirm and create namespace</button>
+                    {% else %}
                     {{ form.submit(class="btn btn-primary") }}
+                    {% endif %}
+                    </div>
                 </div>
+                {% if initial_analysis is defined %}
+                <section class="mt-4" aria-labelledby="initial-import-plan">
+                    <h5 id="initial-import-plan">Initial CDB import plan</h5>
+                    <p>Review the record counts before creating this namespace.</p>
+                    <table class="table">
+                        <thead><tr><th>Table</th><th>Records to import</th></tr></thead>
+                        <tbody>{% for table, count in initial_analysis.tables.items() %}
+                            <tr><td>{{ table }}</td><td>{{ '{:,}'.format(count) }}</td></tr>
+                        {% endfor %}</tbody>
+                    </table>
+                    {% for error in initial_analysis.errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+                </section>
+                {% endif %}
             </form>
         </div>
     </div>
@@ -118,14 +136,14 @@ function slugifyPart(value) {
 
 function buildNamespaceSlug() {
     const nameValue = document.getElementById('{{ form.name.id }}').value;
-    const yearValue = document.getElementById('{{ form.database_year.id }}').value;
+
     const genderValue = document.getElementById('{{ form.gender.id }}').value;
 
     const base = slugifyPart(nameValue);
-    const year = slugifyPart(yearValue);
+
     const gender = slugifyPart(genderValue);
 
-    return [base, year, gender].filter(Boolean).join('-');
+    return [base, gender].filter(Boolean).join('-');
 }
 
 function maybeAutoUpdateSlug() {
@@ -134,10 +152,18 @@ function maybeAutoUpdateSlug() {
 }
 
 document.getElementById('{{ form.name.id }}').addEventListener('input', maybeAutoUpdateSlug);
-document.getElementById('{{ form.database_year.id }}').addEventListener('input', maybeAutoUpdateSlug);
+
 document.getElementById('{{ form.gender.id }}').addEventListener('change', maybeAutoUpdateSlug);
 
 // Initialize slug on first render.
 maybeAutoUpdateSlug();
+
+const cdbInput = document.getElementById('{{ form.cdb_file.id }}');
+const createButton = document.getElementById('{{ form.submit.id }}');
+if (createButton) {
+    cdbInput.addEventListener('change', function() {
+        createButton.value = this.files.length ? 'Analyze CDB' : 'Create Namespace';
+    });
+}
 </script>
 {% endblock %}

@@ -94,27 +94,27 @@ def test_image_includes_overall_and_stage_edits(app, monkeypatch):
         try:
             with engine.begin() as conn:
                 columns = ', '.join(f'{column} integer' for column in discord.STAT_APPROVAL_IMAGE_COLUMNS.values())
-                conn.execute(text(f'CREATE TABLE stat_change_snapshot (id serial, race_result_id integer, stat_list_id integer, cdb_cyclist_id integer, {columns})'))
-                conn.execute(text('CREATE TABLE stat_changes (id serial, race_result_id integer, stat_list_id integer, cdb_cyclist_id integer, stat_name text, original_value integer, final_value integer, delta_value integer)'))
-                conn.execute(text('CREATE TABLE cdb_cyclist (id integer, first_cycling_id integer, first_last_name text, first_name text, last_name text, team_id integer)'))
-                conn.execute(text('CREATE TABLE cdb_team (id integer, team_name text, short_name text)'))
-                conn.execute(text("INSERT INTO cdb_cyclist VALUES (1,NULL,'Rider A',NULL,NULL,NULL),(2,NULL,'Stage only',NULL,NULL,NULL)"))
+                conn.execute(text(f'CREATE TABLE stat_change_snapshot (id serial, race_result_id integer, stat_list_id integer, rider_id integer, {columns})'))
+                conn.execute(text('CREATE TABLE stat_changes (id serial, race_result_id integer, stat_list_id integer, rider_id integer, stat_name text, original_value integer, final_value integer, delta_value integer)'))
+                conn.execute(text('CREATE TABLE rider (id integer, first_cycling_id integer, first_last_name text, first_name text, last_name text, team_id integer)'))
+                conn.execute(text('CREATE TABLE team (id integer, team_name text, short_name text)'))
+                conn.execute(text("INSERT INTO rider VALUES (1,NULL,'Rider A',NULL,NULL,NULL),(2,NULL,'Stage only',NULL,NULL,NULL)"))
                 for result_id, rider_id, value in [(overall, 1, 72), (stage, 1, 73), (stage, 2, 75)]:
-                    conn.execute(text('INSERT INTO stat_change_snapshot (race_result_id,cdb_cyclist_id) VALUES (:scope,:rider)'), {'scope': result_id, 'rider': rider_id})
-                    conn.execute(text("INSERT INTO stat_changes (race_result_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value) VALUES (:scope,:rider,'mo',70,:value,:delta)"), {'scope': result_id, 'rider': rider_id, 'value': value, 'delta': value - 70})
+                    conn.execute(text('INSERT INTO stat_change_snapshot (race_result_id,rider_id) VALUES (:scope,:rider)'), {'scope': result_id, 'rider': rider_id})
+                    conn.execute(text("INSERT INTO stat_changes (race_result_id,rider_id,stat_name,original_value,final_value,delta_value) VALUES (:scope,:rider,'mo',70,:value,:delta)"), {'scope': result_id, 'rider': rider_id, 'value': value, 'delta': value - 70})
                 # An unrelated race with overlapping rider IDs must stay out of the image.
-                conn.execute(text("INSERT INTO stat_changes (race_result_id,cdb_cyclist_id,stat_name,final_value) VALUES (-1,1,'mo',99)"))
+                conn.execute(text("INSERT INTO stat_changes (race_result_id,rider_id,stat_name,final_value) VALUES (-1,1,'mo',99)"))
                 for result_id, stat_name, delta in [(overall, 'mm', -2), (stage, 'mm', 1), (overall, 'spr', 1), (stage, 'spr', -1)]:
-                    conn.execute(text("INSERT INTO stat_changes (race_result_id,cdb_cyclist_id,stat_name,original_value,final_value,delta_value) VALUES (:scope,1,:stat,70,:final,:delta)"),
+                    conn.execute(text("INSERT INTO stat_changes (race_result_id,rider_id,stat_name,original_value,final_value,delta_value) VALUES (:scope,1,:stat,70,:final,:delta)"),
                                  {'scope': result_id, 'stat': stat_name, 'final': 70 + delta, 'delta': delta})
             assert set(discord._firstcycling_race_result_map_ids(race_id)) == {overall, stage}
             assert discord._firstcycling_race_result_map_ids(race_id, '123456789') == [stage]
             rows = discord._load_stat_approval_image_rows(namespace, first_cycling_race_id=race_id)
             assert len(rows) == 2
             assert {row['stats']['mo'] for row in rows} == {75}
-            assert {row['cdb_cyclist_id']: row['changes']['mo']['delta_value'] for row in rows} == {1: 5, 2: 5}
+            assert {row['rider_id']: row['changes']['mo']['delta_value'] for row in rows} == {1: 5, 2: 5}
             assert {row['rider_name'] for row in rows} == {'Rider A', 'Stage only'}
-            rider = next(row for row in rows if row['cdb_cyclist_id'] == 1)
+            rider = next(row for row in rows if row['rider_id'] == 1)
             assert rider['changes']['mm']['delta_value'] == -1
             assert rider['stats']['mm'] == 69
             assert rider['changes']['spr']['delta_value'] == 0

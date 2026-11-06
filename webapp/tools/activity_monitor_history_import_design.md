@@ -54,7 +54,7 @@ must see the same roster, results, alerts, and check history.
 
 The CDB roster remains the source for current game data. Activity Monitor
 records are separate namespace data; importing or updating monitor records
-must never edit `cdb_cyclist` or write to the original CDB file.
+must never edit `rider` or write to the original CDB file.
 
 ## Identity and history rules
 
@@ -255,7 +255,7 @@ No schema migration or history import has been run by this preview.
 - The product goal and user journey are recorded in
   `activity_monitor_goal_and_user_route.md` and should guide the screen and
   worker implementation.
-- `CDBCyclist` retains a legacy `pcs_rider_path` field, but cyclist imports now
+- `Rider` retains a legacy `pcs_rider_path` field, but cyclist imports now
   deliberately omit it. PCS links are managed by Activity Monitor. Release
   generation writes only green or orange profile slugs to the mapped export
   field `DYN_cyclist.CONSTANT`, matched through a unique FirstCycling ID;

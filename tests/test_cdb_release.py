@@ -12,7 +12,7 @@ from webapp.web import routes
 
 @pytest.fixture
 def cdb(tmp_path):
-    mapping = get_field_mapping("PCM2026", "cyclist")
+    mapping = get_field_mapping("PCM2026", "rider")
     table = mapping["cdb_table_name"]
     fields = mapping["fields"]
     path = tmp_path / "baseline.sqlite"

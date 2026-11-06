@@ -237,7 +237,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-secondary conflict-resolution-btn"
-                                    data-rider-id="{{ conflict.cdb_cyclist_id }}"
+                                    data-rider-id="{{ conflict.rider_id }}"
                                     data-stat-name="{{ conflict.stat_code }}"
                                     data-resolution="their_edit"
                                     data-resolution-value="{{ conflict.current_value }}">
@@ -246,7 +246,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-primary conflict-resolution-btn ms-1"
-                                    data-rider-id="{{ conflict.cdb_cyclist_id }}"
+                                    data-rider-id="{{ conflict.rider_id }}"
                                     data-stat-name="{{ conflict.stat_code }}"
                                     data-resolution="your_edit"
                                     data-resolution-value="{{ conflict.proposed_value }}">
@@ -284,7 +284,6 @@ body.dark-mode .panel-card .border.bg-light {
                                 <form method="post" action="{{ url_for('web.stats_editor_toggle_list_rider', list_id=stat_list.id) }}" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="rider_id" value="{{ row.rider_id }}">
-                                    <input type="hidden" name="cdb_cyclist_id" value="{{ row.cdb_cyclist_id }}">
                                     <input type="hidden" name="is_checked" value="0">
                                     <button type="submit" class="btn btn-sm btn-outline-danger">X</button>
                                 </form>
@@ -364,7 +363,6 @@ body.dark-mode .panel-card .border.bg-light {
                             <form method="post" action="{{ url_for('web.stats_editor_add_list_rider', list_id=stat_list.id) }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="rider_id" value="{{ rider.rider_id }}">
-                                <input type="hidden" name="cdb_cyclist_id" value="{{ rider.cdb_cyclist_id }}">
                                 <input type="hidden" name="list_search_rider" value="{{ list_search_rider or '' }}">
                                 <input type="hidden" name="list_search_team" value="{{ list_search_team or '' }}">
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>

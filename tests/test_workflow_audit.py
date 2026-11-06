@@ -86,7 +86,7 @@ def test_race_save_audit_includes_resets_and_namespace(app, client, actor, monke
     monkeypatch.setattr(routes, '_get_firstcycling_race_result_map', lambda *a: SimpleNamespace(race_result_id=1))
     try:
         with engine.begin() as conn:
-            conn.execute(text('INSERT INTO cdb_cyclist (id, first_cycling_id, stat_mo) VALUES (1, 123, 70)'))
+            conn.execute(text('INSERT INTO rider (id, first_cycling_id, stat_mo) VALUES (1, 123, 70)'))
         path = '/stats-editor/races/987123456/save-stat-deltas'
         for ns_id, value in ((201, 75), (202, 70)):
             namespace.id = ns_id

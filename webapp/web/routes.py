@@ -25,12 +25,14 @@ from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import create_engine, text, Integer, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
+from werkzeug.exceptions import NotFound
 
 from webapp.web import web_bp
 from webapp.web.forms import (
     AdminPasswordResetForm,
     LoginForm,
     NamespaceForm,
+    NamespaceMetadataForm,
     PasswordChangeForm,
     PasswordSetupForm,
     UserCreateForm,
@@ -49,7 +51,7 @@ from webapp.integrations.discord import (
 from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.models.main.firstcycling import FirstCyclingRaceStage
-from webapp.models.ns.schema import get_field_mapping
+from webapp.integrations.cdb import get_field_mapping
 from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
@@ -462,6 +464,13 @@ def _slugify_namespace_part(value):
     text_value = re.sub(r'[^a-z0-9\s-]', '', text_value)
     text_value = re.sub(r'[\s-]+', '-', text_value)
     return text_value.strip('-')
+
+
+def _build_namespace_slug(name, gender):
+    """Build a stable identity independent of the current season/game."""
+    return '-'.join(filter(None, (
+        _slugify_namespace_part(name), _slugify_namespace_part(gender),
+    )))
 
     
 def _resolve_external_sync_season(seasons, year_value, gender_value):
@@ -895,7 +904,7 @@ def _load_namespace_cyclist_stats(namespace, rider_ids):
                         COALESCE(stat_rec, 0) AS stat_rec,
                         COALESCE(stat_cob, 0) AS stat_cob,
                         COALESCE(stat_att, 0) AS stat_att
-                    FROM cdb_cyclist
+                    FROM rider
                     WHERE first_cycling_id = ANY(:rider_ids)
                     """
                 ),
@@ -993,9 +1002,9 @@ def _load_firstcycling_race_result_map_ids(first_cycling_race_id=None, first_cyc
     return [row.race_result_id for row in query.all()]
 
 
-def _load_namespace_scope_snapshots(namespace, race_result_ids=None, stat_list_id=None, cdb_cyclist_ids=None):
+def _load_namespace_scope_snapshots(namespace, race_result_ids=None, stat_list_id=None, rider_ids=None):
     """Load rider stat snapshots keyed by CDB cyclist id for one approval scope."""
-    if namespace is None or not cdb_cyclist_ids:
+    if namespace is None or not rider_ids:
         return {}
 
     normalized_race_result_ids = [
@@ -1004,9 +1013,9 @@ def _load_namespace_scope_snapshots(namespace, race_result_ids=None, stat_list_i
         if race_result_id is not None
     ]
     normalized_cdb_ids = [
-        cdb_cyclist_id
-        for cdb_cyclist_id in {_safe_int(cdb_cyclist_id) for cdb_cyclist_id in cdb_cyclist_ids}
-        if cdb_cyclist_id is not None
+        rider_id
+        for rider_id in {_safe_int(rider_id) for rider_id in rider_ids}
+        if rider_id is not None
     ]
     if not normalized_cdb_ids:
         return {}
@@ -1027,18 +1036,18 @@ def _load_namespace_scope_snapshots(namespace, race_result_ids=None, stat_list_i
                 text(
                     f"""
                     SELECT
-                        cdb_cyclist_id,
+                        rider_id,
                         {_snapshot_stat_select_list()}
                     FROM stat_change_snapshot
                     WHERE {race_filter}
                       AND stat_list_id IS NOT DISTINCT FROM :list_id
-                      AND cdb_cyclist_id = ANY(:cdb_cyclist_ids)
+                      AND rider_id = ANY(:rider_ids)
                     """
                 ),
                 {
                     'race_result_ids': normalized_race_result_ids,
                     'list_id': stat_list_id,
-                    'cdb_cyclist_ids': normalized_cdb_ids,
+                    'rider_ids': normalized_cdb_ids,
                 },
             ).mappings().all()
     except Exception:
@@ -1048,21 +1057,21 @@ def _load_namespace_scope_snapshots(namespace, race_result_ids=None, stat_list_i
         engine.dispose()
 
     return {
-        row['cdb_cyclist_id']: _snapshot_stats_from_row(row)
+        row['rider_id']: _snapshot_stats_from_row(row)
         for row in rows
-        if row.get('cdb_cyclist_id') is not None
+        if row.get('rider_id') is not None
     }
 
 
-def _ensure_scope_stat_snapshots(conn, race_result_id=None, stat_list_id=None, cdb_cyclist_ids=None):
+def _ensure_scope_stat_snapshots(conn, race_result_id=None, stat_list_id=None, rider_ids=None):
     """Capture current CDB stats for riders in a scope that has no snapshot yet."""
-    snapshot_entire_roster = cdb_cyclist_ids is None
+    snapshot_entire_roster = rider_ids is None
     normalized_cdb_ids = []
     if not snapshot_entire_roster:
         normalized_cdb_ids = [
-            cdb_cyclist_id
-            for cdb_cyclist_id in {_safe_int(cdb_cyclist_id) for cdb_cyclist_id in (cdb_cyclist_ids or [])}
-            if cdb_cyclist_id is not None
+            rider_id
+            for rider_id in {_safe_int(rider_id) for rider_id in (rider_ids or [])}
+            if rider_id is not None
         ]
 
     if not snapshot_entire_roster and not normalized_cdb_ids:
@@ -1074,7 +1083,7 @@ def _ensure_scope_stat_snapshots(conn, race_result_id=None, stat_list_id=None, c
             INSERT INTO stat_change_snapshot (
                 race_result_id,
                 stat_list_id,
-                cdb_cyclist_id,
+                rider_id,
                 {', '.join(STAT_COLUMN_MAP.values())},
                 created_at
             )
@@ -1084,14 +1093,14 @@ def _ensure_scope_stat_snapshots(conn, race_result_id=None, stat_list_id=None, c
                 c.id,
                 {_snapshot_stat_select_list('c')},
                 NOW()
-            FROM cdb_cyclist c
-            WHERE (:snapshot_entire_roster OR c.id = ANY(:cdb_cyclist_ids))
+            FROM rider c
+            WHERE (:snapshot_entire_roster OR c.id = ANY(:rider_ids))
               AND NOT EXISTS (
                   SELECT 1
                   FROM stat_change_snapshot s
                   WHERE s.race_result_id IS NOT DISTINCT FROM :race_result_id
                     AND s.stat_list_id IS NOT DISTINCT FROM :list_id
-                    AND s.cdb_cyclist_id = c.id
+                    AND s.rider_id = c.id
               )
             """
         ),
@@ -1099,7 +1108,7 @@ def _ensure_scope_stat_snapshots(conn, race_result_id=None, stat_list_id=None, c
             'race_result_id': race_result_id,
             'list_id': stat_list_id,
             'snapshot_entire_roster': snapshot_entire_roster,
-            'cdb_cyclist_ids': normalized_cdb_ids,
+            'rider_ids': normalized_cdb_ids,
         },
     )
     return result.rowcount or 0
@@ -1120,7 +1129,7 @@ def _load_namespace_cyclist_measurements(namespace, rider_ids):
                         first_cycling_id,
                         size_cm,
                         weight_kg
-                    FROM cdb_cyclist
+                    FROM rider
                     WHERE first_cycling_id = ANY(:rider_ids)
                     """
                 ),
@@ -1158,8 +1167,8 @@ def _load_namespace_cyclist_link_map(namespace, first_cycling_rider_ids):
                         c.id AS cyclist_id,
                         c.team_id,
                         COALESCE(t.team_name, t.short_name) AS team_name
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
                     WHERE c.first_cycling_id = ANY(:rider_ids)
                     """
                 ),
@@ -1325,8 +1334,8 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                     SELECT DISTINCT
                         t.division_id::text AS value,
                         COALESCE(division.constant, t.division_id::text) AS label
-                    FROM cdb_team t
-                    LEFT JOIN cdb_division division ON division.id = t.division_id
+                    FROM team t
+                    LEFT JOIN division division ON division.id = t.division_id
                     WHERE t.division_id IS NOT NULL
                     ORDER BY COALESCE(division.constant, t.division_id::text) ASC
                     """
@@ -1345,8 +1354,8 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                     SELECT DISTINCT
                         t.country_id::text AS value,
                         COALESCE(country.constant, t.country_id::text) AS label
-                    FROM cdb_team t
-                    LEFT JOIN cdb_country country ON country.id = t.country_id
+                    FROM team t
+                    LEFT JOIN country country ON country.id = t.country_id
                     WHERE t.country_id IS NOT NULL
                     ORDER BY COALESCE(country.constant, t.country_id::text) ASC
                     """
@@ -1375,10 +1384,10 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                         t.abbreviation AS uci_code,
                         NULL AS ranking_rank,
                         COUNT(c.id) AS rider_count
-                    FROM cdb_team t
-                    LEFT JOIN cdb_cyclist c ON c.team_id = t.id
-                    LEFT JOIN cdb_country country ON country.id = t.country_id
-                    LEFT JOIN cdb_division division ON division.id = t.division_id
+                    FROM team t
+                    LEFT JOIN rider c ON c.team_id = t.id
+                    LEFT JOIN country country ON country.id = t.country_id
+                    LEFT JOIN division division ON division.id = t.division_id
                     {where_sql}
                     GROUP BY
                         t.id,
@@ -1467,9 +1476,9 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                     SELECT DISTINCT
                         country.id::text AS value,
                         COALESCE(country.constant, country.id::text) AS label
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_region region ON region.id = c.region_id
-                    LEFT JOIN cdb_country country ON country.id = region.country_id
+                    FROM rider c
+                    LEFT JOIN region region ON region.id = c.region_id
+                    LEFT JOIN country country ON country.id = region.country_id
                     WHERE country.id IS NOT NULL
                     ORDER BY COALESCE(country.constant, country.id::text) ASC
                     """
@@ -1481,9 +1490,9 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                     SELECT DISTINCT
                         t.division_id::text AS value,
                         COALESCE(division.constant, t.division_id::text) AS label
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
-                    LEFT JOIN cdb_division division ON division.id = t.division_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
+                    LEFT JOIN division division ON division.id = t.division_id
                     WHERE t.division_id IS NOT NULL
                     ORDER BY COALESCE(division.constant, t.division_id::text) ASC
                     """
@@ -1493,9 +1502,9 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                 text(
                     f"""
                     SELECT COUNT(*) AS total
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
-                    LEFT JOIN cdb_region region ON region.id = c.region_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
+                    LEFT JOIN region region ON region.id = c.region_id
                     {where_sql}
                     """
                 ),
@@ -1518,10 +1527,10 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         COALESCE(t.team_name, t.short_name) AS team_name,
                         COALESCE(country.constant, c.region_id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
-                    LEFT JOIN cdb_region region ON region.id = c.region_id
-                    LEFT JOIN cdb_country country ON country.id = region.country_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
+                    LEFT JOIN region region ON region.id = c.region_id
+                    LEFT JOIN country country ON country.id = region.country_id
                     {where_sql}
                     ORDER BY
                         c.last_name ASC NULLS LAST,
@@ -1571,9 +1580,9 @@ def _load_namespace_roster_team(namespace, team_id):
                         COALESCE(division.constant, team.division_id::text) AS division,
                         team.abbreviation AS uci_code,
                         NULL AS ranking_rank
-                    FROM cdb_team team
-                    LEFT JOIN cdb_country country ON country.id = team.country_id
-                    LEFT JOIN cdb_division division ON division.id = team.division_id
+                    FROM team team
+                    LEFT JOIN country country ON country.id = team.country_id
+                    LEFT JOIN division division ON division.id = team.division_id
                     WHERE team.id = :team_id
                     """
                 ),
@@ -1613,10 +1622,10 @@ def _load_namespace_roster_riders_for_team(namespace, team_id):
                         t.team_name,
                         COALESCE(country.constant, c.region_id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
-                    LEFT JOIN cdb_region region ON region.id = c.region_id
-                    LEFT JOIN cdb_country country ON country.id = region.country_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
+                    LEFT JOIN region region ON region.id = c.region_id
+                    LEFT JOIN country country ON country.id = region.country_id
                     WHERE c.team_id = :team_id
                     ORDER BY
                         c.last_name ASC NULLS LAST,
@@ -1662,10 +1671,10 @@ def _load_namespace_roster_rider(namespace, rider_id):
                         t.team_name,
                         COALESCE(country.constant, c.region_id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
-                    FROM cdb_cyclist c
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
-                    LEFT JOIN cdb_region region ON region.id = c.region_id
-                    LEFT JOIN cdb_country country ON country.id = region.country_id
+                    FROM rider c
+                    LEFT JOIN team t ON t.id = c.team_id
+                    LEFT JOIN region region ON region.id = c.region_id
+                    LEFT JOIN country country ON country.id = region.country_id
                     WHERE c.id = :rider_id
                     """
                 ),
@@ -1717,7 +1726,7 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     }
 
 
-def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None, offset=0):
+def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offset=0):
     """Load newest edits for a rider, or a page of the namespace-wide stat log."""
     if namespace is None:
         return []
@@ -1726,14 +1735,14 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None,
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
-            if cdb_cyclist_id is None:
+            if rider_id is None:
                 _ensure_namespace_database_connection(conn, namespace)
             rows = conn.execute(
                 text(
                     """
                     SELECT
                         sc.id,
-                        sc.cdb_cyclist_id,
+                        sc.rider_id,
                         sc.race_result_id,
                         sc.stat_list_id,
                         sc.release_id,
@@ -1750,17 +1759,17 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None,
                         rel.release_name
                     FROM stat_changes sc
                     LEFT JOIN stat_lists sl ON sl.id = sc.stat_list_id
-                    LEFT JOIN cdb_cyclist c ON c.id = sc.cdb_cyclist_id
+                    LEFT JOIN rider c ON c.id = sc.rider_id
                     LEFT JOIN releases rel ON rel.id = sc.release_id
-                    WHERE (CAST(:cdb_cyclist_id AS INTEGER) IS NULL OR sc.cdb_cyclist_id = :cdb_cyclist_id)
+                    WHERE (CAST(:rider_id AS INTEGER) IS NULL OR sc.rider_id = :rider_id)
                     ORDER BY sc.id DESC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'cdb_cyclist_id': cdb_cyclist_id, 'limit': limit, 'offset': offset},
+                {'rider_id': rider_id, 'limit': limit, 'offset': offset},
             ).mappings().all()
     except Exception:
-        logger.exception('Failed to load stat edits for cyclist %s from namespace %s', cdb_cyclist_id, namespace.slug)
+        logger.exception('Failed to load stat edits for cyclist %s from namespace %s', rider_id, namespace.slug)
         return []
     finally:
         engine.dispose()
@@ -1803,7 +1812,7 @@ def _load_namespace_rider_stat_edits(namespace, cdb_cyclist_id=None, limit=None,
 
     edits = []
     for row in rows:
-        row_rider_id = row['cdb_cyclist_id']
+        row_rider_id = row['rider_id']
         if row.get('stat_list_id') is None and row.get('race_result_id') is None:
             source = {
                 'type': 'Individual',
@@ -1895,7 +1904,7 @@ def _load_dashboard_namespace_stats(namespace):
                         COUNT(DISTINCT team_id) FILTER (WHERE team_id IS NOT NULL) AS cdb_team_count,
                         (SELECT COUNT(*) FROM stat_changes) AS total_stat_edits,
                         (SELECT COUNT(*) FROM releases WHERE LOWER(COALESCE(status, '')) = 'published') AS published_releases
-                    FROM cdb_cyclist
+                    FROM rider
                     """
                 )
             ).mappings().first()
@@ -1917,7 +1926,7 @@ def _load_dashboard_namespace_stats(namespace):
 def _load_namespace_race_result_deltas(
     namespace,
     race_result_ids,
-    cdb_cyclist_ids,
+    rider_ids,
 ):
     """Load saved stat delta rows keyed by CDB cyclist and stat name for one race scope."""
     race_result_ids = [
@@ -1925,12 +1934,12 @@ def _load_namespace_race_result_deltas(
         for race_result_id in {_safe_int(race_result_id) for race_result_id in (race_result_ids or [])}
         if race_result_id is not None
     ]
-    cdb_cyclist_ids = [
-        cdb_cyclist_id
-        for cdb_cyclist_id in {_safe_int(cdb_cyclist_id) for cdb_cyclist_id in (cdb_cyclist_ids or [])}
-        if cdb_cyclist_id is not None
+    rider_ids = [
+        rider_id
+        for rider_id in {_safe_int(rider_id) for rider_id in (rider_ids or [])}
+        if rider_id is not None
     ]
-    if namespace is None or not race_result_ids or not cdb_cyclist_ids:
+    if namespace is None or not race_result_ids or not rider_ids:
         return {}
 
     connection_string = namespace.build_connection_string()
@@ -1941,7 +1950,7 @@ def _load_namespace_race_result_deltas(
                 text(
                     """
                     SELECT
-                        cdb_cyclist_id,
+                        rider_id,
                         stat_name,
                         original_value,
                         final_value,
@@ -1949,13 +1958,13 @@ def _load_namespace_race_result_deltas(
                     FROM stat_changes
                     WHERE race_result_id = ANY(:race_result_ids)
                       AND stat_list_id IS NULL
-                      AND cdb_cyclist_id = ANY(:cdb_cyclist_ids)
+                      AND rider_id = ANY(:rider_ids)
                     ORDER BY id ASC
                     """
                 ),
                 {
                     'race_result_ids': race_result_ids,
-                    'cdb_cyclist_ids': cdb_cyclist_ids,
+                    'rider_ids': rider_ids,
                 },
             ).mappings().all()
     except Exception:
@@ -1967,7 +1976,7 @@ def _load_namespace_race_result_deltas(
 
     delta_map = {}
     for row in rows:
-        rider_id = row['cdb_cyclist_id']
+        rider_id = row['rider_id']
         stat_name = (row['stat_name'] or '').strip().lower()
         if rider_id is None or not stat_name:
             continue
@@ -2236,10 +2245,10 @@ def _load_namespace_approved_release_items(
                     SELECT
                         COALESCE(race_result_id, 0) AS race_result_id,
                         COALESCE(stat_list_id, 0) AS stat_list_id,
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id,
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END AS individual_rider_id,
                         {selected_rows_sql} AS selected_rows,
                         COUNT(*) AS total_edits,
-                        COUNT(DISTINCT cdb_cyclist_id) AS riders_edited,
+                        COUNT(DISTINCT rider_id) AS riders_edited,
                         BOOL_AND(COALESCE(is_approved, FALSE)) AS is_approved,
                         BOOL_AND(release_id IS NOT NULL) AS is_released,
                         ARRAY_AGG(DISTINCT release_id) FILTER (WHERE release_id IS NOT NULL) AS release_ids,
@@ -2250,7 +2259,7 @@ def _load_namespace_approved_release_items(
                     GROUP BY
                         COALESCE(race_result_id, 0),
                         COALESCE(stat_list_id, 0),
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END
                     {having_sql}
                     ORDER BY MAX(id) DESC
                     LIMIT :limit OFFSET :offset
@@ -2488,14 +2497,14 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
                         SELECT
                             COALESCE(race_result_id, 0) AS race_result_id,
                             COALESCE(stat_list_id, 0) AS stat_list_id,
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END AS individual_rider_id
                         FROM stat_changes
                         WHERE {release_filter}
                           AND (race_result_id IS NULL OR stat_list_id IS NULL)
                         GROUP BY
                             COALESCE(race_result_id, 0),
                             COALESCE(stat_list_id, 0),
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END
                         HAVING BOOL_AND(COALESCE(is_approved, FALSE))
                     )
                     SELECT
@@ -2506,16 +2515,16 @@ def _load_namespace_stats_release_summary(namespace, release_id=None, release_st
                         COUNT(DISTINCT sc.stat_list_id) FILTER (
                             WHERE sc.stat_list_id IS NOT NULL
                         ) AS stat_lists_included,
-                        COUNT(DISTINCT sc.cdb_cyclist_id) FILTER (
+                        COUNT(DISTINCT sc.rider_id) FILTER (
                             WHERE sc.stat_list_id IS NULL AND sc.race_result_id IS NULL
                         ) AS individuals_included,
-                        COUNT(DISTINCT sc.cdb_cyclist_id) AS riders_with_edits,
+                        COUNT(DISTINCT sc.rider_id) AS riders_with_edits,
                         COUNT(*) AS total_edits
                     FROM stat_changes sc
                     JOIN approved_scopes approved
                       ON COALESCE(sc.race_result_id, 0) = approved.race_result_id
                      AND COALESCE(sc.stat_list_id, 0) = approved.stat_list_id
-                     AND (approved.individual_rider_id = 0 OR sc.cdb_cyclist_id = approved.individual_rider_id)
+                     AND (approved.individual_rider_id = 0 OR sc.rider_id = approved.individual_rider_id)
                     WHERE {qualified_release_filter}
                     """
                 ),
@@ -2558,14 +2567,14 @@ def _sync_release_stats_change_type(namespace, release_id, include_stats):
                             SELECT
                                 COALESCE(race_result_id, 0) AS race_result_id,
                                 COALESCE(stat_list_id, 0) AS stat_list_id,
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END AS individual_rider_id
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END AS individual_rider_id
                             FROM stat_changes
                             WHERE COALESCE(release_id, 0) = 0
                               AND (race_result_id IS NULL OR stat_list_id IS NULL)
                             GROUP BY
                                 COALESCE(race_result_id, 0),
                                 COALESCE(stat_list_id, 0),
-                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN cdb_cyclist_id ELSE 0 END
+                        CASE WHEN race_result_id IS NULL AND stat_list_id IS NULL THEN rider_id ELSE 0 END
                             HAVING BOOL_AND(COALESCE(is_approved, FALSE))
                         )
                         UPDATE stat_changes
@@ -2576,7 +2585,7 @@ def _sync_release_stats_change_type(namespace, release_id, include_stats):
                                 FROM approved_scopes approved
                                 WHERE COALESCE(stat_changes.race_result_id, 0) = approved.race_result_id
                                   AND COALESCE(stat_changes.stat_list_id, 0) = approved.stat_list_id
-                                  AND (approved.individual_rider_id = 0 OR stat_changes.cdb_cyclist_id = approved.individual_rider_id)
+                                  AND (approved.individual_rider_id = 0 OR stat_changes.rider_id = approved.individual_rider_id)
                           )
                         """
                     ),
@@ -3086,7 +3095,7 @@ def _load_release_stat_updates(namespace, release_id):
         return {}
 
     pcm_version = namespace.pcm_version or 'PCM2025'
-    field_mapping = get_field_mapping(pcm_version, 'cyclist')
+    field_mapping = get_field_mapping(pcm_version, 'rider')
     cyclist_table_name = field_mapping.get('cdb_table_name')
     cyclist_fields = field_mapping.get('fields') or {}
     cyclist_id_column = cyclist_fields.get('id')
@@ -3110,7 +3119,7 @@ def _load_release_stat_updates(namespace, release_id):
                 text(
                     """
                     SELECT
-                        cdb_cyclist_id,
+                        rider_id,
                         stat_name,
                         final_value
                     FROM stat_changes
@@ -3126,11 +3135,11 @@ def _load_release_stat_updates(namespace, release_id):
 
     updates = {}
     for row in rows:
-        cdb_cyclist_id = _safe_int(row.get('cdb_cyclist_id'))
+        rider_id = _safe_int(row.get('rider_id'))
         raw_stat_name = (row.get('stat_name') or '').strip().lower()
         final_value = _safe_int(row.get('final_value'))
 
-        if cdb_cyclist_id is None or not raw_stat_name or final_value is None:
+        if rider_id is None or not raw_stat_name or final_value is None:
             continue
 
         stat_code = raw_stat_name[5:] if raw_stat_name.startswith('stat_') else raw_stat_name
@@ -3141,7 +3150,7 @@ def _load_release_stat_updates(namespace, release_id):
         if not source_column:
             continue
 
-        updates[(cdb_cyclist_id, source_column)] = final_value
+        updates[(rider_id, source_column)] = final_value
 
     return {
         'table_name': cyclist_table_name,
@@ -3156,7 +3165,7 @@ def _load_release_pcs_slug_updates(namespace, sqlite_path):
         return {}
 
     pcm_version = namespace.pcm_version or 'PCM2025'
-    cyclist_mapping = get_field_mapping(pcm_version, 'cyclist')
+    cyclist_mapping = get_field_mapping(pcm_version, 'rider')
     cyclist_fields = cyclist_mapping.get('fields') or {}
     export_fields = cyclist_mapping.get('export_fields') or {}
     cdb_table = cyclist_mapping.get('cdb_table_name')
@@ -3326,7 +3335,7 @@ def _load_release_dyn_cyclist_rows(namespace, release_id, updates):
                         stat_hil,
                         stat_att,
                         first_cycling_id
-                    FROM cdb_cyclist
+                    FROM rider
                     ORDER BY id ASC
                     """
                 )
@@ -3335,7 +3344,7 @@ def _load_release_dyn_cyclist_rows(namespace, release_id, updates):
         engine.dispose()
 
     pcm_version = namespace.pcm_version or 'PCM2025'
-    cyclist_fields = (get_field_mapping(pcm_version, 'cyclist').get('fields') or {})
+    cyclist_fields = (get_field_mapping(pcm_version, 'rider').get('fields') or {})
     internal_stat_by_cdb_column = {
         cdb_column: internal_name
         for internal_name, cdb_column in cyclist_fields.items()
@@ -3738,7 +3747,7 @@ def _load_scope_stat_change_conflicts(conn, where_clause, params):
                 stat_changes.id,
                 stat_changes.race_result_id,
                 stat_changes.stat_list_id,
-                stat_changes.cdb_cyclist_id,
+                stat_changes.rider_id,
                 stat_changes.stat_name,
                 stat_changes.original_value,
                 stat_changes.final_value,
@@ -3748,7 +3757,7 @@ def _load_scope_stat_change_conflicts(conn, where_clause, params):
                 c.first_cycling_id,
                 {_snapshot_stat_select_list('c')}
             FROM stat_changes
-            JOIN cdb_cyclist c ON c.id = stat_changes.cdb_cyclist_id
+            JOIN rider c ON c.id = stat_changes.rider_id
             WHERE {where_clause}
               AND stat_changes.is_approved = FALSE
             ORDER BY stat_changes.id ASC
@@ -3774,13 +3783,13 @@ def _load_scope_stat_change_conflicts(conn, where_clause, params):
                 part
                 for part in [row.get('first_name'), row.get('last_name')]
                 if part
-            ).strip() or f"Rider #{row.get('cdb_cyclist_id')}"
+            ).strip() or f"Rider #{row.get('rider_id')}"
             conflicts.append({
                 'stat_change_id': row.get('id'),
                 'race_result_id': row.get('race_result_id'),
                 'stat_list_id': row.get('stat_list_id'),
-                'first_cycling_rider_id': row.get('first_cycling_id') or row.get('cdb_cyclist_id'),
-                'cdb_cyclist_id': row.get('cdb_cyclist_id'),
+                'first_cycling_rider_id': row.get('first_cycling_id') or row.get('rider_id'),
+                'rider_id': row.get('rider_id'),
                 'rider_name': rider_name,
                 'stat_name': stat_code.upper(),
                 'stat_code': stat_code,
@@ -3831,11 +3840,11 @@ def _load_namespace_scope_conflicts(namespace, first_cycling_race_id=None, stat_
 
 
 def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
-    """Apply pending stat_changes.final_value into cdb_cyclist for one scope."""
+    """Apply pending stat_changes.final_value into rider for one scope."""
     pending_rows = conn.execute(
         text(
             f"""
-            SELECT id, cdb_cyclist_id, stat_name, final_value
+            SELECT id, rider_id, stat_name, final_value
             FROM stat_changes
             WHERE {where_clause}
               AND is_approved = FALSE
@@ -3847,26 +3856,26 @@ def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
 
     applied_count = 0
     for row in pending_rows:
-        cdb_cyclist_id = _safe_int(row.get('cdb_cyclist_id'))
+        rider_id = _safe_int(row.get('rider_id'))
         final_value = _safe_int(row.get('final_value'))
         stat_name = (row.get('stat_name') or '').strip().lower()
         stat_code = stat_name[5:] if stat_name.startswith('stat_') else stat_name
         column_name = STAT_COLUMN_MAP.get(stat_code)
 
-        if cdb_cyclist_id is None or final_value is None or not column_name:
+        if rider_id is None or final_value is None or not column_name:
             continue
 
         conn.execute(
             text(
                 f'''
-                UPDATE cdb_cyclist
+                UPDATE rider
                 SET "{column_name}" = :final_value
-                WHERE id = :cdb_cyclist_id
+                WHERE id = :rider_id
                 '''
             ),
             {
                 'final_value': final_value,
-                'cdb_cyclist_id': cdb_cyclist_id,
+                'rider_id': rider_id,
             },
         )
         applied_count += 1
@@ -4014,14 +4023,14 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
         engine.dispose()
 
 
-def _load_namespace_list_result_deltas(namespace, stat_list_id, cdb_cyclist_ids):
+def _load_namespace_list_result_deltas(namespace, stat_list_id, rider_ids):
     """Load saved stat changes for one ad-hoc stat list keyed by CDB cyclist/stat."""
-    cdb_cyclist_ids = [
-        cdb_cyclist_id
-        for cdb_cyclist_id in {_safe_int(cdb_cyclist_id) for cdb_cyclist_id in (cdb_cyclist_ids or [])}
-        if cdb_cyclist_id is not None
+    rider_ids = [
+        rider_id
+        for rider_id in {_safe_int(rider_id) for rider_id in (rider_ids or [])}
+        if rider_id is not None
     ]
-    if namespace is None or stat_list_id is None or not cdb_cyclist_ids:
+    if namespace is None or stat_list_id is None or not rider_ids:
         return {}
 
     connection_string = namespace.build_connection_string()
@@ -4032,7 +4041,7 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, cdb_cyclist_ids)
                 text(
                     """
                     SELECT
-                        cdb_cyclist_id,
+                        rider_id,
                         stat_name,
                         original_value,
                         final_value,
@@ -4040,12 +4049,12 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, cdb_cyclist_ids)
                     FROM stat_changes
                     WHERE stat_list_id = :list_id
                       AND race_result_id IS NULL
-                      AND cdb_cyclist_id = ANY(:cdb_cyclist_ids)
+                      AND rider_id = ANY(:rider_ids)
                     """
                 ),
                 {
                     'list_id': stat_list_id,
-                    'cdb_cyclist_ids': cdb_cyclist_ids,
+                    'rider_ids': rider_ids,
                 },
             ).mappings().all()
     except Exception:
@@ -4056,7 +4065,7 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, cdb_cyclist_ids)
 
     delta_map = {}
     for row in rows:
-        rider_id = row['cdb_cyclist_id']
+        rider_id = row['rider_id']
         stat_name = (row['stat_name'] or '').strip().lower()
         if rider_id is None or not stat_name:
             continue
@@ -4179,8 +4188,15 @@ def inject_namespace_selector_context():
         }
 
     available_namespaces = _get_accessible_namespaces()
-    selected_namespace = _get_selected_namespace(available_namespaces)
-    panel_menu_items = _get_panel_menu_items()
+    try:
+        selected_namespace = _get_selected_namespace(available_namespaces)
+    except NotFound:
+        # Error templates also run context processors. Preserve the original
+        # 404 without selecting another namespace or raising during rendering.
+        selected_namespace = None
+        panel_menu_items = []
+    else:
+        panel_menu_items = _get_panel_menu_items()
     return {
         'available_namespaces': available_namespaces,
         'selected_namespace': selected_namespace,
@@ -4696,7 +4712,7 @@ def activity_monitor():
             engine = create_engine(selected_namespace.build_connection_string())
             with engine.connect() as conn:
                 rider_count = conn.execute(
-                    text('SELECT COUNT(*) FROM cdb_cyclist')
+                    text('SELECT COUNT(*) FROM rider')
                 ).scalar_one()
                 monitor_tables_ready = conn.execute(
                     text("SELECT to_regclass('activity_monitor_riders') IS NOT NULL")
@@ -4996,8 +5012,8 @@ def activity_monitor_riders():
                         SELECT value, value AS label
                         FROM (
                             SELECT DISTINCT """ + division_label_sql + """ AS value
-                            FROM cdb_division d
-                            JOIN cdb_team t ON t.division_id = d.id
+                            FROM division d
+                            JOIN team t ON t.division_id = d.id
                             WHERE EXISTS (
                                 SELECT 1 FROM activity_monitor_riders r WHERE r.team_id = t.id
                             )
@@ -5086,8 +5102,8 @@ def activity_monitor_riders():
                         selection_ids = conn.execute(text(f"""
                             SELECT r.id
                             FROM activity_monitor_riders r
-                            LEFT JOIN cdb_team t ON t.id = r.team_id
-                            LEFT JOIN cdb_division d ON d.id = t.division_id
+                            LEFT JOIN team t ON t.id = r.team_id
+                            LEFT JOIN division d ON d.id = t.division_id
                             {where_sql}
                             {'AND' if where_sql else 'WHERE'} r.eligible AND r.present_in_cdb
                             ORDER BY r.last_name ASC NULLS LAST,
@@ -5129,8 +5145,8 @@ def activity_monitor_riders():
                     total = conn.execute(text(f"""
                         SELECT COUNT(*)
                         FROM activity_monitor_riders r
-                        LEFT JOIN cdb_team t ON t.id = r.team_id
-                        LEFT JOIN cdb_division d ON d.id = t.division_id
+                        LEFT JOIN team t ON t.id = r.team_id
+                        LEFT JOIN division d ON d.id = t.division_id
                         {where_sql}
                     """), params).scalar_one()
                     rider_limit_sql = '' if export_csv or show_all else 'LIMIT :limit OFFSET :offset'
@@ -5178,8 +5194,8 @@ def activity_monitor_riders():
                                latest_profile.approved_at AS profile_approved_at,
                                latest_profile.profile_birth_date AS profile_birth_date
                         FROM activity_monitor_riders r
-                        LEFT JOIN cdb_team t ON t.id = r.team_id
-                        LEFT JOIN cdb_division d ON d.id = t.division_id
+                        LEFT JOIN team t ON t.id = r.team_id
+                        LEFT JOIN division d ON d.id = t.division_id
                         LEFT JOIN LATERAL (
                             SELECT c.checked_at, c.source, c.source_status, c.identity_result
                             FROM activity_monitor_source_checks c
@@ -5569,8 +5585,8 @@ def activity_monitor_problems():
                         FROM activity_monitor_source_checks c
                         JOIN activity_monitor_runs run ON run.id = c.run_id
                         LEFT JOIN activity_monitor_riders r ON r.id = c.rider_id
-                        LEFT JOIN cdb_team t ON t.id = r.team_id
-                        LEFT JOIN cdb_division d ON d.id = t.division_id
+                        LEFT JOIN team t ON t.id = r.team_id
+                        LEFT JOIN division d ON d.id = t.division_id
                         {pcs_profile_join}
                         LEFT JOIN LATERAL (
                             SELECT pcs.request_path, pcs.source_status,
@@ -6666,8 +6682,8 @@ def activity_monitor_rider_detail(rider_id):
                        r.identity_status, r.identity_hold,
                        r.identity_hold_reason, r.eligible, r.present_in_cdb
                 FROM activity_monitor_riders r
-                LEFT JOIN cdb_team t ON t.id = r.team_id
-                LEFT JOIN cdb_division d ON d.id = t.division_id
+                LEFT JOIN team t ON t.id = r.team_id
+                LEFT JOIN division d ON d.id = t.division_id
                 WHERE r.id = :rider_id
             """), {'rider_id': rider_id}).mappings().first()
             if row is not None:
@@ -8097,7 +8113,7 @@ def rider_detail(rider_id):
     )
 
 
-INDIVIDUAL_STAT_SCOPE = 'race_result_id IS NULL AND stat_list_id IS NULL AND cdb_cyclist_id = :rider_id'
+INDIVIDUAL_STAT_SCOPE = 'race_result_id IS NULL AND stat_list_id IS NULL AND rider_id = :rider_id'
 
 
 def _individual_pending_fingerprint(conn, rider_id):
@@ -8179,7 +8195,7 @@ def rider_stats_action(rider_id, action):
             if action == 'save':
                 if not conn.execute(text(f'SELECT 1 FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE} AND release_id IS NULL LIMIT 1'), params).first():
                     conn.execute(text(f'DELETE FROM stat_change_snapshot WHERE {INDIVIDUAL_STAT_SCOPE}'), params)
-                _ensure_scope_stat_snapshots(conn, cdb_cyclist_ids=[rider_id])
+                _ensure_scope_stat_snapshots(conn, rider_ids=[rider_id])
                 snapshot = conn.execute(text(f'''
                     SELECT {_snapshot_stat_select_list()} FROM stat_change_snapshot
                     WHERE {INDIVIDUAL_STAT_SCOPE}
@@ -8194,7 +8210,7 @@ def rider_stats_action(rider_id, action):
                     '''), {**params, 'stat': stat})
                     if final != original or item.get('is_confilict_override'):
                         conn.execute(text('''
-                            INSERT INTO stat_changes (cdb_cyclist_id, stat_name, original_value,
+                            INSERT INTO stat_changes (rider_id, stat_name, original_value,
                                 final_value, delta_value, is_approved, is_confilict_override)
                             VALUES (:rider_id, :stat, :original, :final, :delta, FALSE, :override)
                         '''), {**params, 'stat': stat, 'original': original, 'final': final,
@@ -8737,12 +8753,12 @@ def stats_editor_add_list_rider(list_id):
     if not _can_access_panel('stat_editor'):
         abort(403)
 
-    cdb_cyclist_id = request.form.get('cdb_cyclist_id', type=int)
     rider_id = request.form.get('rider_id', type=int)
+    first_cycling_id = request.form.get('first_cycling_id', type=int)
     list_search_rider = (request.form.get('list_search_rider', type=str) or '').strip()
     list_search_team = (request.form.get('list_search_team', type=str) or '').strip()
 
-    if cdb_cyclist_id is None and rider_id is None:
+    if rider_id is None and first_cycling_id is None:
         flash('Select a rider to add.', 'warning')
         return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
@@ -8760,15 +8776,15 @@ def stats_editor_add_list_rider(list_id):
                 text(
                     """
                     SELECT id
-                    FROM cdb_cyclist
-                    WHERE (:cdb_cyclist_id IS NOT NULL AND id = :cdb_cyclist_id)
-                       OR (:cdb_cyclist_id IS NULL AND first_cycling_id = :rider_id)
+                    FROM rider
+                    WHERE (:rider_id IS NOT NULL AND id = :rider_id)
+                       OR (:rider_id IS NULL AND first_cycling_id = :first_cycling_id)
                     LIMIT 1
                     """
                 ),
                 {
-                    'cdb_cyclist_id': cdb_cyclist_id,
                     'rider_id': rider_id,
+                    'first_cycling_id': first_cycling_id,
                 },
             ).mappings().first()
             if rider_row is None:
@@ -8778,15 +8794,15 @@ def stats_editor_add_list_rider(list_id):
             conn.execute(
                 text(
                     """
-                    INSERT INTO stat_list_items (stat_list_id, cdb_cyclist_id)
-                    VALUES (:list_id, :cdb_cyclist_id)
-                    ON CONFLICT (stat_list_id, cdb_cyclist_id)
+                    INSERT INTO stat_list_items (stat_list_id, rider_id)
+                    VALUES (:list_id, :rider_id)
+                    ON CONFLICT (stat_list_id, rider_id)
                     DO NOTHING
                     """
                 ),
                 {
                     'list_id': list_id,
-                    'cdb_cyclist_id': rider_row['id'],
+                    'rider_id': rider_row['id'],
                 },
             )
     except Exception:
@@ -8804,13 +8820,13 @@ def stats_editor_toggle_list_rider(list_id):
     if not _can_access_panel('stat_editor'):
         abort(403)
 
-    cdb_cyclist_id = request.form.get('cdb_cyclist_id', type=int)
     rider_id = request.form.get('rider_id', type=int)
+    first_cycling_id = request.form.get('first_cycling_id', type=int)
     is_checked = request.form.get('is_checked', type=str) == '1'
     list_search_rider = (request.form.get('list_search_rider', type=str) or '').strip()
     list_search_team = (request.form.get('list_search_team', type=str) or '').strip()
 
-    if cdb_cyclist_id is None and rider_id is None:
+    if rider_id is None and first_cycling_id is None:
         return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
     available_namespaces = _get_accessible_namespaces()
@@ -8827,35 +8843,35 @@ def stats_editor_toggle_list_rider(list_id):
                 text(
                     """
                     SELECT id
-                    FROM cdb_cyclist
-                    WHERE (:cdb_cyclist_id IS NOT NULL AND id = :cdb_cyclist_id)
-                       OR (:cdb_cyclist_id IS NULL AND first_cycling_id = :rider_id)
+                    FROM rider
+                    WHERE (:rider_id IS NOT NULL AND id = :rider_id)
+                       OR (:rider_id IS NULL AND first_cycling_id = :first_cycling_id)
                     LIMIT 1
                     """
                 ),
                 {
-                    'cdb_cyclist_id': cdb_cyclist_id,
                     'rider_id': rider_id,
+                    'first_cycling_id': first_cycling_id,
                 },
             ).mappings().first()
             if rider_row is None:
                 flash('That rider is not linked in this namespace CDB yet.', 'warning')
                 return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
-            cdb_cyclist_id = rider_row['id']
+            rider_id = rider_row['id']
 
             if is_checked:
                 conn.execute(
                     text(
                         """
-                        INSERT INTO stat_list_items (stat_list_id, cdb_cyclist_id)
-                        VALUES (:list_id, :cdb_cyclist_id)
-                        ON CONFLICT (stat_list_id, cdb_cyclist_id)
+                        INSERT INTO stat_list_items (stat_list_id, rider_id)
+                        VALUES (:list_id, :rider_id)
+                        ON CONFLICT (stat_list_id, rider_id)
                         DO NOTHING
                         """
                     ),
                     {
                         'list_id': list_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                     },
                 )
             else:
@@ -8865,12 +8881,12 @@ def stats_editor_toggle_list_rider(list_id):
                         DELETE FROM stat_changes
                         WHERE stat_list_id = :list_id
                           AND race_result_id IS NULL
-                          AND cdb_cyclist_id = :cdb_cyclist_id
+                          AND rider_id = :rider_id
                         """
                     ),
                     {
                         'list_id': list_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                     },
                 )
                 conn.execute(
@@ -8878,12 +8894,12 @@ def stats_editor_toggle_list_rider(list_id):
                         """
                         DELETE FROM stat_list_items
                         WHERE stat_list_id = :list_id
-                          AND cdb_cyclist_id = :cdb_cyclist_id
+                          AND rider_id = :rider_id
                         """
                     ),
                     {
                         'list_id': list_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                     },
                 )
     except Exception:
@@ -8926,9 +8942,9 @@ def stats_editor_list_detail(list_id):
             list_items = conn.execute(
                 text(
                     """
-                    SELECT i.cdb_cyclist_id, c.first_cycling_id AS first_cycling_rider_id
+                    SELECT i.rider_id, c.first_cycling_id AS first_cycling_rider_id
                     FROM stat_list_items i
-                    JOIN cdb_cyclist c ON c.id = i.cdb_cyclist_id
+                    JOIN rider c ON c.id = i.rider_id
                     WHERE i.stat_list_id = :list_id
                     ORDER BY i.id ASC
                     """
@@ -8945,21 +8961,21 @@ def stats_editor_list_detail(list_id):
     list_search_team = (request.args.get('list_search_team', type=str) or '').strip()
     list_search_results = []
 
-    cdb_cyclist_ids = [
-        item['cdb_cyclist_id']
+    rider_ids = [
+        item['rider_id']
         for item in list_items
-        if item.get('cdb_cyclist_id') is not None
+        if item.get('rider_id') is not None
     ]
-    list_item_rider_ids = set(cdb_cyclist_ids)
+    list_item_rider_ids = set(rider_ids)
     rider_rows = []
-    if cdb_cyclist_ids:
+    if rider_ids:
         try:
             with engine.connect() as conn:
                 rider_rows = conn.execute(
                     text(
                         f"""
                         SELECT
-                            c.id AS cdb_cyclist_id,
+                            c.id AS rider_id,
                             c.first_cycling_id,
                             c.first_name,
                             c.last_name,
@@ -8967,26 +8983,26 @@ def stats_editor_list_detail(list_id):
                             c.team_id,
                             COALESCE(t.team_name, t.short_name) AS team_name,
                             {_snapshot_stat_select_list('c')}
-                        FROM cdb_cyclist c
-                        LEFT JOIN cdb_team t ON t.id = c.team_id
-                        WHERE c.id = ANY(:cdb_cyclist_ids)
+                        FROM rider c
+                        LEFT JOIN team t ON t.id = c.team_id
+                        WHERE c.id = ANY(:rider_ids)
                         ORDER BY c.id ASC
                         """
                     ),
-                    {'cdb_cyclist_ids': cdb_cyclist_ids},
+                    {'rider_ids': rider_ids},
                 ).mappings().all()
         except Exception:
             logger.exception('Failed to load CDB cyclists for stat list %s in namespace %s', list_id, selected_namespace.slug)
             rider_rows = []
     rider_map = {
-        row['cdb_cyclist_id']: row
+        row['rider_id']: row
         for row in rider_rows
     }
 
     if list_search_rider or list_search_team:
         search_where = []
         search_params = {
-            'selected_cdb_ids': list(cdb_cyclist_ids) or [-1],
+            'selected_cdb_ids': list(rider_ids) or [-1],
         }
         if list_search_rider:
             search_where.append(
@@ -9015,7 +9031,7 @@ def stats_editor_list_detail(list_id):
                     text(
                         f"""
                         SELECT
-                            c.id AS cdb_cyclist_id,
+                            c.id AS rider_id,
                             c.first_cycling_id,
                             c.first_name,
                             c.last_name,
@@ -9023,8 +9039,8 @@ def stats_editor_list_detail(list_id):
                             c.team_id,
                             COALESCE(t.team_name, t.short_name) AS team_name,
                             {_snapshot_stat_select_list('c')}
-                        FROM cdb_cyclist c
-                        LEFT JOIN cdb_team t ON t.id = c.team_id
+                        FROM rider c
+                        LEFT JOIN team t ON t.id = c.team_id
                         WHERE {search_filter}
                           AND NOT (c.id = ANY(:selected_cdb_ids))
                         ORDER BY
@@ -9043,8 +9059,7 @@ def stats_editor_list_detail(list_id):
 
         list_search_results = [
             SimpleNamespace(
-                cdb_cyclist_id=row.get('cdb_cyclist_id'),
-                rider_id=row.get('cdb_cyclist_id'),
+                rider_id=row.get('rider_id'),
                 first_cycling_id=row.get('first_cycling_id'),
                 name=_cdb_rider_display_name(row),
                 first_name=row.get('first_name'),
@@ -9056,8 +9071,8 @@ def stats_editor_list_detail(list_id):
             for row in search_rows
         ]
 
-    rider_snapshot_map = _load_namespace_scope_snapshots(selected_namespace, stat_list_id=list_id, cdb_cyclist_ids=cdb_cyclist_ids)
-    rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, cdb_cyclist_ids)
+    rider_snapshot_map = _load_namespace_scope_snapshots(selected_namespace, stat_list_id=list_id, rider_ids=rider_ids)
+    rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, rider_ids)
     scope_delta_status = _load_namespace_scope_delta_status(
         selected_namespace,
         first_cycling_race_id=None,
@@ -9067,18 +9082,18 @@ def stats_editor_list_detail(list_id):
     stat_conflicts = _load_namespace_scope_conflicts(selected_namespace, stat_list_id=list_id)
 
     rows = []
-    for cdb_cyclist_id in cdb_cyclist_ids:
-        rider = rider_map.get(cdb_cyclist_id)
+    for rider_id in rider_ids:
+        rider = rider_map.get(rider_id)
         rider_name = _cdb_rider_display_name(rider) if rider is not None else ''
-        rider_name = rider_name or f'Rider #{cdb_cyclist_id}'
+        rider_name = rider_name or f'Rider #{rider_id}'
 
         rider_in_namespace = rider is not None
         if rider_in_namespace:
             base_stats = _snapshot_stats_from_row(rider)
-            snapshot_stats = rider_snapshot_map.get(cdb_cyclist_id) or {}
+            snapshot_stats = rider_snapshot_map.get(rider_id) or {}
             original_stats = dict(snapshot_stats or base_stats)
             final_stats = dict(original_stats)
-            for stat_name, delta_info in (rider_delta_map.get(cdb_cyclist_id) or {}).items():
+            for stat_name, delta_info in (rider_delta_map.get(rider_id) or {}).items():
                 final_value = delta_info.get('final_value')
                 if final_value is None:
                     continue
@@ -9093,9 +9108,8 @@ def stats_editor_list_detail(list_id):
             final_stats = {}
 
         rows.append({
-            'cdb_cyclist_id': cdb_cyclist_id,
-            'rider_id': cdb_cyclist_id,
-            'rider_link_id': cdb_cyclist_id,
+            'rider_id': rider_id,
+            'rider_link_id': rider_id,
             'rider_name': rider_name,
             'team_id': rider.get('team_id') if rider is not None else None,
             'team_name': (rider.get('team_name') if rider is not None and rider.get('team_name') else '-'),
@@ -9149,12 +9163,12 @@ def stats_editor_save_list_stat_deltas(list_id):
         flash('Select a namespace before saving stat changes.', 'warning')
         return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
 
-    cdb_cyclist_ids = {
+    rider_ids = {
         _safe_int(item.get('first_cycling_rider_id'))
         for item in parsed_changes
         if isinstance(item, dict)
     }
-    cdb_cyclist_ids.discard(None)
+    rider_ids.discard(None)
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
@@ -9165,7 +9179,7 @@ def stats_editor_save_list_stat_deltas(list_id):
             snapshot_rider_rows = conn.execute(
                 text(
                     """
-                    SELECT cdb_cyclist_id
+                    SELECT rider_id
                     FROM stat_list_items
                     WHERE stat_list_id = :list_id
                     """
@@ -9173,25 +9187,25 @@ def stats_editor_save_list_stat_deltas(list_id):
                 {'list_id': list_id},
             ).mappings().all()
             snapshot_cdb_ids = {
-                _safe_int(row.get('cdb_cyclist_id'))
+                _safe_int(row.get('rider_id'))
                 for row in snapshot_rider_rows
             }
             snapshot_cdb_ids.discard(None)
-            _ensure_scope_stat_snapshots(conn, stat_list_id=list_id, cdb_cyclist_ids=snapshot_cdb_ids)
+            _ensure_scope_stat_snapshots(conn, stat_list_id=list_id, rider_ids=snapshot_cdb_ids)
             snapshot_rows = conn.execute(
                 text(
                     f"""
-                    SELECT cdb_cyclist_id, {_snapshot_stat_select_list()}
+                    SELECT rider_id, {_snapshot_stat_select_list()}
                     FROM stat_change_snapshot
                     WHERE race_result_id IS NULL
                       AND stat_list_id = :list_id
-                      AND cdb_cyclist_id = ANY(:cdb_cyclist_ids)
+                      AND rider_id = ANY(:rider_ids)
                     """
                 ),
-                {'list_id': list_id, 'cdb_cyclist_ids': list(cdb_cyclist_ids)},
+                {'list_id': list_id, 'rider_ids': list(rider_ids)},
             ).mappings().all()
             snapshot_map = {
-                row['cdb_cyclist_id']: _snapshot_stats_from_row(row)
+                row['rider_id']: _snapshot_stats_from_row(row)
                 for row in snapshot_rows
             }
 
@@ -9200,14 +9214,14 @@ def stats_editor_save_list_stat_deltas(list_id):
                     skipped_count += 1
                     continue
 
-                cdb_cyclist_id = _safe_int(item.get('first_cycling_rider_id'))
+                rider_id = _safe_int(item.get('first_cycling_rider_id'))
                 stat_name = (item.get('stat_name') or '').strip().lower()
                 final_value = _safe_int(item.get('final_value'))
-                original_value = _safe_int((snapshot_map.get(cdb_cyclist_id) or {}).get(stat_name))
+                original_value = _safe_int((snapshot_map.get(rider_id) or {}).get(stat_name))
                 is_confilict_override = bool(item.get('is_confilict_override'))
 
                 if (
-                    cdb_cyclist_id is None
+                    rider_id is None
                     or stat_name not in STAT_DELTA_FIELDS
                     or original_value is None
                     or final_value is None
@@ -9225,13 +9239,13 @@ def stats_editor_save_list_stat_deltas(list_id):
                             DELETE FROM stat_changes
                             WHERE race_result_id IS NULL
                               AND stat_list_id = :list_id
-                              AND cdb_cyclist_id = :cdb_cyclist_id
+                              AND rider_id = :rider_id
                               AND stat_name = :stat_name
                             """
                         ),
                         {
                             'list_id': list_id,
-                            'cdb_cyclist_id': cdb_cyclist_id,
+                            'rider_id': rider_id,
                             'stat_name': stat_name,
                         },
                     )
@@ -9243,13 +9257,13 @@ def stats_editor_save_list_stat_deltas(list_id):
                         DELETE FROM stat_changes
                         WHERE race_result_id IS NULL
                           AND stat_list_id = :list_id
-                          AND cdb_cyclist_id = :cdb_cyclist_id
+                          AND rider_id = :rider_id
                           AND stat_name = :stat_name
                         """
                     ),
                     {
                         'list_id': list_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                         'stat_name': stat_name,
                     },
                 )
@@ -9260,7 +9274,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                         INSERT INTO stat_changes (
                             race_result_id,
                             stat_list_id,
-                            cdb_cyclist_id,
+                            rider_id,
                             stat_name,
                             original_value,
                             final_value,
@@ -9271,7 +9285,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                         VALUES (
                             NULL,
                             :list_id,
-                            :cdb_cyclist_id,
+                            :rider_id,
                             :stat_name,
                             :original_value,
                             :final_value,
@@ -9283,7 +9297,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                     ),
                     {
                         'list_id': list_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                         'stat_name': stat_name,
                         'original_value': original_value,
                         'final_value': final_value,
@@ -9874,10 +9888,10 @@ def stats_editor_race_detail(race_id, stage_id=None):
                 result_rows = [result for result in race.race_results if result.stage_id == final_stage.id]
         result_title = 'Overall Results'
 
-    rider_ids = {result.rider_id for result in result_rows if result.rider_id is not None}
+    first_cycling_ids = {result.rider_id for result in result_rows if result.rider_id is not None}
     rider_map = {}
-    if rider_ids:
-        riders = FirstCyclingRider.query.filter(FirstCyclingRider.rider_id.in_(rider_ids)).all()
+    if first_cycling_ids:
+        riders = FirstCyclingRider.query.filter(FirstCyclingRider.rider_id.in_(first_cycling_ids)).all()
         rider_map = {rider.rider_id: rider for rider in riders}
 
     team_ids = {
@@ -9921,13 +9935,13 @@ def stats_editor_race_detail(race_id, stage_id=None):
                 'is_approved': is_approved,
             }
 
-    rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, rider_ids)
-    rider_link_map = _load_namespace_cyclist_link_map(selected_namespace, rider_ids)
+    rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, first_cycling_ids)
+    rider_link_map = _load_namespace_cyclist_link_map(selected_namespace, first_cycling_ids)
     fc_to_cdb_id = {
         rider_id: (rider_link_map.get(rider_id) or {}).get('cyclist_id')
-        for rider_id in rider_ids
+        for rider_id in first_cycling_ids
     }
-    cdb_cyclist_ids = [cdb_id for cdb_id in fc_to_cdb_id.values() if cdb_id is not None]
+    rider_ids = [cdb_id for cdb_id in fc_to_cdb_id.values() if cdb_id is not None]
     stage_scope_id = selected_stage.id if selected_stage is not None else None
     include_all_race_stages = selected_stage is None and result_state['is_stage_race']
     race_result_map_ids = _load_firstcycling_race_result_map_ids(
@@ -9951,12 +9965,12 @@ def stats_editor_race_detail(race_id, stage_id=None):
     rider_snapshot_map = _load_namespace_scope_snapshots(
         selected_namespace,
         race_result_ids=race_result_map_ids,
-        cdb_cyclist_ids=cdb_cyclist_ids,
+        rider_ids=rider_ids,
     )
     rider_delta_map = _load_namespace_race_result_deltas(
         selected_namespace,
         race_result_map_ids,
-        cdb_cyclist_ids,
+        rider_ids,
     )
     stat_conflicts = _load_namespace_scope_conflicts(selected_namespace, first_cycling_race_id=race.race_id) if selected_stage is None else []
     delta_change_count = sum(len(changes) for changes in rider_delta_map.values())
@@ -9977,12 +9991,12 @@ def stats_editor_race_detail(race_id, stage_id=None):
 
         rider_in_namespace = result.rider_id in rider_stats_map
         if rider_in_namespace:
-            cdb_cyclist_id = fc_to_cdb_id.get(result.rider_id)
+            rider_id = fc_to_cdb_id.get(result.rider_id)
             base_stats = rider_stats_map.get(result.rider_id) or {}
-            snapshot_stats = rider_snapshot_map.get(cdb_cyclist_id) or {}
+            snapshot_stats = rider_snapshot_map.get(rider_id) or {}
             original_stats = dict(snapshot_stats or base_stats)
             final_stats = dict(original_stats)
-            for stat_name, delta_info in (rider_delta_map.get(cdb_cyclist_id) or {}).items():
+            for stat_name, delta_info in (rider_delta_map.get(rider_id) or {}).items():
                 original_value = delta_info.get('original_value')
                 final_value = delta_info.get('final_value')
                 if original_value is not None:
@@ -10187,7 +10201,7 @@ def stats_editor_save_stat_deltas(race_id):
                     text(
                         """
                         SELECT id, first_cycling_id
-                        FROM cdb_cyclist
+                        FROM rider
                         WHERE first_cycling_id = ANY(:rider_ids)
                         """
                     ),
@@ -10211,21 +10225,21 @@ def stats_editor_save_stat_deltas(race_id):
             snapshot_rider_ids.discard(None)
             if not snapshot_rider_ids:
                 snapshot_rider_ids = set(rider_to_cdb_id.values())
-            _ensure_scope_stat_snapshots(conn, race_result_id=race_result_map_id, cdb_cyclist_ids=snapshot_rider_ids)
+            _ensure_scope_stat_snapshots(conn, race_result_id=race_result_map_id, rider_ids=snapshot_rider_ids)
             snapshot_rows = conn.execute(
                 text(
                     f"""
-                    SELECT cdb_cyclist_id, {_snapshot_stat_select_list()}
+                    SELECT rider_id, {_snapshot_stat_select_list()}
                     FROM stat_change_snapshot
                     WHERE race_result_id = :race_result_id
                       AND stat_list_id IS NULL
-                      AND cdb_cyclist_id = ANY(:cdb_cyclist_ids)
+                      AND rider_id = ANY(:rider_ids)
                     """
                 ),
-                {'race_result_id': race_result_map_id, 'cdb_cyclist_ids': list(rider_to_cdb_id.values())},
+                {'race_result_id': race_result_map_id, 'rider_ids': list(rider_to_cdb_id.values())},
             ).mappings().all()
             snapshot_map = {
-                row['cdb_cyclist_id']: _snapshot_stats_from_row(row)
+                row['rider_id']: _snapshot_stats_from_row(row)
                 for row in snapshot_rows
             }
 
@@ -10234,16 +10248,16 @@ def stats_editor_save_stat_deltas(race_id):
                     skipped_count += 1
                     continue
 
-                rider_id = _safe_int(item.get('first_cycling_rider_id'))
-                cdb_cyclist_id = rider_to_cdb_id.get(rider_id)
+                first_cycling_id = _safe_int(item.get('first_cycling_rider_id'))
+                rider_id = rider_to_cdb_id.get(first_cycling_id)
                 stat_name = (item.get('stat_name') or '').strip().lower()
                 final_value = _safe_int(item.get('final_value'))
-                original_value = _safe_int((snapshot_map.get(cdb_cyclist_id) or {}).get(stat_name))
+                original_value = _safe_int((snapshot_map.get(rider_id) or {}).get(stat_name))
                 is_confilict_override = bool(item.get('is_confilict_override'))
 
                 if (
-                    rider_id is None
-                    or cdb_cyclist_id is None
+                    first_cycling_id is None
+                    or rider_id is None
                     or stat_name not in STAT_DELTA_FIELDS
                     or original_value is None
                     or final_value is None
@@ -10255,7 +10269,7 @@ def stats_editor_save_stat_deltas(race_id):
 
                 delta_value = final_value - original_value
                 saved_changes.append({
-                    'cdb_cyclist_id': cdb_cyclist_id, 'stat_name': stat_name,
+                    'rider_id': rider_id, 'stat_name': stat_name,
                     'original_value': original_value, 'final_value': final_value,
                     'is_confilict_override': is_confilict_override,
                 })
@@ -10266,13 +10280,13 @@ def stats_editor_save_stat_deltas(race_id):
                             DELETE FROM stat_changes
                             WHERE race_result_id = :race_result_id
                               AND stat_list_id IS NULL
-                              AND cdb_cyclist_id = :cdb_cyclist_id
+                              AND rider_id = :rider_id
                               AND stat_name = :stat_name
                             """
                         ),
                         {
                             'race_result_id': race_result_map_id,
-                            'cdb_cyclist_id': cdb_cyclist_id,
+                            'rider_id': rider_id,
                             'stat_name': stat_name,
                         },
                     )
@@ -10284,13 +10298,13 @@ def stats_editor_save_stat_deltas(race_id):
                         DELETE FROM stat_changes
                         WHERE race_result_id = :race_result_id
                           AND stat_list_id IS NULL
-                          AND cdb_cyclist_id = :cdb_cyclist_id
+                          AND rider_id = :rider_id
                           AND stat_name = :stat_name
                         """
                     ),
                     {
                         'race_result_id': race_result_map_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                         'stat_name': stat_name,
                     },
                 )
@@ -10301,7 +10315,7 @@ def stats_editor_save_stat_deltas(race_id):
                         INSERT INTO stat_changes (
                             race_result_id,
                             stat_list_id,
-                            cdb_cyclist_id,
+                            rider_id,
                             stat_name,
                             original_value,
                             final_value,
@@ -10312,7 +10326,7 @@ def stats_editor_save_stat_deltas(race_id):
                         VALUES (
                             :race_result_id,
                             NULL,
-                            :cdb_cyclist_id,
+                            :rider_id,
                             :stat_name,
                             :original_value,
                             :final_value,
@@ -10324,7 +10338,7 @@ def stats_editor_save_stat_deltas(race_id):
                     ),
                     {
                         'race_result_id': race_result_map_id,
-                        'cdb_cyclist_id': cdb_cyclist_id,
+                        'rider_id': rider_id,
                         'stat_name': stat_name,
                         'original_value': original_value,
                         'final_value': final_value,
@@ -11154,9 +11168,12 @@ def admin_integrations_run():
 def admin_namespace_detail(namespace_id):
     """Admin panel - View and manage namespace details"""
     namespace = Namespace.query.get_or_404(namespace_id)
+    metadata_form = NamespaceMetadataForm(obj=namespace)
+    metadata_form.pcm_version.choices = current_app.config['PCM_VERSIONS']
     
     return render_template('admin/namespace_detail.html',
                          namespace=namespace,
+                         metadata_form=metadata_form,
                          active_section='namespaces')
 
 
@@ -11173,8 +11190,11 @@ def admin_namespace_create():
     # Populate PCM version choices from config
     form.pcm_version.choices = [('', '-- Select Version --')] + current_app.config['PCM_VERSIONS']
     
+    if request.method == 'POST':
+        form.slug.data = _build_namespace_slug(form.name.data, form.gender.data)
+
     if form.validate_on_submit():
-        normalized_slug = _slugify_namespace_part(form.slug.data)
+        normalized_slug = form.slug.data
         form.slug.data = normalized_slug
 
         if not normalized_slug:
@@ -11195,14 +11215,39 @@ def admin_namespace_create():
         
         # Handle CDB file upload
         sqlite_file_path = None
-        if form.cdb_file.data:
+        creation_values = {key: getattr(form, key).data for key in
+                           ('name', 'slug', 'description', 'pcm_version', 'database_year', 'gender', 'status')}
+        confirming_import = request.form.get('confirm_import') == 'yes' and not form.cdb_file.data
+        initial_fingerprint = None
+        if request.form.get('analyze_import') == 'yes' and not form.cdb_file.data:
+            flash('Select a CDB file to analyze again.', 'error')
+            return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+        if confirming_import:
+            from webapp.integrations.cdb import cdb_import
+            from webapp.config import get_cdb_import_path
+            review = session.get('namespace_creation_review', {})
+            if (review.get('user_id') != current_user.id
+                    or review.get('values') != creation_values
+                    or review.get('expires', 0) < datetime.utcnow().timestamp()):
+                flash('The import review expired or namespace settings changed. Select the file and analyze again.', 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            try:
+                analysis = cdb_import.analyze_initial(review['sqlite_path'], form.pcm_version.data)
+                if analysis['errors'] or analysis['fingerprint'] != review['fingerprint']:
+                    raise ValueError('The import plan changed. Select the file and analyze again.')
+            except (ValueError, OSError, sqlite3.Error) as error:
+                flash(str(error), 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            sqlite_file_path = f"cdb/import/{os.path.basename(review['sqlite_path'])}"
+            initial_fingerprint = review['fingerprint']
+        elif form.cdb_file.data:
+            from webapp.integrations.cdb import cdb_import
             from werkzeug.utils import secure_filename
             from webapp.config import ensure_namespace_directories, get_cdb_import_path
             from webapp.integrations.cdb.converter import (
                 convert_cdb_to_sqlite,
                 validate_sqlite_cdb,
             )
-            import os
             
             # Create namespace directories
             ensure_namespace_directories(normalized_slug)
@@ -11213,7 +11258,7 @@ def admin_namespace_create():
             
             # Generate a unique filename with timestamp if needed
             base_name, ext = os.path.splitext(filename)
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
             unique_filename = f"{base_name}_{timestamp}{ext}"
             
             # Preserve the uploaded file. Packed .cdb files are converted to a
@@ -11232,6 +11277,7 @@ def admin_namespace_create():
                     convert_cdb_to_sqlite(source_path, sqlite_path)
                 else:
                     validate_sqlite_cdb(sqlite_path)
+                analysis = cdb_import.analyze_initial(sqlite_path, form.pcm_version.data)
             except Exception as exc:
                 for path in paths_to_clean:
                     if os.path.exists(path):
@@ -11243,10 +11289,13 @@ def admin_namespace_create():
                     active_section='namespaces',
                 ), 400
 
-            # Keep the converted SQLite file as the namespace's import/release
-            # baseline while preserving an uploaded .cdb alongside it.
-            sqlite_file_path = f"cdb/import/{os.path.basename(sqlite_path)}"
-            flash(f'CDB database file "{filename}" prepared successfully', 'success')
+            session['namespace_creation_review'] = dict(
+                user_id=current_user.id, values=creation_values, sqlite_path=sqlite_path,
+                fingerprint=analysis['fingerprint'],
+                expires=(datetime.utcnow() + timedelta(hours=1)).timestamp(),
+            )
+            return render_template('admin/namespace_form.html', form=form,
+                                   initial_analysis=analysis, active_section='namespaces')
         
         # Create namespace
         namespace = Namespace(
@@ -11328,8 +11377,9 @@ def admin_namespace_create():
                 if os.path.exists(cdb_path):
                     logger.info(f"CDB file found at: {cdb_path}")
                     
-                    with CDBImporter(cdb_path, namespace.build_connection_string(), namespace.pcm_version) as importer:
-                        stats = importer.import_all_tables()
+                    with CDBImporter(cdb_path, namespace.build_connection_string(), namespace.pcm_version, expected_database=namespace.database_name) as importer:
+                        stats = importer.import_all_tables(expected_fingerprint=initial_fingerprint)
+                    session.pop('namespace_creation_review', None)
                     
                     # Show import statistics
                     for table, count in stats.items():
@@ -11370,13 +11420,18 @@ def admin_namespace_create():
 @login_required
 @admin_required
 def admin_namespace_update_cdb(namespace_id):
-    """Replace the mapped CDB data in a namespace without removing its history."""
+    """Analyze an upload and apply the confirmed namespace upsert."""
     if not _can_update_namespaces():
         abort(403)
 
     namespace = Namespace.query.get_or_404(namespace_id)
+    confirming = request.form.get('confirm') == 'yes'
+    review = session.get('cdb_review', {})
+    main_engine = db.engines.get('main') or db.engine
+    if namespace.database_name == main_engine.url.database:
+        abort(400)
     uploaded_file = request.files.get('cdb_file')
-    if uploaded_file is None or not uploaded_file.filename:
+    if not confirming and (uploaded_file is None or not uploaded_file.filename):
         flash('Choose a .cdb or .sqlite file to update this namespace.', 'error')
         return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
@@ -11385,7 +11440,15 @@ def admin_namespace_update_cdb(namespace_id):
     from webapp.integrations.cdb.converter import convert_cdb_to_sqlite, validate_sqlite_cdb
     from webapp.namespace.setup import CDBImporter
 
-    original_name = secure_filename(uploaded_file.filename)
+    if confirming:
+        if (review.get('namespace_id') != namespace.id
+                or review.get('user_id') != current_user.id
+                or review.get('pcm_version') != namespace.pcm_version
+                or review.get('expires', 0) < datetime.utcnow().timestamp()):
+            abort(400)
+        original_name = review['filename']
+    else:
+        original_name = secure_filename(uploaded_file.filename)
     base_name, extension = os.path.splitext(original_name)
     extension = extension.lower()
     if extension not in {'.cdb', '.sqlite'}:
@@ -11396,21 +11459,37 @@ def admin_namespace_update_cdb(namespace_id):
     import_path = get_cdb_import_path(namespace.slug)
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
     source_path = os.path.join(import_path, f'{base_name}_{timestamp}{extension}')
-    sqlite_path = source_path
-    paths_to_clean = [source_path]
+    if confirming:
+        source_path = review['source_path']
+    sqlite_path = review['sqlite_path'] if confirming else source_path
+    paths_to_clean = list({source_path, sqlite_path})
     cdb_import_completed = False
     try:
-        uploaded_file.save(source_path)
-        if extension == '.cdb':
+        if not confirming:
+            uploaded_file.save(source_path)
+        if not confirming and extension == '.cdb':
             sqlite_path = os.path.join(import_path, f'{base_name}_{timestamp}.sqlite')
             paths_to_clean.append(sqlite_path)
             convert_cdb_to_sqlite(source_path, sqlite_path)
         else:
             validate_sqlite_cdb(sqlite_path)
 
-        # Archive first, so the update remains safe even if a future importer
-        # changes its scope. The current Activity Monitor tables are separate
-        # and are not among the mapped CDB tables replaced below.
+        if not confirming:
+            with CDBImporter(sqlite_path, namespace.build_connection_string(), namespace.pcm_version, expected_database=namespace.database_name) as importer:
+                analysis = importer.analyze()
+            session['cdb_review'] = dict(
+                namespace_id=namespace.id, user_id=current_user.id,
+                pcm_version=namespace.pcm_version, filename=original_name,
+                source_path=source_path, sqlite_path=sqlite_path,
+                fingerprint=analysis['fingerprint'],
+                expires=(datetime.utcnow() + timedelta(hours=1)).timestamp(),
+            )
+            metadata_form = NamespaceMetadataForm(obj=namespace)
+            metadata_form.pcm_version.choices = current_app.config['PCM_VERSIONS']
+            return render_template('admin/namespace_detail.html', namespace=namespace,
+                                   metadata_form=metadata_form, analysis=analysis,
+                                   active_section='namespaces')
+        # Preserve existing Activity Monitor archive synchronization.
         try:
             from webapp.tools.activity_monitor_global_history import archive_namespace_history
 
@@ -11434,8 +11513,9 @@ def admin_namespace_update_cdb(namespace_id):
             sqlite_path,
             namespace.build_connection_string(),
             namespace.pcm_version,
+            expected_database=namespace.database_name,
         ) as importer:
-            stats = importer.import_all_tables(replace_existing=True)
+            stats = importer.import_all_tables(expected_fingerprint=review['fingerprint'])
         try:
             from webapp.tools.activity_monitor_global_history import (
                 restore_worlddb_history,
@@ -11456,6 +11536,7 @@ def admin_namespace_update_cdb(namespace_id):
         except Exception:
             logger.exception('Could not restore archived Activity Monitor history for namespace %s', namespace.slug)
         cdb_import_completed = True
+        session.pop('cdb_review', None)
 
         namespace.sqlite_file_path = f'cdb/import/{os.path.basename(sqlite_path)}'
         db.session.commit()
@@ -11468,14 +11549,17 @@ def admin_namespace_update_cdb(namespace_id):
             details={
                 'import_stats': stats,
                 'cdb_file': os.path.basename(source_path),
-                'operation': 'replace_mapped_cdb_data',
+                'operation': 'upsert_mapped_cdb_data',
                 'activity_monitor_history_preserved': True,
             },
             ip_address=request.remote_addr,
         )
         db.session.commit()
-    except Exception:
+    except Exception as error:
+        session.pop('cdb_review', None)
         db.session.rollback()
+        if isinstance(error, ValueError):
+            flash(str(error), 'error')
         logger.exception('CDB update failed for namespace %s', namespace.slug)
         if not cdb_import_completed:
             for path in paths_to_clean:
@@ -11487,15 +11571,46 @@ def admin_namespace_update_cdb(namespace_id):
             )
         else:
             flash(
-                'The mapped CDB data was replaced, but namespace metadata or its audit entry could not be saved. Check the namespace details before retrying.',
+                'The mapped CDB data was updated, but namespace metadata or its audit entry could not be saved. Check the namespace details before retrying.',
                 'error',
             )
         return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
     flash(
-        f"CDB updated for {namespace.name}. Replaced {stats.get('cyclists', 0):,} riders; Activity Monitor history was kept.",
+        f"CDB updated for {namespace.name}. Processed {stats.get('rider', 0):,} riders; Activity Monitor history was kept.",
         'success',
     )
+    return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
+
+
+@web_bp.route('/admin/namespaces/<int:namespace_id>/metadata', methods=['POST'])
+@login_required
+@admin_required
+def admin_namespace_update_metadata(namespace_id):
+    """Update the current season/version without renaming databases or files."""
+    if not _can_update_namespaces():
+        abort(403)
+    namespace = Namespace.query.get_or_404(namespace_id)
+    form = NamespaceMetadataForm()
+    form.pcm_version.choices = current_app.config['PCM_VERSIONS']
+    if not form.validate_on_submit():
+        return {'errors': form.errors}, 400
+    previous = {'database_year': namespace.database_year, 'pcm_version': namespace.pcm_version}
+    namespace.database_year = form.database_year.data
+    namespace.pcm_version = form.pcm_version.data
+    AuditLog.log_action(
+        action=AuditAction.NAMESPACE_UPDATED,
+        user=current_user,
+        resource_type='namespace',
+        resource_id=namespace.id,
+        resource_name=namespace.name,
+        details={'previous': previous, 'current': {
+            'database_year': namespace.database_year, 'pcm_version': namespace.pcm_version,
+        }},
+        ip_address=request.remote_addr,
+    )
+    db.session.commit()
+    flash('Namespace season and PCM version updated.', 'success')
     return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
 

@@ -53,15 +53,15 @@ def get_cdb_mappings():
         return yaml.safe_load(f)
 
 
-def get_field_mapping(pcm_version, table_type='cyclist'):
+def get_field_mapping(pcm_version, table_type='rider'):
     """Get field mapping for a specific PCM version and table type
     
     Args:
         pcm_version: PCM version string (e.g., 'PCM2025')
-        table_type: Type of table (e.g., 'cyclist')
+        table_type: Type of table (e.g., 'rider')
         
     Returns:
-        dict: Mapping configuration with 'cdb_table_name' and 'fields'
+        dict: Table configuration, import mappings, and a column-only fields projection.
     """
     cdb_mappings = get_cdb_mappings()
     
@@ -85,15 +85,30 @@ def get_field_mapping(pcm_version, table_type='cyclist'):
     if not table_mapping:
         raise ValueError(f"Table type '{table_type}' not defined in mapping version '{mapping_version}'")
     
-    return table_mapping
+    mappings = table_mapping['mappings']
+    for field, config in mappings.items():
+        if config.get('policy') not in {'overwrite', 'preserve', 'reject', 'identity'}:
+            raise ValueError(f'Invalid import policy for {table_type}.{field}')
+        if config.get('nulls') not in {'allow', 'ignore', 'reject'}:
+            raise ValueError(f'Invalid null policy for {table_type}.{field}')
+    if mappings.get('id', {}).get('policy') != 'identity':
+        raise ValueError(f'{table_type}.id must be an identity mapping')
+    if mappings['id']['nulls'] != 'reject':
+        raise ValueError(f'{table_type}.id must reject NULL')
+    if any(config['policy'] == 'identity' for field, config in mappings.items() if field != 'id'):
+        raise ValueError('Only the primary key may use the identity policy')
+    # Column-only projection remains available to release/export consumers.
+    return {**table_mapping, 'fields': {
+        field: config['source'] for field, config in mappings.items()
+    }}
 
 
-def get_cdb_table_name(pcm_version, table_type='cyclist'):
+def get_cdb_table_name(pcm_version, table_type='rider'):
     """Get the CDB table name for a specific PCM version
     
     Args:
         pcm_version: PCM version string (e.g., 'PCM2025')
-        table_type: Type of table (e.g., 'cyclist')
+        table_type: Type of table (e.g., 'rider')
         
     Returns:
         str: CDB table name

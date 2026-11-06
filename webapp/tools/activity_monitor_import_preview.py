@@ -845,7 +845,7 @@ def preview(namespace_slug: str, monitor_path: Path | None, from_stdin: bool = F
             with connection.begin():
                 connection.exec_driver_sql("SET TRANSACTION READ ONLY")
                 cyclists = connection.execute(
-                    text("SELECT id, first_cycling_id, birth_date FROM cdb_cyclist")
+                    text("SELECT id, first_cycling_id, birth_date FROM rider")
                 ).mappings().all()
 
         target_by_fc_id = defaultdict(list)

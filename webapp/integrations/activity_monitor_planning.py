@@ -83,8 +83,8 @@ def due_activity_riders(
             ORDER BY s.reference_date DESC, s.recorded_at DESC, s.id DESC
             LIMIT 1
         ) s
-        LEFT JOIN cdb_team t ON t.id = r.team_id
-        LEFT JOIN cdb_division d ON d.id = t.division_id
+        LEFT JOIN team t ON t.id = r.team_id
+        LEFT JOIN division d ON d.id = t.division_id
         LEFT JOIN LATERAL (
             SELECT MAX(e.result_date) AS latest_activity_date
             FROM activity_monitor_results e

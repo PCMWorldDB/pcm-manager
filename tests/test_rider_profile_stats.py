@@ -48,7 +48,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         engine = create_engine(db.engine.url, connect_args={'options': f'-csearch_path={schema}'})
         NamespaceBase.metadata.create_all(engine)
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO cdb_cyclist (id,first_name,last_name,stat_mo) VALUES (1,'Test','Rider',70)"))
+            conn.execute(text("INSERT INTO rider (id,first_name,last_name,stat_mo) VALUES (1,'Test','Rider',70)"))
         user = User(username=uuid4().hex, is_active=True)
         user.roles.append(Role.query.filter_by(name=role).one())
         db.session.add(user)
@@ -87,7 +87,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
             if role == 'admin':
                 assert client.post(base + 'approve').status_code == 302
                 with engine.connect() as conn:
-                    assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 70
+                    assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 70
             assert client.post(base + 'submit').status_code == 302
             with app.app_context():
                 with engine.connect() as conn:
@@ -104,17 +104,17 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert b'Test Rider' in history.data
         if role == 'admin':
             with engine.begin() as conn:
-                conn.execute(text('UPDATE cdb_cyclist SET stat_mo=71 WHERE id=1'))
+                conn.execute(text('UPDATE rider SET stat_mo=71 WHERE id=1'))
             assert client.post(base + 'approve').status_code == 302
             with engine.connect() as conn:
-                assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 71
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 71
             with engine.begin() as conn:
-                conn.execute(text('UPDATE cdb_cyclist SET stat_mo=70 WHERE id=1'))
+                conn.execute(text('UPDATE rider SET stat_mo=70 WHERE id=1'))
             assert client.post(base + 'approve').status_code == 302
             with engine.connect() as conn:
-                assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 73
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 73
             with engine.begin() as conn:
-                conn.execute(text('UPDATE stat_changes SET release_id=7 WHERE cdb_cyclist_id=1'))
+                conn.execute(text('UPDATE stat_changes SET release_id=7 WHERE rider_id=1'))
             payload = json.dumps([{'first_cycling_rider_id': 1, 'stat_name': 'mo', 'final_value': 74}])
             assert client.post(base + 'save', data={'changes_json': payload}).status_code == 302
             with engine.connect() as conn:

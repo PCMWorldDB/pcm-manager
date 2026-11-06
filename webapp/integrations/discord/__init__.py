@@ -599,7 +599,7 @@ def _load_stat_approval_image_rows(
                 text(
                     f"""
                     SELECT
-                        s.cdb_cyclist_id,
+                        s.rider_id,
                         s.race_result_id,
                         COALESCE(
                             NULLIF(c.first_last_name, ''),
@@ -609,16 +609,16 @@ def _load_stat_approval_image_rows(
                         COALESCE(t.team_name, t.short_name, '-') AS team_name,
                         {snapshot_select}
                     FROM stat_change_snapshot s
-                    LEFT JOIN cdb_cyclist c ON c.id = s.cdb_cyclist_id
-                    LEFT JOIN cdb_team t ON t.id = c.team_id
+                    LEFT JOIN rider c ON c.id = s.rider_id
+                    LEFT JOIN team t ON t.id = c.team_id
                     WHERE {where_clause}
                       AND EXISTS (
                           SELECT 1 FROM stat_changes changes
-                          WHERE changes.cdb_cyclist_id = s.cdb_cyclist_id
+                          WHERE changes.rider_id = s.rider_id
                             AND changes.race_result_id IS NOT DISTINCT FROM s.race_result_id
                             AND changes.stat_list_id IS NOT DISTINCT FROM s.stat_list_id
                       )
-                    ORDER BY rider_name ASC, s.cdb_cyclist_id ASC, s.id ASC
+                    ORDER BY rider_name ASC, s.rider_id ASC, s.id ASC
                     """
                 ),
                 params,
@@ -627,7 +627,7 @@ def _load_stat_approval_image_rows(
             stat_change_rows = conn.execute(
                 text(
                     f"""
-                    SELECT race_result_id, cdb_cyclist_id, stat_name, original_value, final_value, delta_value
+                    SELECT race_result_id, rider_id, stat_name, original_value, final_value, delta_value
                     FROM stat_changes
                     WHERE {where_clause}
                     ORDER BY id ASC
@@ -640,7 +640,7 @@ def _load_stat_approval_image_rows(
 
     changes_by_rider = {}
     for change in stat_change_rows:
-        rider_id = change.get('cdb_cyclist_id')
+        rider_id = change.get('rider_id')
         stat_name = (change.get('stat_name') or '').strip().lower()
         if rider_id is None or stat_name not in STAT_APPROVAL_IMAGE_FIELDS:
             continue
@@ -655,7 +655,7 @@ def _load_stat_approval_image_rows(
     rows = []
     seen_riders = set()
     for row in changed_rows:
-        rider_id = row.get('cdb_cyclist_id')
+        rider_id = row.get('rider_id')
         if rider_id in seen_riders:
             continue
         seen_riders.add(rider_id)
@@ -668,7 +668,7 @@ def _load_stat_approval_image_rows(
                 stats[stat_name] = change.get('final_value')
         rider_name = row.get('rider_name') or f'Rider #{rider_id}'
         rows.append({
-            'cdb_cyclist_id': rider_id,
+            'rider_id': rider_id,
             'rider_name': rider_name,
             'team_name': row.get('team_name') or '-',
             'stats': stats,
@@ -685,11 +685,11 @@ def _load_stat_approval_image_rows(
                     text(
                         """
                         SELECT id, first_cycling_id
-                        FROM cdb_cyclist
-                        WHERE id = ANY(:cdb_cyclist_ids)
+                        FROM rider
+                        WHERE id = ANY(:rider_ids)
                         """
                     ),
-                    {'cdb_cyclist_ids': [row['cdb_cyclist_id'] for row in rows]},
+                    {'rider_ids': [row['rider_id'] for row in rows]},
                 ).mappings().all()
             cdb_to_fc = {
                 link_row.get('id'): _coerce_int(link_row.get('first_cycling_id'))
@@ -715,7 +715,7 @@ def _load_stat_approval_image_rows(
                 result_by_rider[rider_id] = result
 
         for row in rows:
-            result = result_by_rider.get(cdb_to_fc.get(row['cdb_cyclist_id']))
+            result = result_by_rider.get(cdb_to_fc.get(row['rider_id']))
             if result is None:
                 row['position'] = None
                 row['position_label'] = None

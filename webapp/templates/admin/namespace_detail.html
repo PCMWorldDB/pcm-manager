@@ -4,6 +4,14 @@
 
 {% block content %}
 <div class="container mt-4">
+    <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#namespace-details" type="button" role="tab">Details</button></li>
+        {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#cdb-import" type="button" role="tab">CDB Import</button></li>
+        {% endif %}
+    </ul>
+    <div class="tab-content">
+    <div class="tab-pane fade show active" id="namespace-details" role="tabpanel">
     <div class="card mb-3">
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
             <h4 class="mb-0">🗂️ Namespace: {{ namespace.name }}</h4>
@@ -98,17 +106,17 @@
             {% endif %}
 
             {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
-            <div class="card border-warning mb-3">
+            <div class="card mb-3">
                 <div class="card-body">
-                    <h6 class="card-title">Update this namespace from a CDB</h6>
-                    <p class="text-muted small mb-2">The mapped CDB tables will be replaced together. Activity Monitor history and other namespace workflow data stay in place; the uploaded file is saved as a new import baseline.</p>
-                    <form method="POST" action="{{ url_for('web.admin_namespace_update_cdb', namespace_id=namespace.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-end">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div>
-                            <label for="namespace-cdb-update" class="form-label">CDB file</label>
-                            <input id="namespace-cdb-update" class="form-control" type="file" name="cdb_file" accept=".cdb,.sqlite" required>
-                        </div>
-                        <button class="btn btn-warning" type="submit">Update namespace CDB</button>
+                    <h6>Current season and PCM version</h6>
+                    <p class="text-muted small">These settings drive season queries and CDB mappings. Changing them keeps the namespace URL, database, files, and history. When changing PCM version, upload a compatible CDB before creating releases.</p>
+                    <form method="POST" action="{{ url_for('web.admin_namespace_update_metadata', namespace_id=namespace.id) }}">
+                        {{ metadata_form.hidden_tag() }}
+                        {{ metadata_form.database_year.label(class="form-label") }}
+                        {{ metadata_form.database_year(class="form-control", required=true) }}
+                        {{ metadata_form.pcm_version.label(class="form-label") }}
+                        {{ metadata_form.pcm_version(class="form-select", required=true) }}
+                        {{ metadata_form.submit(class="btn btn-primary mt-2") }}
                     </form>
                 </div>
             </div>
@@ -138,9 +146,31 @@
     </div>
 
 </div>
-
+<div class="tab-pane fade" id="cdb-import" role="tabpanel">
+            {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+            <div class="card border-warning mb-3">
+                <div class="card-body">
+                    <h6 class="card-title">Update from a CDB</h6>
+                    <p class="text-muted small mb-2">Select a file to analyze new records, field differences, and removals before confirming the import.</p>
+                    <form method="POST" action="{{ url_for('web.admin_namespace_update_cdb', namespace_id=namespace.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-end">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div>
+                            <label for="namespace-cdb-update" class="form-label">CDB file</label>
+                            <input id="namespace-cdb-update" class="form-control" type="file" name="cdb_file" accept=".cdb,.sqlite" required>
+                        </div>
+                        <button class="btn btn-warning" type="submit">Analyze CDB</button>
+                    </form>
+                </div>
+            </div>
+            {% if analysis is defined %}{% include 'admin/cdb_review.html' %}{% endif %}
+            {% endif %}
+</div></div></div>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    if (location.hash === '#cdb-import' || {{ (analysis is defined)|tojson }}) {
+        const tab = document.querySelector('[data-bs-target="#cdb-import"]');
+        if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+    }
     // Handle status dropdown change
     const statusSelect = document.querySelector('.status-select');
     const saveBtn = document.querySelector('.save-btn');

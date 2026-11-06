@@ -13,7 +13,7 @@ from sqlalchemy_utils import create_database, drop_database
 
 from webapp.extensions import db
 from webapp.models.ns.activity_monitor import ActivityMonitorBase
-from webapp.models.ns.schema import CDBCyclist, CDBTeam
+from webapp.models.ns.cdb import Rider, Team
 from webapp.tools.activity_monitor_global_history import (
     archive_namespace_history,
     build_history_bundle,
@@ -128,11 +128,11 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
         create_database(destination_url)
         ActivityMonitorBase.metadata.create_all(source_engine)
         ActivityMonitorBase.metadata.create_all(destination_engine)
-        CDBTeam.__table__.create(destination_engine)
-        CDBCyclist.__table__.create(destination_engine)
+        Team.__table__.create(destination_engine)
+        Rider.__table__.create(destination_engine)
         with destination_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, team_id)
+                INSERT INTO rider (id, first_cycling_id, first_name, last_name, team_id)
                 VALUES (1905, 77, 'Test', 'Rider', NULL), (1906, 78, 'Other', 'Rider', NULL)
             """))
         for engine, rider_id, worlddb_id in ((source_engine, 1, rider_worlddb_id),):
@@ -257,8 +257,8 @@ def test_history_bundle_preview_import_and_restore_are_safe_and_repeatable(app):
         create_database(target_main_url)
         ActivityMonitorBase.metadata.create_all(source_engine)
         ActivityMonitorBase.metadata.create_all(destination_engine)
-        CDBTeam.__table__.create(destination_engine)
-        CDBCyclist.__table__.create(destination_engine)
+        Team.__table__.create(destination_engine)
+        Rider.__table__.create(destination_engine)
         with source_engine.begin() as connection:
             connection.execute(text("""
                 INSERT INTO activity_monitor_riders
@@ -276,7 +276,7 @@ def test_history_bundle_preview_import_and_restore_are_safe_and_repeatable(app):
             """), {"worlddb_id": worlddb_id, "now": now})
         with destination_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name)
+                INSERT INTO rider (id, first_cycling_id, first_name, last_name)
                 VALUES (:worlddb_id, 77, 'Bundle', 'Rider')
             """), {"worlddb_id": worlddb_id})
 
@@ -344,8 +344,8 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
     try:
         create_database(namespace_url)
         ActivityMonitorBase.metadata.create_all(engine)
-        CDBTeam.__table__.create(engine)
-        CDBCyclist.__table__.create(engine)
+        Team.__table__.create(engine)
+        Rider.__table__.create(engine)
         with engine.begin() as connection:
             connection.execute(text("""
                 INSERT INTO activity_monitor_riders
@@ -366,7 +366,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                         'verified', FALSE, TRUE, TRUE, :now, :now)
             """), {"now": now})
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                INSERT INTO rider (id, first_cycling_id, first_name, last_name, birth_date)
                 VALUES (2001, 77, 'Returning', 'Rider', 19900102)
             """))
         assert sync_activity_monitor_roster(engine) == [2001]
@@ -376,7 +376,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
                 WHERE source_worlddb_rider_id IS NULL
             """)).scalar_one() is True
         with engine.begin() as connection:
-            connection.execute(text("DELETE FROM cdb_cyclist WHERE id = 2001"))
+            connection.execute(text("DELETE FROM rider WHERE id = 2001"))
         assert sync_activity_monitor_roster(engine) == []
         with engine.begin() as connection:
             absent_rows = connection.execute(text("""
@@ -385,7 +385,7 @@ def test_roster_sync_starts_new_generation_after_reintroduction(app):
             """)).all()
             assert absent_rows == [(None, 0, False), (2002, 0, False), (2001, 0, False)]
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                INSERT INTO rider (id, first_cycling_id, first_name, last_name, birth_date)
                 VALUES (2001, 77, 'Returning', 'Rider', 19900102)
             """))
         assert sync_activity_monitor_roster(engine) == [2001]
@@ -417,8 +417,8 @@ def test_roster_sync_rejects_ambiguous_monitor_only_identity(app):
     try:
         create_database(namespace_url)
         ActivityMonitorBase.metadata.create_all(engine)
-        CDBTeam.__table__.create(engine)
-        CDBCyclist.__table__.create(engine)
+        Team.__table__.create(engine)
+        Rider.__table__.create(engine)
         with engine.begin() as connection:
             connection.execute(text("""
                 INSERT INTO activity_monitor_riders
@@ -432,7 +432,7 @@ def test_roster_sync_rejects_ambiguous_monitor_only_identity(app):
                      'valid', FALSE, TRUE, TRUE, :now, :now)
             """), {"now": now})
             connection.execute(text("""
-                INSERT INTO cdb_cyclist (id, first_cycling_id, first_name, last_name, birth_date)
+                INSERT INTO rider (id, first_cycling_id, first_name, last_name, birth_date)
                 VALUES (3001, 77, 'CDB', 'Rider', 19900102)
             """))
 

@@ -10,7 +10,7 @@
   archived payload for provenance; they are never used for cross-namespace
   matching.
 - A CDB update replaces only the five mapped CDB tables
-  (`cdb_country`, `cdb_division`, `cdb_region`, `cdb_team`, and `cdb_cyclist`)
+  (`country`, `division`, `region`, `team`, and `rider`)
   in one namespace-database transaction. Activity Monitor tables, workflow
   tables, and the uploaded SQLite/CDB files are outside that replacement.
 - An invalid mapped import rolls back the replacement transaction and leaves
@@ -90,8 +90,8 @@ shared history archive.
   links, review state/events, identity alerts, and eligibility events. Runs,
   task queues/events, scheduler settings, roster snapshots, and generic legacy
   records are not restored. When the Activity Monitor schema has been
-  operator-installed, CDB upload synchronizes its roster from `cdb_cyclist`
-  using `IDcyclist`/`cdb_cyclist.id` as the WorldDB rider ID, then restores
+  operator-installed, CDB upload synchronizes its roster from `rider`
+  using `IDcyclist`/`rider.id` as the WorldDB rider ID, then restores
   matching archived records. A rider returning after being absent starts a
   new identity generation; records from an earlier generation remain archived
   and are not attached to the current generation. Monitor-only rows are marked

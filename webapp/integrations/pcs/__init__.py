@@ -310,7 +310,7 @@ class PcsRiderMatcher:
                         last_name,
                         first_last_name,
                         pcs_rider_path
-                    FROM cdb_cyclist
+                    FROM rider
                 """)).mappings().all()
         finally:
             engine.dispose()
@@ -405,7 +405,7 @@ class PcsClient:
             pcs_result = PcsRaceResult(
                 namespace_id=self.namespace.id,
                 race_name=parsed.race_name,
-                matched_cdb_cyclist_id=match.cyclist_id,
+                matched_rider_id=match.cyclist_id,
                 match_method=match.method,
                 match_score=match.score,
                 last_synced_at=datetime.utcnow(),

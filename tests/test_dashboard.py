@@ -8,6 +8,39 @@ import pytest
 from webapp.web import routes
 
 
+@pytest.mark.parametrize('has_other_namespace', [False, True])
+def test_missing_namespace_dashboard_renders_404(app, client, monkeypatch, has_other_namespace):
+    from uuid import uuid4
+
+    from webapp.extensions import db
+    from webapp.models import User
+
+    namespaces = [SimpleNamespace(id=999, slug='other')] if has_other_namespace else []
+    monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: namespaces)
+    with app.app_context():
+        user = User(username=f'missing-namespace-{uuid4().hex}', is_active=True)
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+    try:
+        with client.session_transaction() as session:
+            session['_user_id'] = str(user_id)
+            session['_fresh'] = True
+        with patch.object(routes, '_load_dashboard_tasks') as tasks, \
+                patch.object(routes, '_get_panel_menu_items') as panels:
+            response = client.get('/n/missing/dashboard')
+        assert response.status_code == 404
+        assert '404 - Page Not Found' in response.get_data(as_text=True)
+        tasks.assert_not_called()
+        panels.assert_not_called()
+        with client.session_transaction() as session:
+            assert session.get('selected_namespace_id') is None
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(User, user_id))
+            db.session.commit()
+
+
 @pytest.mark.parametrize('release,review,editing', [
     (False, False, False), (True, False, False),
     (False, True, False), (False, False, True), (True, True, True),

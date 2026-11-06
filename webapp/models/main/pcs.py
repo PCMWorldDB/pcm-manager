@@ -21,7 +21,7 @@ class PcsRaceResult(MainDBModel):
     position = db.Column(db.Integer, nullable=True, index=True)
     points = db.Column(db.Integer, nullable=True)
     time = db.Column(db.String(40), nullable=True)
-    matched_cdb_cyclist_id = db.Column(db.Integer, nullable=True, index=True)
+    matched_rider_id = db.Column(db.Integer, nullable=True, index=True)
     match_method = db.Column(db.String(40), nullable=True, index=True)
     match_score = db.Column(db.Float, nullable=True)
     last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

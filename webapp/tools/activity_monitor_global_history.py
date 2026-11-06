@@ -410,8 +410,8 @@ def sync_activity_monitor_roster(namespace_engine):
         cyclists = connection.execute(text("""
             SELECT c.id, c.first_cycling_id, c.first_name, c.last_name,
                    c.birth_date, c.team_id, COALESCE(t.team_name, t.short_name, '') AS team_name
-            FROM cdb_cyclist c
-            LEFT JOIN cdb_team t ON t.id = c.team_id
+            FROM rider c
+            LEFT JOIN team t ON t.id = c.team_id
             ORDER BY c.id
         """)).mappings().all()
         monitor_riders_by_fc_id = defaultdict(list)
