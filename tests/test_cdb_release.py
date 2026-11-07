@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from webapp.integrations.cdb import apply_updates_to_sqlite, get_field_mapping
+from webapp.integrations.cdb import (
+    apply_updates_to_sqlite,
+    get_field_mapping,
+    retire_riders_from_sqlite,
+)
 from webapp.web import routes
 
 
@@ -29,6 +33,8 @@ def cdb(tmp_path):
     with sqlite3.connect(path) as conn:
         conn.execute(f'CREATE TABLE "{table}" ("{fields["id"]}" INTEGER PRIMARY KEY, "{fields["stat_mo"]}" INTEGER, untouched BLOB)')
         conn.executemany(f'INSERT INTO "{table}" VALUES (?, ?, ?)', [(1, 70, b"preserve"), (2, 65, b"other")])
+        conn.execute("CREATE TABLE DYN_palmares_cyclist (IDpalmares_cyclist INTEGER PRIMARY KEY, fkIDcyclist INTEGER)")
+        conn.executemany("INSERT INTO DYN_palmares_cyclist VALUES (?, ?)", [(1, 1), (2, 2), (3, 0)])
         conn.execute("CREATE TABLE unknown_game_table (payload TEXT)")
         conn.execute("INSERT INTO unknown_game_table VALUES ('keep me')")
     return path, table, fields
@@ -45,6 +51,29 @@ def test_cdb_update_rolls_back_on_invalid_column(cdb):
         assert conn.execute(f'SELECT "{fields["stat_mo"]}" FROM "{table}" WHERE "{fields["id"]}" = 1').fetchone() == (70,)
 
 
+def test_retiring_rider_only_updates_palmares_and_cyclist_tables(cdb):
+    path, table, fields = cdb
+
+    result = retire_riders_from_sqlite(path, "PCM2026", [1])
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(f'SELECT "{fields["id"]}" FROM "{table}" ORDER BY "{fields["id"]}"').fetchall() == [(2,)]
+        assert conn.execute("SELECT fkIDcyclist FROM DYN_palmares_cyclist ORDER BY IDpalmares_cyclist").fetchall() == [(0,), (2,), (0,)]
+        assert conn.execute("SELECT payload FROM unknown_game_table").fetchone() == ("keep me",)
+    assert result == {"palmares_references_updated": 1, "cyclists_deleted": 1}
+
+
+def test_retirement_rolls_back_if_cdb_does_not_contain_every_rider(cdb):
+    path, table, fields = cdb
+
+    with pytest.raises(ValueError, match="missing from the CDB"):
+        retire_riders_from_sqlite(path, "PCM2026", [1, 999])
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(f'SELECT "{fields["id"]}" FROM "{table}" ORDER BY "{fields["id"]}"').fetchall() == [(1,), (2,)]
+        assert conn.execute("SELECT fkIDcyclist FROM DYN_palmares_cyclist ORDER BY IDpalmares_cyclist").fetchall() == [(1,), (2,), (0,)]
+
+
 def test_release_generates_packed_cdb_and_preserves_source(app, monkeypatch, cdb):
     path, table, fields = cdb
     baseline = path.read_bytes()
@@ -55,6 +84,7 @@ def test_release_generates_packed_cdb_and_preserves_source(app, monkeypatch, cdb
         "table_name": table, "id_column": fields["id"], "updates": {(1, fields["stat_mo"]): 80},
     })
     monkeypatch.setattr(routes, "_load_release_pcs_slug_updates", lambda *_: {})
+    monkeypatch.setattr(routes, "_load_release_retired_cyclist_ids", lambda *_: [])
     monkeypatch.setattr(routes, "_load_release_dyn_cyclist_rows", lambda *_: [{"id": 1, "first_name": "Fixture", "last_name": "Rider", "stat_mo": 80}])
     monkeypatch.setattr(routes, "_load_namespace_approved_release_items", lambda *a, **kw: [{"is_selected": True, "name": "Included race", "total_edits": 1}])
     def fake_convert(sqlite_path, cdb_path):

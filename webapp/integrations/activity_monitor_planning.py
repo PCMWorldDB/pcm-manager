@@ -149,6 +149,13 @@ def due_activity_riders(
             LIMIT 1
         ) cycle ON TRUE
         WHERE r.eligible AND r.present_in_cdb AND NOT r.identity_hold
+          AND NOT EXISTS (
+              SELECT 1 FROM activity_monitor_reviews retired
+              WHERE retired.rider_id = r.id
+                AND retired.identity_generation = r.identity_generation
+                AND retired.review_kind = 'retirement'
+                AND retired.review_status = 'retired'
+          )
     """)
     if rider_ids is not None:
         normalized_rider_ids = sorted({int(rider_id) for rider_id in rider_ids})
@@ -156,8 +163,8 @@ def due_activity_riders(
             return 0, []
         rider_filter = ' AND r.id IN :rider_ids'
         query = text(str(query).replace(
-            'WHERE r.eligible AND r.present_in_cdb AND NOT r.identity_hold',
-            'WHERE r.eligible AND r.present_in_cdb AND NOT r.identity_hold'
+            "WHERE r.eligible AND r.present_in_cdb AND NOT r.identity_hold\n          AND NOT EXISTS (\n              SELECT 1 FROM activity_monitor_reviews retired\n              WHERE retired.rider_id = r.id\n                AND retired.identity_generation = r.identity_generation\n                AND retired.review_kind = 'retirement'\n                AND retired.review_status = 'retired'\n          )",
+            "WHERE r.eligible AND r.present_in_cdb AND NOT r.identity_hold\n          AND NOT EXISTS (\n              SELECT 1 FROM activity_monitor_reviews retired\n              WHERE retired.rider_id = r.id\n                AND retired.identity_generation = r.identity_generation\n                AND retired.review_kind = 'retirement'\n                AND retired.review_status = 'retired'\n          )"
             + rider_filter,
         )).bindparams(bindparam('rider_ids', expanding=True))
         query_params['rider_ids'] = normalized_rider_ids

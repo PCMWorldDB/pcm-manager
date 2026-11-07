@@ -40,6 +40,78 @@ def apply_updates_to_sqlite(sqlite_file_path, table_name, id_column, updates):
     return applied_values
 
 
+def retire_riders_from_sqlite(sqlite_file_path, pcm_version, cyclist_ids):
+    """Remove retired cyclists from a copied CDB and detach their palmares rows.
+
+    Only DYN_Palmares_Cyclist.fkIDcyclist and the mapped DYN_cyclist row are
+    changed. The SQLite transaction rolls back completely if the expected
+    tables or columns are missing.
+    """
+    cyclist_ids = sorted({int(value) for value in cyclist_ids if value is not None})
+    if not cyclist_ids:
+        return {"palmares_references_updated": 0, "cyclists_deleted": 0}
+
+    mapping = get_field_mapping(pcm_version, "cyclist")
+    cyclist_table = mapping.get("cdb_table_name")
+    cyclist_id = (mapping.get("fields") or {}).get("id")
+    if not cyclist_table or not cyclist_id:
+        raise ValueError(f"Missing cyclist table mapping for PCM version {pcm_version}")
+    quote = lambda identifier: '"' + str(identifier).replace('"', '""') + '"'
+    sqlite_uri = Path(sqlite_file_path).resolve().as_uri() + "?mode=rw"
+    connection = sqlite3.connect(sqlite_uri, uri=True)
+    try:
+        cursor = connection.cursor()
+        tables = {row[0].casefold(): row[0] for row in cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        cyclist_table = tables.get(cyclist_table.casefold())
+        palmares_table = tables.get("DYN_Palmares_Cyclist".casefold())
+        if cyclist_table is None or palmares_table is None:
+            raise ValueError("The CDB is missing a required cyclist or palmares table.")
+        cyclist_columns = {row[1] for row in cursor.execute(
+            f"PRAGMA table_info({quote(cyclist_table)})"
+        )}
+        palmares_columns = {row[1] for row in cursor.execute(
+            f"PRAGMA table_info({quote(palmares_table)})"
+        )}
+        cyclist_id = next((name for name in cyclist_columns if name.casefold() == cyclist_id.casefold()), None)
+        palmares_id = next((name for name in palmares_columns if name.casefold() == "fkIDcyclist".casefold()), None)
+        if cyclist_id is None or palmares_id is None:
+            raise ValueError("The CDB is missing a required cyclist ID column.")
+
+        cursor.execute("CREATE TEMP TABLE retired_cyclist_ids (id INTEGER PRIMARY KEY)")
+        cursor.executemany(
+            "INSERT INTO retired_cyclist_ids (id) VALUES (?)",
+            ((cyclist_id,) for cyclist_id in cyclist_ids),
+        )
+        existing_cyclists = cursor.execute(
+            f"SELECT COUNT(*) FROM {quote(cyclist_table)} AS cyclist "
+            f"JOIN retired_cyclist_ids retired ON retired.id = cyclist.{quote(cyclist_id)}"
+        ).fetchone()[0]
+        if existing_cyclists != len(cyclist_ids):
+            raise ValueError("One or more retired riders are missing from the CDB being exported.")
+        cursor.execute(
+            f"UPDATE {quote(palmares_table)} SET {quote(palmares_id)} = 0 "
+            f"WHERE {quote(palmares_id)} IN (SELECT id FROM retired_cyclist_ids)"
+        )
+        references_updated = cursor.rowcount
+        cursor.execute(
+            f"DELETE FROM {quote(cyclist_table)} "
+            f"WHERE {quote(cyclist_id)} IN (SELECT id FROM retired_cyclist_ids)"
+        )
+        cyclists_deleted = cursor.rowcount
+        connection.commit()
+        return {
+            "palmares_references_updated": references_updated,
+            "cyclists_deleted": cyclists_deleted,
+        }
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 # Load PCM Version Field Mappings from YAML
 # Maps PCM CDB fields to internal model fields
 def get_cdb_mappings():

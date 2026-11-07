@@ -36,7 +36,10 @@ from webapp.web.forms import (
     UserCreateForm,
 )
 from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, ExternalSyncLog, RaceResultMap
-from webapp.integrations.cdb import apply_updates_to_sqlite as _apply_release_updates_to_sqlite
+from webapp.integrations.cdb import (
+    apply_updates_to_sqlite as _apply_release_updates_to_sqlite,
+    retire_riders_from_sqlite as _retire_cdb_riders,
+)
 from webapp.integrations.cdb.converter import convert_sqlite_to_cdb as _convert_release_sqlite_to_cdb
 from webapp.integrations.discord import (
     notify_discord_race_stat_approved,
@@ -59,6 +62,7 @@ from webapp.integrations.activity_monitor_queue import (
     enqueue_activity_monitor_run,
     request_activity_monitor_run_stop,
     resume_activity_monitor_run,
+    retire_activity_monitor_rider,
 )
 from webapp.integrations.activity_monitor_planning import (
     count_due_activity_riders,
@@ -654,6 +658,11 @@ def _can_update_users():
 
 def _can_access_user_management():
     return _can_create_users() or _can_update_users() or current_user.has_permission('users', 'read')
+
+
+def _can_retire_activity_monitor_riders():
+    """Retirement changes the selected CDB and is restricted to administrators."""
+    return current_user.is_superadmin or 'admin' in current_user._authorization_cache()['roles']
 
 
 def _can_read_roles():
@@ -3468,6 +3477,7 @@ def _build_review_sqlite_for_release(namespace, release, artifact_basename):
     try:
         updates_payload = _load_release_stat_updates(namespace, release.id)
         pcs_slug_updates = _load_release_pcs_slug_updates(namespace, baseline_path)
+        retired_cyclist_ids = _load_release_retired_cyclist_ids(namespace)
         all_updates = dict(updates_payload['updates'])
         all_updates.update(pcs_slug_updates)
         applied_changes = _apply_release_updates_to_sqlite(
@@ -3475,6 +3485,15 @@ def _build_review_sqlite_for_release(namespace, release, artifact_basename):
             updates_payload['table_name'],
             updates_payload['id_column'],
             all_updates,
+        )
+        retirement_changes = (
+            _retire_cdb_riders(
+                working_abs_path,
+                namespace.pcm_version or 'PCM2025',
+                retired_cyclist_ids,
+            )
+            if retired_cyclist_ids
+            else {'cyclists_deleted': 0, 'palmares_references_updated': 0}
         )
         _convert_release_sqlite_to_cdb(working_abs_path, output_abs_path)
     except Exception:
@@ -3497,7 +3516,35 @@ def _build_review_sqlite_for_release(namespace, release, artifact_basename):
         'sha256_checksum': sha256_checksum,
         'applied_changes': applied_changes,
         'pcs_slug_changes': len(pcs_slug_updates),
+        'retired_cyclists_deleted': retirement_changes['cyclists_deleted'],
+        'retired_palmares_references_cleared': retirement_changes['palmares_references_updated'],
     }
+
+
+def _load_release_retired_cyclist_ids(namespace):
+    """Get current-namespace retired riders' WorldDB IDs for CDB removal."""
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            tables_ready = conn.execute(text("""
+                SELECT to_regclass('activity_monitor_riders') IS NOT NULL
+                   AND to_regclass('activity_monitor_reviews') IS NOT NULL
+            """)).scalar_one()
+            if not tables_ready:
+                return []
+            return [int(value) for value in conn.execute(text("""
+                SELECT r.source_worlddb_rider_id
+                FROM activity_monitor_riders r
+                JOIN activity_monitor_reviews review
+                  ON review.rider_id = r.id
+                 AND review.identity_generation = r.identity_generation
+                 AND review.review_kind = 'retirement'
+                 AND review.review_status = 'retired'
+                WHERE r.source_worlddb_rider_id IS NOT NULL
+                ORDER BY r.source_worlddb_rider_id
+            """)).scalars().all()]
+    finally:
+        engine.dispose()
 
 
 def _build_release_stat_sql_for_release(namespace, release, artifact_basename):
@@ -4857,7 +4904,7 @@ def activity_monitor_riders():
         'direction': (request.args.get('direction', type=str) or 'asc').strip().lower(),
     }
     export_csv = request.args.get('export', type=str) == 'csv'
-    if filters['status'] not in {'monitored', 'awaiting', 'checked', 'attention', 'no_evidence', 'other', 'all'}:
+    if filters['status'] not in {'monitored', 'awaiting', 'checked', 'attention', 'no_evidence', 'other', 'retired', 'all'}:
         filters['status'] = 'monitored'
     if filters['direction'] not in {'asc', 'desc'}:
         filters['direction'] = 'asc'
@@ -4966,16 +5013,26 @@ def activity_monitor_riders():
                         )
                         params.update(division=f"%{_normalize_name_search_term(filters['division'])}%", division_exact=filters['division'])
 
+                    retired_sql = """EXISTS (
+                        SELECT 1 FROM activity_monitor_reviews retired
+                        WHERE retired.rider_id = r.id
+                          AND retired.identity_generation = r.identity_generation
+                          AND retired.review_kind = 'retirement'
+                          AND retired.review_status = 'retired'
+                    )"""
+
                     status_conditions = {
+                        # All Riders includes retired entries so they remain searchable;
+                        # selection and scheduling exclude them separately.
                         'monitored': 'r.eligible AND r.present_in_cdb',
-                        'awaiting': """r.eligible AND r.present_in_cdb AND NOT EXISTS (
+                        'awaiting': f"""NOT {retired_sql} AND r.eligible AND r.present_in_cdb AND NOT EXISTS (
                             SELECT 1 FROM activity_monitor_source_checks c WHERE c.rider_id = r.id
                         )""",
-                        'checked': """r.eligible AND r.present_in_cdb AND EXISTS (
+                        'checked': f"""NOT {retired_sql} AND r.eligible AND r.present_in_cdb AND EXISTS (
                             SELECT 1 FROM activity_monitor_source_checks c WHERE c.rider_id = r.id
                         )""",
-                        'attention': _activity_monitor_attention_sql('r'),
-                        'no_evidence': """r.eligible AND r.present_in_cdb AND NOT EXISTS (
+                        'attention': f'NOT {retired_sql} AND ({_activity_monitor_attention_sql("r")})',
+                        'no_evidence': f"""NOT {retired_sql} AND r.eligible AND r.present_in_cdb AND NOT EXISTS (
                             SELECT 1 FROM activity_monitor_results e
                             WHERE e.rider_id = r.id
                               AND e.identity_generation = r.identity_generation
@@ -5002,7 +5059,8 @@ def activity_monitor_riders():
                                   )
                               )
                         )""",
-                        'other': '(NOT r.eligible OR NOT r.present_in_cdb)',
+                        'other': f'(NOT {retired_sql} AND (NOT r.eligible OR NOT r.present_in_cdb))',
+                        'retired': retired_sql,
                     }
                     if filters['status'] in status_conditions:
                         where.append(status_conditions[filters['status']])
@@ -5020,6 +5078,7 @@ def activity_monitor_riders():
                             LEFT JOIN cdb_division d ON d.id = t.division_id
                             {where_sql}
                             {'AND' if where_sql else 'WHERE'} r.eligible AND r.present_in_cdb
+                              AND NOT {retired_sql}
                             ORDER BY r.last_name ASC NULLS LAST,
                                      r.first_name ASC NULLS LAST,
                                      r.id ASC
@@ -5039,6 +5098,7 @@ def activity_monitor_riders():
                         'division': 'division_name',
                         'age': "date_part('year', age(CURRENT_DATE, r.birth_date))",
                         'status': f"""CASE
+                            WHEN {retired_sql} THEN 'Retired'
                             WHEN NOT r.eligible OR NOT r.present_in_cdb THEN 'Not monitored'
                             WHEN {_activity_monitor_attention_sql('r')} THEN 'Needs Review'
                             WHEN latest_result.result_date IS NOT NULL THEN 'Activity documented'
@@ -5188,6 +5248,7 @@ def activity_monitor_riders():
                                     THEN date_part('year', age(CURRENT_DATE, r.birth_date))::integer
                                     ELSE NULL END AS age,
                                r.eligible, r.present_in_cdb,
+                               {retired_sql} AS is_retired,
                                EXISTS (
                                    SELECT 1 FROM activity_monitor_identity_alerts a
                                    WHERE a.rider_id = r.id AND a.status = 'open'
@@ -5415,7 +5476,9 @@ def activity_monitor_riders():
         check_status = (rider.get('latest_check_status') or '').replace('_', ' ').strip()
         rider['latest_check_status_display'] = check_status or '—'
         rider['needs_attention'] = bool(rider.get('needs_attention'))
-        if not rider.get('eligible') or not rider.get('present_in_cdb'):
+        if rider.get('is_retired'):
+            rider['status_label'] = 'Retired'
+        elif not rider.get('eligible') or not rider.get('present_in_cdb'):
             rider['status_label'] = 'Not monitored'
         elif rider['needs_attention']:
             rider['status_label'] = 'Needs Review'
@@ -6701,6 +6764,43 @@ def activity_monitor_resume_run(run_id):
     flash(f"Run {run_id} resumed. {result['requeued_count']} remaining rider check(s) are back in the queue; completed checks were left as they were.", 'success')
     return redirect(url_for('web.activity_monitor_run_checks', run_id=run_id))
 
+@web_bp.route('/activity-monitor/riders/<int:rider_id>/retire', methods=['POST'])
+@login_required
+def activity_monitor_retire_rider(rider_id):
+    """Retire a rider in the selected namespace; admins only."""
+    if not _can_access_panel('activity_monitor'):
+        abort(403)
+    if not _can_retire_activity_monitor_riders():
+        abort(403)
+    selected_namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if selected_namespace is None:
+        flash('Select a namespace before retiring a rider.', 'warning')
+        return redirect(url_for('web.activity_monitor_riders'))
+    engine = create_engine(selected_namespace.build_connection_string())
+    try:
+        result = retire_activity_monitor_rider(
+            engine, rider_id, actor_user_id=current_user.id
+        )
+    except ValueError as exc:
+        flash(str(exc), 'warning')
+        return redirect(url_for('web.activity_monitor_rider_detail', rider_id=rider_id))
+    except Exception:
+        logger.exception(
+            'Could not retire Activity Monitor rider %s in namespace %s',
+            rider_id,
+            selected_namespace.slug,
+        )
+        flash('The rider could not be retired. No changes were saved.', 'error')
+        return redirect(url_for('web.activity_monitor_rider_detail', rider_id=rider_id))
+    finally:
+        engine.dispose()
+    flash(
+        f"Rider retired. {result['cancelled_count']} queued check(s) were cancelled; running checks may finish.",
+        'success',
+    )
+    return redirect(url_for('web.activity_monitor_rider_detail', rider_id=rider_id))
+
+
 @web_bp.route('/activity-monitor/riders/<int:rider_id>')
 @login_required
 def activity_monitor_rider_detail(rider_id):
@@ -6739,6 +6839,13 @@ def activity_monitor_rider_detail(rider_id):
                        COALESCE(NULLIF(d.constant, ''), d.id::text, '—') AS division_name,
                        r.identity_status, r.identity_hold,
                        r.identity_hold_reason, r.eligible, r.present_in_cdb
+                       , EXISTS (
+                           SELECT 1 FROM activity_monitor_reviews retired
+                           WHERE retired.rider_id = r.id
+                             AND retired.identity_generation = r.identity_generation
+                             AND retired.review_kind = 'retirement'
+                             AND retired.review_status = 'retired'
+                       ) AS is_retired
                 FROM activity_monitor_riders r
                 LEFT JOIN cdb_team t ON t.id = r.team_id
                 LEFT JOIN cdb_division d ON d.id = t.division_id
@@ -7342,6 +7449,7 @@ def activity_monitor_rider_detail(rider_id):
         latest_firstcycling_check=latest_firstcycling_check,
         research_checks=research_checks,
         research_today=datetime.now(ZoneInfo('Europe/Amsterdam')).date().isoformat(),
+        can_retire_rider=_can_retire_activity_monitor_riders(),
         load_error=load_error,
     )
 
