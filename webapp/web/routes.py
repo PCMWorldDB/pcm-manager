@@ -5685,8 +5685,16 @@ def activity_monitor_problems():
                               FROM activity_monitor_source_checks newer_problem
                               JOIN activity_monitor_runs newer_problem_run
                                 ON newer_problem_run.id = newer_problem.run_id
-                              WHERE newer_problem.rider_id = c.rider_id
-                                AND newer_problem.identity_generation = c.identity_generation
+                              WHERE (
+                                  (
+                                      c.rider_id IS NOT NULL
+                                      AND newer_problem.rider_id = c.rider_id
+                                  )
+                                  OR (
+                                      c.source_worlddb_rider_id IS NOT NULL
+                                      AND newer_problem.source_worlddb_rider_id = c.source_worlddb_rider_id
+                                  )
+                              )
                                 AND (newer_problem_run.source_record_key LIKE 'manual-run:%'
                                      OR newer_problem_run.source_record_key LIKE 'scheduled-run:%')
                                 AND (
