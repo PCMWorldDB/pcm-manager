@@ -7,6 +7,9 @@
     <div class="col-xl-10">
         <h2 class="mb-2">Namespaces</h2>
         <p class="text-muted mb-4">Choose the CDB namespace to use across WorldDB.</p>
+        {% if current_user.is_superadmin or current_user.has_permission('activity-monitor', 'read') %}
+        <p><a href="{{ url_for('web.activity_monitor') }}">Activity Monitor</a></p>
+        {% endif %}
         {% if available_namespaces %}
         <div class="list-group">
             {% for namespace in available_namespaces %}

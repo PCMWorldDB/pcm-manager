@@ -1,0 +1,98 @@
+/* Shared section navigation. Add nav-subtabs to a nav-tabs/nav-pills row
+   for a secondary level; keep Bootstrap's existing tab behavior and markup. */
+.nav-tabs,
+.nav-pills {
+    --section-surface: #edf1f6;
+    --section-text: #475569;
+    --section-hover: #dfe7f0;
+    --section-active: var(--brand-primary, #002352);
+    --section-active-text: #fff;
+    --section-focus: #517eb7;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.375rem;
+    border: 0;
+    border-radius: 1rem;
+    background: var(--section-surface);
+    list-style: none;
+}
+
+body.dark-mode .nav-tabs,
+body.dark-mode .nav-pills {
+    --section-surface: #202a39;
+    --section-text: #cbd5e1;
+    --section-hover: #334155;
+    --section-active: #bcd6f7;
+    --section-active-text: #102b4c;
+    --section-focus: #93c5fd;
+}
+
+:is(.nav-tabs, .nav-pills) .nav-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.875rem;
+    margin: 0;
+    padding: 0.625rem 1.125rem;
+    border: 0;
+    border-radius: 0.75rem;
+    background: transparent;
+    color: var(--section-text);
+    font-family: inherit;
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+    transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+:is(.nav-tabs, .nav-pills) .nav-link:hover {
+    background: var(--section-hover);
+    color: var(--section-text);
+}
+
+:is(.nav-tabs, .nav-pills) .nav-link:focus-visible {
+    outline: 3px solid var(--section-focus);
+    outline-offset: 2px;
+}
+
+:is(.nav-tabs, .nav-pills) .nav-link.active,
+:is(.nav-tabs, .nav-pills) .show > .nav-link {
+    background: var(--section-active);
+    color: var(--section-active-text);
+    box-shadow: 0 2px 5px rgb(15 23 42 / 14%);
+}
+
+:is(.nav-tabs, .nav-pills) .nav-link:is(.disabled, :disabled, [aria-disabled="true"]) {
+    background: transparent;
+    color: var(--section-text);
+    box-shadow: none;
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* Subtabs retain the same states with a quieter, more compact hierarchy. */
+:is(.nav-tabs, .nav-pills).nav-subtabs {
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 0.875rem;
+}
+
+.nav-subtabs .nav-link {
+    min-height: 2.75rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 0.625rem;
+    font-size: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(.nav-tabs, .nav-pills) .nav-link {
+        transition: none;
+    }
+}

@@ -15,24 +15,7 @@ body > .container {
 .panel-card .card-body {
     padding: 20px;
 }
-.detail-grid {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 10px 24px;
-}
-.detail-item {
-    padding: 0;
-}
-.detail-label {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #6b7280;
-    margin-bottom: 4px;
-}
-.detail-value {
-    color: #111827;
-    font-weight: 600;
-}
+
 .result-status-future {
     color: #6b7280;
     font-size: 0.9rem;
@@ -163,12 +146,7 @@ body.dark-mode .panel-card {
     box-shadow: none;
     border: 1px solid #4a5568;
 }
-body.dark-mode .detail-label {
-    color: #9ca3af;
-}
-body.dark-mode .detail-value {
-    color: #f3f4f6;
-}
+
 body.dark-mode .results-table thead th {
     border-color: #4b5563;
 }
@@ -193,16 +171,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
     border-color: #fbbf24;
     box-shadow: inset 0 0 0 2px #fbbf24;
 }
-@media (max-width: 992px) {
-    .detail-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-@media (max-width: 576px) {
-    .detail-grid {
-        grid-template-columns: 1fr;
-    }
-}
+
 {% endblock %}
 
 {% block content %}
@@ -257,8 +226,8 @@ body.dark-mode .stat-input-row.has-stat-delta {
             <div class="result-status-future mt-2 text-end">Available on race start date</div>
             {% endif %}
         </div>
-        <a href="{{ url_for('web.stats_editor') }}" class="btn btn-outline-secondary">
-            Back To Stats Editor
+        <a href="{{ url_for('web.races') }}" class="btn btn-outline-secondary">
+            Back To Races
         </a>
     </div>
 </div>
@@ -266,48 +235,48 @@ body.dark-mode .stat-input-row.has-stat-delta {
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Race Details</h5>
-        <div class="detail-grid">
-            <div class="detail-item">
-                <div class="detail-label">Category</div>
-                <div class="detail-value">{{ race.category or '-' }}</div>
+        <div class="object-attributes">
+            <div class="object-attribute">
+                <div class="object-attribute-label">Category</div>
+                <div class="object-attribute-value">{{ race.category or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Classification</div>
-                <div class="detail-value">
+            <div class="object-attribute">
+                <div class="object-attribute-label">Classification</div>
+                <div class="object-attribute-value">
                     {{ race.classification or '-' }}
                 </div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Description</div>
-                <div class="detail-value">{{ race.description or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">Description</div>
+                <div class="object-attribute-value">{{ race.description or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Nation</div>
-                <div class="detail-value">{{ race.nation_name or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">Nation</div>
+                <div class="object-attribute-value">{{ race.nation_name or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Profile</div>
-                <div class="detail-value">{{ race.profile or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">Profile</div>
+                <div class="object-attribute-value">{{ race.profile or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Distance (km)</div>
-                <div class="detail-value">{{ race.distance_km if race.distance_km is not none else '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">Distance (km)</div>
+                <div class="object-attribute-value">{{ race.distance_km if race.distance_km is not none else '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">Start Date</div>
-                <div class="detail-value">{{ race.start_date or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">Start Date</div>
+                <div class="object-attribute-value">{{ race.start_date or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">End Date</div>
-                <div class="detail-value">{{ race.end_date or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">End Date</div>
+                <div class="object-attribute-value">{{ race.end_date or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">From</div>
-                <div class="detail-value">{{ race.start_location or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">From</div>
+                <div class="object-attribute-value">{{ race.start_location or '-' }}</div>
             </div>
-            <div class="detail-item">
-                <div class="detail-label">To</div>
-                <div class="detail-value">{{ race.end_location or '-' }}</div>
+            <div class="object-attribute">
+                <div class="object-attribute-label">To</div>
+                <div class="object-attribute-value">{{ race.end_location or '-' }}</div>
             </div>
         </div>
     </div>
@@ -596,7 +565,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
                                     min="50"
                                     max="85"
                                     step="1"
-                                    {% if not can_update_stats %}disabled title="Editing locked"{% endif %}>
+                                    {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields %}disabled title="Editing locked"{% endif %}>
                             </div>
                             {% else %}
                             -

@@ -1,10 +1,17 @@
-"""Celery worker entrypoint and background task definitions."""
+﻿"""Celery worker entrypoint and background task definitions."""
 import json
 import logging
 import random
+import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import uuid4
 from zoneinfo import ZoneInfo
+
+from flask import current_app
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
@@ -12,7 +19,8 @@ from sqlalchemy.orm import Session
 from webapp import create_app
 from webapp.extensions import celery as _celery, db
 from webapp.integrations.firstcycling.api import FirstCyclingClient
-from webapp.models import ExternalSyncLog
+from webapp.integrations.pcs.profile import parse_pcs_profile
+from webapp.models import ExternalCallTask, ExternalCallTaskGroup, ExternalSyncLog
 from webapp.models.main.namespace import Namespace
 
 SYNC_TYPE_RACE = 'fc_race_calendar'
@@ -20,6 +28,391 @@ SYNC_TYPE_TEAMS = 'fc_teams'
 SYNC_TYPE_RIDERS = 'fc_riders'
 SYNC_TYPE_RACE_RESULTS = 'fc_race_results'
 logger = logging.getLogger(__name__)
+
+
+class RetryableFetch(Exception):
+    def __init__(self, message, delay=60, http_status=None):
+        super().__init__(message)
+        self.delay = delay
+        self.http_status = http_status
+
+
+def retry_after(value):
+    try:
+        return max(float(value), 0)
+    except (TypeError, ValueError):
+        try:
+            return max((parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds(), 0)
+        except (TypeError, ValueError, OverflowError):
+            return 60
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def validate_request(provider, endpoint, params):
+    if endpoint != 'get_rider_profile' or provider not in {'pcs', 'firstcycling'}:
+        raise ValueError('Unsupported provider/endpoint')
+    if provider == 'pcs':
+        slug = params.get('rider_slug', '')
+        if not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', slug):
+            raise ValueError('A canonical PCS rider_slug is required')
+    else:
+        rider_id = params.get('rider_id')
+        if isinstance(rider_id, bool) or not str(rider_id).isdigit() or int(rider_id) <= 0:
+            raise ValueError('A positive FirstCycling rider_id is required')
+
+
+def fetch_profile(provider, params):
+    if provider == 'firstcycling':
+        from webapp.integrations.firstcycling.api import FirstCyclingClient
+        client = FirstCyclingClient()
+        # Queue owns attempts. FC has no queue delay or PCS rate policy.
+        client.request_delay_seconds = 0
+        client.retry_attempts = 0
+        try:
+            payload, _ = client.get_rider(int(params['rider_id']))
+            return payload
+        except Exception as exc:
+            cause = exc.__cause__
+            if isinstance(cause, HTTPError) and (cause.code == 429 or cause.code >= 500):
+                raise RetryableFetch('FirstCycling temporarily unavailable', retry_after(cause.headers.get('Retry-After')), cause.code) from exc
+            if isinstance(cause, URLError):
+                raise RetryableFetch('FirstCycling connection failure') from exc
+            raise
+
+    url = f"https://www.procyclingstats.com/rider/{params['rider_slug']}/road"
+    request = Request(url, headers={'User-Agent': 'WorldDB/1.0', 'Accept': 'text/html'})
+    try:
+        with build_opener(_NoRedirect()).open(request, timeout=30) as response:
+            html = response.read(5_000_001)
+            if len(html) > 5_000_000:
+                raise ValueError('PCS profile exceeds size limit')
+    except HTTPError as exc:
+        if exc.code in {403, 429} or exc.code >= 500:
+            raise RetryableFetch('PCS cooldown required', max(60, retry_after(exc.headers.get('Retry-After'))), exc.code) from exc
+        raise ValueError(f'PCS profile HTTP {exc.code}') from exc
+    except (URLError, TimeoutError) as exc:
+        raise RetryableFetch('PCS connection failure') from exc
+    parsed = parse_pcs_profile(html)
+    canonical_slug = parsed['profile'].get('canonical_slug')
+    if canonical_slug and canonical_slug != params['rider_slug']:
+        raise ValueError('PCS returned a different rider profile')
+    if parsed['status'] not in {'results_parsed', 'results_table_empty'}:
+        raise ValueError(f"PCS profile could not be parsed: {parsed['status']}")
+    return parsed
+
+
+# Stable PostgreSQL advisory lock key, shared by every queue worker.
+PCS_LOCK = 812734902
+
+
+def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
+                  origin='manual', priority=None):
+    """Validate all requests before inserting; caller commits before dispatch."""
+    if origin not in {'manual', 'scheduled'}:
+        raise ValueError('Unsupported task group origin')
+    priority = priority if priority is not None else ('high' if origin == 'manual' else 'low')
+    if priority not in {'high', 'low'}:
+        raise ValueError('Unsupported task group priority')
+    requests = list(requests)
+    if not requests:
+        raise ValueError('A task group requires at least one request')
+    for request in requests:
+        validate_request(request['provider'], request['endpoint'], request['params'])
+    group = ExternalCallTaskGroup(status='queued', origin=origin, priority=priority,
+                                  namespace_id=namespace_id, executed_by_id=executed_by_id,
+                                  message=message, requested_count=len(requests))
+    db.session.add(group)
+    db.session.flush()
+    for request in requests:
+        db.session.add(ExternalCallTask(
+            task_group_id=group.id, provider=request['provider'], endpoint=request['endpoint'],
+            request_params_json=json.dumps(request['params']), status='queued',
+            related_to_id=request.get('related_to_id'),
+            related_to_table=request.get('related_to_table'),
+            attempt=0, max_attempts=3,
+        ))
+    db.session.flush()
+    return group
+
+
+def _refresh_group(group_id):
+    if group_id is None:
+        return
+    group = db.session.execute(select(ExternalCallTaskGroup).where(
+        ExternalCallTaskGroup.id == group_id).with_for_update()).scalar_one()
+    # Only queue tasks affect queue group aggregates; FC audit rows do not.
+    states = db.session.execute(select(ExternalCallTask.status).where(
+        ExternalCallTask.task_group_id == group_id,
+        ExternalCallTask.status != 'historical')).scalars().all()
+    group.synced_count = states.count('success')
+    group.failed_count = states.count('failed')
+    if any(state in {'queued', 'retry_wait', 'running'} for state in states):
+        group.status = 'running'
+    elif group.failed_count:
+        group.status = 'partial' if group.synced_count else 'failed'
+    else:
+        group.status = 'success'
+
+
+def execute_task(task_id):
+    """Claim exactly once, commit before I/O, then store results and group state."""
+    now = datetime.utcnow()
+    task = db.session.execute(select(ExternalCallTask).where(
+        ExternalCallTask.id == task_id).with_for_update(skip_locked=True)).scalar_one_or_none()
+    if task is None or task.status not in {'queued', 'retry_wait'} or task.available_at > now:
+        db.session.rollback()
+        return False
+    if task.provider == 'pcs':
+        # Non-blocking lock avoids deadlocks with workers holding other task rows.
+        if not db.session.execute(text('SELECT pg_try_advisory_xact_lock(:key)'), {'key': PCS_LOCK}).scalar():
+            db.session.rollback()
+            return False
+        running = db.session.execute(select(ExternalCallTask.id).where(
+            ExternalCallTask.provider == 'pcs', ExternalCallTask.status == 'running')).first()
+        last_start, cooldown = db.session.execute(select(
+            func.max(ExternalCallTask.started_at), func.max(ExternalCallTask.available_at)
+        ).where(ExternalCallTask.provider == 'pcs', ExternalCallTask.started_at.isnot(None))).one()
+        delay = max(1, float(current_app.config.get('PCS_REQUEST_DELAY_SECONDS', 5)))
+        if running or (last_start and now < last_start + timedelta(seconds=delay)) or (cooldown and cooldown > now):
+            db.session.rollback()
+            return False
+    task.status = 'running'
+    task.started_at = now
+    task.attempt += 1
+    provider, endpoint = task.provider, task.endpoint
+    params_json = task.request_params_json
+    attempt, max_attempts = task.attempt, task.max_attempts
+    _refresh_group(task.task_group_id)
+    db.session.commit()
+    result, error, status, available_at, http_status = None, None, 'success', now, None
+    try:
+        params = json.loads(params_json or '{}')
+        validate_request(provider, endpoint, params)
+        result = json.dumps(fetch_profile(provider, params), default=str)
+    except RetryableFetch as exc:
+        status = 'retry_wait' if attempt < max_attempts else 'failed'
+        available_at = datetime.utcnow() + timedelta(seconds=max(exc.delay, 2 ** attempt))
+        error, http_status = str(exc), exc.http_status
+    except Exception as exc:
+        status, error = 'failed', str(exc)
+    # Serialize duplicate completion and group aggregate updates.
+    task = db.session.execute(select(ExternalCallTask).where(
+        ExternalCallTask.id == task_id).with_for_update()).scalar_one()
+    task.status, task.result_json, task.error_message = status, result, error
+    task.available_at, task.http_status = available_at, http_status
+    task.outcome = status
+    task.finished_at = datetime.utcnow() if status != 'retry_wait' else None
+    _refresh_group(task.task_group_id)
+    db.session.commit()
+    return True
+
+
+@_celery.task(name='webapp.tasks.run_external_call')
+def run_external_call(task_id):
+    # Old per-request messages must not bypass group ordering after upgrading.
+    logger.warning('Ignoring legacy external-call delivery: task_id=%s', task_id)
+    return False
+
+
+def submit_external_group(group_id):
+    """Publish one committed group, serializing the shared low-queue budget.
+
+    The row lock stays held through publication so a fast consumer cannot claim
+    the group before its submission metadata commits. Broker publication and a
+    database commit are not atomic; message tokens and execution locks make a
+    repeated delivery harmless if a publisher loses its connection.
+    """
+    db.session.execute(text('SELECT pg_advisory_xact_lock(812734904)'))
+    group = db.session.scalar(select(ExternalCallTaskGroup).where(
+        ExternalCallTaskGroup.id == group_id,
+    ).with_for_update())
+    if group is None or group.status != 'queued' or group.is_worker_queued:
+        db.session.rollback()
+        return False
+    if not db.session.scalar(select(ExternalCallTask.id).where(
+        ExternalCallTask.task_group_id == group.id,
+        ExternalCallTask.status.in_(['queued', 'retry_wait']),
+    ).limit(1)):
+        db.session.rollback()
+        return False
+    if group.priority == 'low':
+        waiting = db.session.scalar(select(func.count()).select_from(ExternalCallTaskGroup).where(
+            ExternalCallTaskGroup.priority == 'low',
+            ExternalCallTaskGroup.status == 'queued',
+            ExternalCallTaskGroup.is_worker_queued.is_(True),
+        ))
+        if waiting >= current_app.config['PCS_RIDER_CHECK_SCHEDULER_TASKGROUP_CELERY_MAX_QUEUED']:
+            db.session.rollback()
+            return False
+    token = str(uuid4())
+    group.is_worker_queued = True
+    group.worker_message_id = token
+    group.worker_queued_at = datetime.utcnow()
+    try:
+        run_external_group.apply_async(
+            args=[group.id, token], task_id=token, queue=f'external.{group.priority}',
+            retry=False,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return True
+
+
+def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=None, message=None):
+    """Create/commit high-priority work and notify Celery immediately.
+
+    Call from an authorized application action after resolving selected riders.
+    This commits the caller's transaction; do not include unrelated pending work.
+    A broker failure leaves a queued database group for the hourly dispatcher.
+    """
+    group = enqueue_group(requests, namespace_id=namespace_id,
+                          executed_by_id=executed_by_id, message=message, origin='manual')
+    group_id = group.id
+    db.session.commit()
+    try:
+        submit_external_group(group_id)
+    except Exception:
+        logger.exception('Could not submit manual external group: group_id=%s', group_id)
+    return db.session.get(ExternalCallTaskGroup, group_id)
+
+
+def enqueue_scheduled_pcs_groups(requests, *, namespace_id=None):
+    """Batch selected PCS riders into unlimited low-priority database groups.
+
+    One canonical PCS profile request represents one rider. Selection SQL and
+    next-check-date fields are future work. Caller commits all generated groups
+    before dispatch_queued_external_groups; no Celery publication happens here.
+    """
+    requests = list(requests)
+    slugs = set()
+    for request in requests:
+        validate_request(request['provider'], request['endpoint'], request['params'])
+        if request['provider'] != 'pcs':
+            raise ValueError('Scheduled PCS groups accept only PCS rider requests')
+        slug = request['params']['rider_slug']
+        if slug in slugs:
+            raise ValueError('Scheduled rider selection must contain distinct PCS riders')
+        slugs.add(slug)
+    size = current_app.config['PCS_RIDER_CHECK_SCHEDULER_TASKGROUP_MAX_SIZE']
+    return [enqueue_group(requests[offset:offset + size], namespace_id=namespace_id,
+                          origin='scheduled') for offset in range(0, len(requests), size)]
+
+
+def dispatch_queued_external_groups():
+    """Fill available low-priority slots; high-priority recovery is uncapped."""
+    ids = db.session.scalars(select(ExternalCallTaskGroup.id).where(
+        ExternalCallTaskGroup.status == 'queued',
+        ExternalCallTaskGroup.is_worker_queued.is_(False),
+    ).order_by(ExternalCallTaskGroup.timestamp, ExternalCallTaskGroup.id)).all()
+    db.session.rollback()
+    submitted = []
+    for group_id in ids:
+        if submit_external_group(group_id):
+            submitted.append(group_id)
+    return submitted
+
+
+def _next_group_task(group_id):
+    """Return runnable work and the earliest retry/spacing wait in this group."""
+    now = datetime.utcnow()
+    running, last_start, cooldown = db.session.execute(select(
+        func.count().filter(ExternalCallTask.status == 'running'),
+        func.max(ExternalCallTask.started_at),
+        func.max(ExternalCallTask.available_at).filter(ExternalCallTask.started_at.isnot(None)),
+    ).where(ExternalCallTask.provider == 'pcs')).one()
+    delay = max(1, float(current_app.config.get('PCS_REQUEST_DELAY_SECONDS', 5)))
+    pcs_ready = not (running or (last_start and now < last_start + timedelta(seconds=delay))
+                     or (cooldown and cooldown > now))
+    pcs_after = max(filter(None, [
+        now, last_start + timedelta(seconds=delay) if last_start else None, cooldown,
+    ]))
+    pending = db.session.scalars(select(ExternalCallTask).where(
+        ExternalCallTask.task_group_id == group_id,
+        ExternalCallTask.status.in_(['queued', 'retry_wait']),
+    ).order_by(ExternalCallTask.id)).all()
+    waits = []
+    task_id = None
+    for task in pending:
+        ready_at = task.available_at
+        if task.provider == 'pcs' and not pcs_ready:
+            ready_at = max(ready_at, pcs_after, now + timedelta(seconds=1) if running else now)
+        if ready_at <= now:
+            task_id = task.id
+            break
+        waits.append((ready_at - now).total_seconds())
+    db.session.rollback()
+    return task_id, max(0.1, min(waits)) if waits else None
+
+
+@_celery.task(bind=True, name='webapp.tasks.run_external_group', acks_late=True,
+              reject_on_worker_lost=True, max_retries=None)
+def run_external_group(self, group_id, submission_id):
+    """Finish one group, retaining ownership through provider/retry waits."""
+    with db.engines['main'].connect() as connection:
+        acquired = connection.scalar(text('SELECT pg_try_advisory_lock(812734903)'))
+        connection.commit()
+        if not acquired:
+            raise self.retry(countdown=5)
+        processed = 0
+        try:
+            group = db.session.scalar(select(ExternalCallTaskGroup).where(
+                ExternalCallTaskGroup.id == group_id,
+            ).with_for_update())
+            if (group is None or not submission_id or group.worker_message_id != submission_id
+                    or group.status not in {'queued', 'running'}):
+                db.session.rollback()
+                return 0
+            group.status = 'running'
+            group.is_worker_queued = False
+            # Owning the execution lock proves any shared-queue running request
+            # was interrupted, including one from a different redelivered group.
+            # Retain its failure for review rather than silently fetching it twice.
+            interrupted = db.session.scalars(select(ExternalCallTask).where(
+                ExternalCallTask.status == 'running',
+            ).with_for_update()).all()
+            for task in interrupted:
+                task.status = 'failed'
+                task.error_message = 'Worker interrupted; review before requeueing'
+                task.finished_at = datetime.utcnow()
+            for interrupted_group_id in sorted({task.task_group_id for task in interrupted
+                                                if task.task_group_id not in {None, group_id}}):
+                _refresh_group(interrupted_group_id)
+            db.session.commit()
+            while True:
+                task_id, wait = _next_group_task(group_id)
+                if task_id is None:
+                    if wait is not None:
+                        time.sleep(min(wait, 30))
+                        continue
+                    _refresh_group(group_id)
+                    db.session.commit()
+                    break
+                if execute_task(task_id):
+                    processed += 1
+                else:
+                    time.sleep(0.1)
+            return processed
+        except Exception as exc:
+            db.session.rollback()
+            # Keep the same group/message identity on infrastructure failures.
+            # Normal provider retries stay inside the loop above.
+            raise self.retry(exc=exc, countdown=30)
+        finally:
+            db.session.rollback()
+            connection.execute(text('SELECT pg_advisory_unlock(812734903)'))
+            connection.commit()
+
+
+@_celery.task(name='webapp.tasks.poll_external_calls', acks_late=True)
+def poll_external_calls():
+    """Hourly dispatch; future rider selection must generate/commit groups first."""
+    return dispatch_queued_external_groups()
 
 
 def _update_sync_log(log_id, **updates):

@@ -1,0 +1,40 @@
+﻿# Application settings only. Environment-backed settings are loaded separately.
+SITE_VERSION: v0.4.3
+SQLALCHEMY_TRACK_MODIFICATIONS: false
+SQLALCHEMY_ENGINE_OPTIONS:
+  pool_size: 10
+  pool_recycle: 3600
+  pool_pre_ping: true
+  max_overflow: 20
+NAMESPACE_ENGINE_OPTIONS:
+  pool_size: 3
+  pool_recycle: 3600
+  pool_pre_ping: true
+  max_overflow: 5
+WORKER_TIMEZONE: Europe/Amsterdam
+EXTERNAL_CALL_POLL_SECONDS: 3600
+PCS_RIDER_CHECK_SCHEDULER_TASKGROUP_MAX_SIZE: 30
+PCS_RIDER_CHECK_SCHEDULER_TASKGROUP_CELERY_MAX_QUEUED: 5
+ACTIVITY_MONITOR_POLL_SECONDS: 60
+FILESTORE_ROOT: ./filestore
+SESSION_COOKIE_NAME: pcm_session
+SESSION_COOKIE_HTTPONLY: true
+SESSION_COOKIE_SECURE: false
+SESSION_COOKIE_SAMESITE: Lax
+PERMANENT_SESSION_LIFETIME_DAYS: 7
+MAX_CONTENT_LENGTH: 524288000  # bytes (500 MiB)
+ALLOWED_EXTENSIONS: [db, cdb, sqlite, sqlite3]
+PCS_REQUEST_DELAY_SECONDS: 5
+WTF_CSRF_ENABLED: true
+WTF_CSRF_TIME_LIMIT: null  # seconds; null disables token expiry
+DEBUG: true
+DEBUG_TB_ENABLED: false
+TESTING: false
+PCM_VERSIONS:
+  - [PCM2024, PCM 2024]
+  - [PCM2025, PCM 2025]
+  - [PCM2026, PCM 2026]
+SEASONS:
+  - year: 2026
+    gender: Men
+    is_default: true

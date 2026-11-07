@@ -184,7 +184,7 @@ body.dark-mode .lifecycle-arrow {
 
 {% if active_tab != 'catalog' and selected_release %}
 <div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-3">
-            <ul class="nav nav-tabs flex-grow-1">
+            <ul class="nav nav-tabs nav-subtabs flex-grow-1" aria-label="Release sections">
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'overview' %}active{% endif %} {% if not selected_release %}disabled{% endif %}" href="{{ url_for('web.releases', tab='overview', release_id=selected_release_id) if selected_release else '#' }}">Overview</a>
                 </li>

@@ -100,15 +100,7 @@
                                     content: ' ↓';
                                     color: var(--brand-primary);
                                 }
-                                .activity-monitor-page .nav-tabs .nav-link.active {
-                                    background-color: var(--brand-primary);
-                                    border-color: var(--brand-primary);
-                                    color: #fff;
-                                }
-                                .activity-monitor-page .nav-tabs .nav-link.active:hover,
-                                .activity-monitor-page .nav-tabs .nav-link.active:focus {
-                                    color: #fff;
-                                }
+
                                 body.dark-mode th.sortable-col::after {
                                     color: #9ca3af;
                                 }
@@ -293,26 +285,6 @@
             --bs-btn-disabled-border-color: #4a5568;
         }
 
-        body.dark-mode .nav-tabs {
-            --bs-nav-tabs-border-color: #4a5568;
-            --bs-nav-tabs-link-hover-border-color: #4a5568;
-            --bs-nav-tabs-link-active-color: #ffffff;
-            --bs-nav-tabs-link-active-bg: var(--brand-primary);
-            --bs-nav-tabs-link-active-border-color: var(--brand-primary-border);
-        }
-
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled) {
-            color: #ffffff;
-            background-color: #374151;
-            border-color: #4a5568;
-        }
-
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):hover,
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):focus-visible {
-            background-color: #4a5568;
-            border-color: var(--brand-primary-border);
-        }
-
         .bg-primary {
             background-color: var(--brand-primary) !important;
         }
@@ -323,11 +295,6 @@
 
         .border-primary {
             border-color: var(--brand-primary) !important;
-        }
-
-        .nav-pills .nav-link.active,
-        .nav-pills .show > .nav-link {
-            background-color: var(--brand-primary);
         }
 
         .nav-link {
@@ -857,6 +824,8 @@
         }
         {% block styles %}{% endblock %}
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/navigation.css', v=config.get('STATIC_ASSET_VERSION')) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/object_attributes.css', v=config.get('STATIC_ASSET_VERSION')) }}">
 </head>
 <body class="{% if current_user.is_authenticated %}has-side-panel{% endif %} {% block body_class %}{% endblock %}">
     {% if current_user.is_authenticated %}
@@ -869,9 +838,9 @@
         </a>
         <div class="side-panel-content">
             <div class="side-panel-section namespace-navigation">
-                <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespaces" aria-label="Namespaces">
+                <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespace" aria-label="Namespace">
                     {{ navigation_icon('namespace') }}
-                    <span class="side-panel-label">Namespaces</span>
+                    <span class="side-panel-label">Namespace</span>
                 </a>
             </div>
             <div class="side-panel-section">
@@ -931,6 +900,7 @@
             {% endif %}
         {% endwith %}
 
+        {% include 'object_nav.html' %}
         {% block content %}{% endblock %}
     </div>
 

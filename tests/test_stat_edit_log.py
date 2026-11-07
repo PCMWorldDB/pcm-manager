@@ -63,7 +63,7 @@ def test_stats_log_access_and_pagination(app, client, monkeypatch, allowed):
             assert not calls
             return
         assert switched.status_code == 302
-        response = client.get('/stats-editor?log_page=2')
+        response = client.get('/stats-editor?log_page=2', follow_redirects=True)
         assert response.status_code == 200
         assert b'Stat Edit Log' in response.data
         assert b'Individual' in response.data
@@ -74,7 +74,7 @@ def test_stats_log_access_and_pagination(app, client, monkeypatch, allowed):
         assert b'2026-11-02 12:30:15' in response.data and b'2026-11-01 10:20:30' in response.data
         assert b'release_id=7' in response.data and b'Test v1' in response.data
         assert calls == [(namespace, {'log_mode': True, 'limit': 101, 'offset': 100})]
-        client.get('/stats-editor?log_page=-1')
+        client.get('/riders/stat-edit-log?log_page=-1')
         assert calls[-1][1]['offset'] == 0
     finally:
         with app.app_context():

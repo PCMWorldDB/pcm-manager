@@ -17,7 +17,10 @@ def test_cdb_models_are_registered_with_workflow_metadata():
         assert get_table_by_name(name) is model
         mapping = get_field_mapping('PCM2026', name)
         assert set(mapping['fields']).issubset(model.__table__.columns.keys())
-    assert not any(name.startswith('cdb_') for name in get_table_names())
+    assert not any(model.__tablename__.startswith('cdb_') for model in CDB_TABLES)
+    assert {name for name in get_table_names() if name.startswith('cdb_')} == {
+        'cdb_changes', 'cdb_change_events',
+    }
     assert 'stat_changes' in NamespaceBase.metadata.tables
     assert get_table_by_name('missing_table') is None
 

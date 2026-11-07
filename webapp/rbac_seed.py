@@ -50,6 +50,11 @@ ROLES = [
 
 RESOURCES = [
     {
+        'name': 'cdb_attributes',
+        'description': 'Propose and review non-stat CDB attribute changes',
+        'supported_actions': ['read', 'update', 'approve'],
+    },
+    {
         'name': 'audit_logs',
         'description': 'View application audit history',
         'supported_actions': ['read'],
@@ -117,6 +122,7 @@ ACTIONS = [
 
 ROLE_PERMISSIONS = {
     'admin': {
+        'cdb_attributes': ['read', 'update', 'approve'],
         'audit_logs': ['read'],
         'activity-monitor': ['read'],
         'users': ['create', 'read', 'update', 'delete'],

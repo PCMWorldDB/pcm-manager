@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Team - WDB{% endblock %}
+{% block title %}{{ 'Riders' if active_method == 'riders' else 'Teams' }} - WDB{% endblock %}
 
 {% block styles %}
     .teams-table {
@@ -29,21 +29,36 @@
     .riders-table {
         table-layout: fixed;
         width: 100%;
+        min-width: 1300px;
     }
-    .riders-table .col-id {
-        width: 82px;
+    .riders-table-wrapper {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .rider-view-filters > div {
+        flex: 0 1 12rem;
+        min-width: 0;
+        max-width: 100%;
     }
     .riders-table .col-rider {
-        width: calc(260px + 12ch);
+        width: 200px;
     }
     .riders-table .col-team {
-        width: calc(240px + 10ch);
+        width: 180px;
     }
     .riders-table .col-country {
         width: 130px;
     }
-    .riders-table .col-birth {
-        width: 120px;
+    .riders-table .col-stat {
+        width: 48px;
+        text-align: center;
+    }
+    .riders-table th {
+        white-space: nowrap;
+    }
+    .riders-table td.rider-stat {
+        text-align: center;
+        font-weight: 600;
     }
     .riders-table .text-truncate-cell {
         overflow: hidden;
@@ -55,35 +70,18 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">Teams</h2>
+        <h2 class="mb-1">{{ 'Riders' if active_method == 'riders' else 'Teams' }}</h2>
         <p class="text-muted mb-0">Browse teams and riders in the selected namespace.</p>
     </div>
 </div>
 
-<ul class="nav nav-tabs mb-3">
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="teams">
-            <button class="nav-link {% if active_method == 'teams' %}active{% endif %}" type="submit">Teams</button>
-        </form>
-    </li>
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="riders">
-            <button class="nav-link {% if active_method == 'riders' %}active{% endif %}" type="submit">Riders</button>
-        </form>
-    </li>
-</ul>
+
 
 {% if season_selected %}
 {% if active_method == 'teams' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}" id="teams-filters-form">
+        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" id="teams-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="teams">
             <div class="section-block">
@@ -174,9 +172,25 @@
     </div>
 </div>
 {% elif active_method == 'riders' %}
+<div class="d-flex align-items-center gap-3 flex-wrap mb-3">
+    <span class="fw-semibold" id="rider-view-label">View</span>
+    <nav class="nav nav-pills nav-subtabs" aria-labelledby="rider-view-label">
+        {% for view, label in [('stats', 'Stats'), ('activity', 'Activity')] %}
+        {% if view != 'activity' or can_view_activity %}
+        <form method="post" action="{{ url_for('web.riders') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="method" value="riders">
+            <input type="hidden" name="action" value="set_view">
+            <input type="hidden" name="view" value="{{ view }}">
+            <button type="submit" class="nav-link {{ 'active' if rider_filters.view == view else '' }}" aria-pressed="{{ 'true' if rider_filters.view == view else 'false' }}">{{ label }}</button>
+        </form>
+        {% endif %}
+        {% endfor %}
+    </nav>
+</div>
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}" id="riders-filters-form">
+        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" id="riders-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="riders">
             <div class="section-block">
@@ -216,7 +230,25 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-12 d-flex align-items-end gap-2 flex-wrap">
+                    <div class="col-12 d-flex align-items-end gap-2 flex-wrap rider-view-filters">
+                        {% if rider_filters.view == 'stats' %}
+                        <div>
+                            <label for="rider-stat" class="form-label">Stat</label>
+                            <select id="rider-stat" name="stat_key" class="form-select">
+                                <option value="">Any stat</option>
+                                {% for stat in stat_fields %}<option value="{{ stat }}" {{ 'selected' if rider_filters.stat_key == stat else '' }}>{{ stat|upper }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <div><label for="stat-min" class="form-label">Minimum</label><input id="stat-min" name="stat_min" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_min }}"></div>
+                        <div><label for="stat-max" class="form-label">Maximum</label><input id="stat-max" name="stat_max" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_max }}"></div>
+                        {% else %}
+                        <div>
+                            <label for="activity-status" class="form-label">Activity</label>
+                            <select id="activity-status" name="activity_status" class="form-select">
+                                {% for value, label in activity_filter_options.items() %}<option value="{{ value }}" {{ 'selected' if rider_filters.activity_status == value else '' }}>{{ label }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
                         <button class="btn btn-outline-secondary" type="button" id="reset-riders-filters">Reset</button>
                     </div>
                 </div>
@@ -235,28 +267,33 @@
         </div>
 
         {% if riders %}
-        <div class="table-wrapper">
+        <div class="table-wrapper riders-table-wrapper">
             <table class="table table-sm table-hover align-middle mb-0 riders-table">
                 <colgroup>
-                    <col class="col-id">
                     <col class="col-rider">
                     <col class="col-team">
                     <col class="col-country">
-                    <col class="col-birth">
+                    {% if rider_filters.view == 'stats' %}
+                    {% for stat in stat_fields %}<col class="col-stat">{% endfor %}
+                    {% else %}
+                    <col><col><col><col><col>
+                    {% endif %}
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>CDB ID</th>
-                        <th>Rider</th>
+                        <th>Name</th>
                         <th>Team</th>
                         <th>Country</th>
-                        <th>Birth Date</th>
+                        {% if rider_filters.view == 'stats' %}
+                        {% for stat in stat_fields %}<th class="col-stat">{{ stat|upper }}</th>{% endfor %}
+                        {% else %}
+                        <th>Last Race</th><th>Race Date</th><th>Days Since Race</th><th>Last Checked</th><th>Check Status</th>
+                        {% endif %}
                     </tr>
                 </thead>
                 <tbody>
                     {% for rider in riders %}
                     <tr>
-                        <td>{{ rider.cyclist_id }}</td>
                         <td class="text-truncate-cell">
                             <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}">
                                 {{ rider.name or ('Rider #' ~ rider.rider_id) }}
@@ -272,7 +309,15 @@
                             {% endif %}
                         </td>
                         <td>{{ rider.nation_name or '-' }}</td>
-                        <td>{{ rider.birth_date_display or '-' }}</td>
+                        {% if rider_filters.view == 'stats' %}
+                        {% for stat in stat_fields %}<td class="rider-stat">{{ rider_stats_map[rider.rider_id][stat] if rider_stats_map[rider.rider_id][stat] is not none else '-' }}</td>{% endfor %}
+                        {% else %}
+                        <td>{{ rider.latest_race_name or '-' }}</td>
+                        <td>{{ rider.latest_result_date or '-' }}</td>
+                        <td>{{ rider.days_since_last_race if rider.days_since_last_race is not none else '-' }}</td>
+                        <td>{{ rider.latest_check_at|activity_datetime if rider.latest_check_at else '-' }}</td>
+                        <td>{{ rider.latest_check_status|activity_check_status if rider.latest_check_status else ('History unavailable' if rider.activity_available == false else 'Awaiting check' if rider.monitor_id else 'Not monitored') }}</td>
+                        {% endif %}
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -283,7 +328,7 @@
         <nav class="mt-3" aria-label="Rider result pages">
             <ul class="pagination mb-0 flex-wrap">
                 <li class="page-item {% if not rider_pagination.has_prev %}disabled{% endif %}">
-                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                    <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="action" value="set_page">
                         <input type="hidden" name="method" value="riders">
@@ -294,7 +339,7 @@
                 {% for page_number in range(1, rider_pagination.total_pages + 1) %}
                     {% if page_number == 1 or page_number == rider_pagination.total_pages or (page_number >= rider_pagination.page - 2 and page_number <= rider_pagination.page + 2) %}
                     <li class="page-item {% if page_number == rider_pagination.page %}active{% endif %}">
-                        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="action" value="set_page">
                             <input type="hidden" name="method" value="riders">
@@ -307,7 +352,7 @@
                     {% endif %}
                 {% endfor %}
                 <li class="page-item {% if not rider_pagination.has_next %}disabled{% endif %}">
-                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                    <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="action" value="set_page">
                         <input type="hidden" name="method" value="riders">
@@ -406,6 +451,9 @@ document.addEventListener('DOMContentLoaded', function () {
         submitting = true;
     });
     filtersForm.querySelectorAll('select').forEach(function (field) {
+        field.addEventListener('change', applyFilters);
+    });
+    filtersForm.querySelectorAll('input[type="number"]').forEach(function (field) {
         field.addEventListener('change', applyFilters);
     });
     filtersForm.querySelectorAll('input[type="search"]').forEach(function (field) {

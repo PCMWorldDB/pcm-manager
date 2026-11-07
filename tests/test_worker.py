@@ -14,10 +14,14 @@ from flask import Flask, current_app
 
 import webapp
 from webapp.extensions import init_extensions
+from webapp.config import DevelopmentConfig
 
 def create_app():
     app = Flask(__name__)
+    app.config.from_object(DevelopmentConfig)
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
+    app.config['SQLALCHEMY_BINDS'] = {'main': 'sqlite://'}
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {}
     init_extensions(app)
     return app
 
@@ -30,6 +34,26 @@ assert find_app('webapp.worker:celery') is celery
 webapp.create_app.assert_called_once_with()
 assert worker.run_external_sync_task.name == 'webapp.tasks.run_external_sync'
 assert worker.run_activity_monitor_run_task.name == 'webapp.tasks.run_activity_monitor_run'
+assert worker.run_external_call.name == 'webapp.tasks.run_external_call'
+assert worker.run_external_group.name == 'webapp.tasks.run_external_group'
+assert worker.poll_external_calls.name == 'webapp.tasks.poll_external_calls'
+assert celery.conf.beat_schedule['poll-external-calls']['task'] == worker.poll_external_calls.name
+
+assert celery.conf.worker_concurrency == 1
+assert celery.conf.worker_prefetch_multiplier == 1
+assert worker.run_external_group.acks_late
+assert worker.run_external_group.reject_on_worker_lost
+assert [queue.name for queue in celery.conf.task_queues] == ['celery', 'external.high', 'external.low']
+assert celery.conf.broker_transport_options['queue_order_strategy'] == 'sorted'
+assert celery.conf.beat_schedule['poll-external-calls']['schedule'] == 3600
+
+def dispatch():
+    assert current_app.name == __name__
+    return [7]
+
+worker.dispatch_queued_external_groups = dispatch
+assert worker.poll_external_calls.apply(throw=True).result == [7]
+assert worker.run_external_call.apply(args=(7,), throw=True).result is False
 
 def sync_race_calendar(**kwargs):
     assert current_app.name == __name__

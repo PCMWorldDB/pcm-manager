@@ -6,8 +6,9 @@ import os
 import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy_utils import database_exists, create_database
-from webapp.models.ns.schema import NamespaceBase, NAMESPACE_TABLES
+from webapp.models.ns.schema import NamespaceBase
 from webapp.integrations.cdb import cdb_import
+from webapp.config import get_setting
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ class NamespaceProvisioner:
     
     def __init__(self, admin_db_url=None):
         """Initialize provisioner with admin database URL"""
-        self.admin_db_url = admin_db_url or os.getenv('PROVISIONER_DATABASE_URL')
+        self.admin_db_url = admin_db_url or get_setting('PROVISIONER_DATABASE_URL')
         if not self.admin_db_url:
             raise ValueError('Admin database URL not provided')
     
@@ -44,13 +45,11 @@ class NamespaceProvisioner:
             ), {"dbname": full_db_name})
             
             if result.fetchone():
-                logger.info(f"Database {full_db_name} already exists")
                 return full_db_name
             
             # Create the database
             safe_db_name = full_db_name.replace('"', '""')
             conn.execute(text(f'CREATE DATABASE "{safe_db_name}"'))
-            logger.info(f"Created database: {full_db_name}")
         
         admin_engine.dispose()
         return full_db_name
@@ -65,7 +64,6 @@ class NamespaceProvisioner:
         
         # Create all tables
         NamespaceBase.metadata.create_all(engine)
-        logger.info(f"Created schema with {len(NAMESPACE_TABLES)} tables")
     
     
     def build_connection_string(self, database_name, base_url=None):

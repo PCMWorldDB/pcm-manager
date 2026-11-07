@@ -6,7 +6,7 @@ from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
 from flask_marshmallow import Marshmallow
 from celery import Celery
-import os
+from kombu import Queue
 
 # Initialize extensions (will be bound to app in create_app)
 db = SQLAlchemy()
@@ -17,11 +17,7 @@ csrf = CSRFProtect()
 ma = Marshmallow()
 
 # Initialize Celery with broker URL
-celery = Celery(
-    'pcm_manager',
-    broker=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-    backend=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-)
+celery = Celery('pcm_manager')
 
 
 def init_extensions(app):
@@ -56,15 +52,25 @@ def init_extensions(app):
     celery_config.pop('CELERY_RESULT_BACKEND', None)
     celery.conf.update(celery_config)
     celery.conf.update(
-        broker_url=app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
-        result_backend=app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+        broker_url=app.config['REDIS_URL'],
+        result_backend=app.config['REDIS_URL'],
+        worker_concurrency=1,
+        worker_prefetch_multiplier=1,
+        task_queues=(Queue('celery'), Queue('external.high'), Queue('external.low')),
+        # Lexicographic order: control work, high groups, then low groups.
+        # Redis active_queues is a set; 'priority' would retain arbitrary order.
+        broker_transport_options={'queue_order_strategy': 'sorted'},
     )
-    celery.conf.timezone = 'Europe/Amsterdam'
+    celery.conf.timezone = app.config['WORKER_TIMEZONE']
     celery.conf.beat_schedule = {
         **(celery.conf.beat_schedule or {}),
+        'poll-external-calls': {
+            'task': 'webapp.tasks.poll_external_calls',
+            'schedule': app.config['EXTERNAL_CALL_POLL_SECONDS'],
+        },
         'poll-activity-monitor-schedules': {
             'task': 'webapp.tasks.poll_activity_monitor_schedules',
-            'schedule': 60.0,
+            'schedule': app.config['ACTIVITY_MONITOR_POLL_SECONDS'],
         },
     }
     

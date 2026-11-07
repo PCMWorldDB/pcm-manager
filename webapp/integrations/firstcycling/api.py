@@ -1,7 +1,6 @@
-"""FirstCycling API integration client"""
+﻿"""FirstCycling API integration client"""
 import json
 import logging
-import os
 import re
 import time
 from datetime import datetime
@@ -11,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from flask import current_app, has_app_context
 
+from webapp.config import load_config
 from webapp.extensions import db
 from webapp.models.main.base import ExternalSyncAPICallLog
 from webapp.models.main.firstcycling import (
@@ -76,26 +76,16 @@ class FirstCyclingClient:
         self.timeout_seconds = timeout_seconds
         self.external_sync_log_id = external_sync_log_id
 
-        if has_app_context():
-            configured_base_url = current_app.config.get('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
-            configured_api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
-            configured_verbose_sync = current_app.config.get('FIRST_CYCLING_SYNC_VERBOSE', False)
-            configured_log_interval = current_app.config.get('FIRST_CYCLING_SYNC_LOG_INTERVAL', 50)
-            configured_sync_method = current_app.config.get('FIRST_CYCLING_SYNC_METHOD', 'bulk_refresh')
-            configured_fetch_only_missing = current_app.config.get('FIRST_CYCLING_FETCH_ONLY_MISSING', False)
-            configured_request_delay = current_app.config.get('FIRST_CYCLING_REQUEST_DELAY_SECONDS', 0.35)
-            configured_retry_attempts = current_app.config.get('FIRST_CYCLING_RETRY_ATTEMPTS', 4)
-            configured_retry_backoff = current_app.config.get('FIRST_CYCLING_RETRY_BACKOFF_SECONDS', 1.0)
-        else:
-            configured_base_url = os.getenv('FIRST_CYCLING_BASE_URL', 'https://firstcycling.com')
-            configured_api_path = os.getenv('FIRST_CYCLING_API_PATH')
-            configured_verbose_sync = os.getenv('FIRST_CYCLING_SYNC_VERBOSE')
-            configured_log_interval = os.getenv('FIRST_CYCLING_SYNC_LOG_INTERVAL', 50)
-            configured_sync_method = os.getenv('FIRST_CYCLING_SYNC_METHOD', 'bulk_refresh')
-            configured_fetch_only_missing = os.getenv('FIRST_CYCLING_FETCH_ONLY_MISSING')
-            configured_request_delay = os.getenv('FIRST_CYCLING_REQUEST_DELAY_SECONDS', 0.35)
-            configured_retry_attempts = os.getenv('FIRST_CYCLING_RETRY_ATTEMPTS', 4)
-            configured_retry_backoff = os.getenv('FIRST_CYCLING_RETRY_BACKOFF_SECONDS', 1.0)
+        settings = current_app.config if has_app_context() else load_config()
+        configured_base_url = settings['FIRST_CYCLING_BASE_URL']
+        configured_api_path = settings['FIRST_CYCLING_API_PATH']
+        configured_verbose_sync = settings['FIRST_CYCLING_SYNC_VERBOSE']
+        configured_log_interval = settings['FIRST_CYCLING_SYNC_LOG_INTERVAL']
+        configured_sync_method = settings['FIRST_CYCLING_SYNC_METHOD']
+        configured_fetch_only_missing = settings['FIRST_CYCLING_FETCH_ONLY_MISSING']
+        configured_request_delay = settings['FIRST_CYCLING_REQUEST_DELAY_SECONDS']
+        configured_retry_attempts = settings['FIRST_CYCLING_RETRY_ATTEMPTS']
+        configured_retry_backoff = settings['FIRST_CYCLING_RETRY_BACKOFF_SECONDS']
 
         self.base_url = (base_url or configured_base_url).rstrip('/')
         configured_api_path = api_path if api_path is not None else configured_api_path
@@ -223,7 +213,7 @@ class FirstCyclingClient:
             params_json = json.dumps(params, default=str, sort_keys=True) if params else None
             error_message = str(error) if error is not None else None
             values = {
-                'external_sync_log_id': self.external_sync_log_id,
+                'task_group_id': self.external_sync_log_id,
                 'provider': 'firstcycling',
                 'endpoint': endpoint_path.lstrip('/'),
                 'request_url': self._redact_url(request_url),

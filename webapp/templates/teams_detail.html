@@ -3,23 +3,7 @@
 {% block title %}Team Detail - WDB{% endblock %}
 
 {% block styles %}
-        .meta-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
-        }
-        .meta-label {
-            font-size: 0.8rem;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-        .meta-value {
-            font-weight: 600;
-        }
-        body.dark-mode .meta-label {
-            color: #9ca3af;
-        }
+
     /* Stat value background color classes (copied from stat_race_detail.html) */
     .stat-value.range-low {
         background-color: #6c757d !important;
@@ -191,6 +175,7 @@ document.addEventListener('DOMContentLoaded', function () {
 {% endblock %}
 
 {% block content %}
+{% from '_attribute_editor.html' import attribute_field, additional_attributes with context %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h2 class="mb-1">
@@ -206,26 +191,17 @@ document.addEventListener('DOMContentLoaded', function () {
 <div class="panel-card card">
     <div class="card-body">
         <h5 class="mb-3">Team Attributes</h5>
-        <div class="meta-grid">
-            <div>
-                <div class="meta-label">CDB Team ID</div>
-                <div class="meta-value">{{ team.team_id }}</div>
+        <div class="object-attributes">
+            <div class="object-attribute">
+                <div class="object-attribute-label">CDB Team ID</div>
+                <div class="object-attribute-value">{{ team.team_id }}</div>
             </div>
-            <div>
-                <div class="meta-label">Country</div>
-                <div class="meta-value">{{ team.nation_name or ('#' ~ team.country_id if team.country_id else '-') }}</div>
-            </div>
-            <div>
-                <div class="meta-label">Division</div>
-                <div class="meta-value">{{ team.division or ('#' ~ team.division_id if team.division_id else '-') }}</div>
-            </div>
-            <div>
-                <div class="meta-label">Abbreviation</div>
-                <div class="meta-value">{{ team.abbreviation or '-' }}</div>
-            </div>
-            <div>
-                <div class="meta-label">Ranking</div>
-                <div class="meta-value">
+            {{ attribute_field('country_id', 'Country', team.nation_name or ('#' ~ team.country_id if team.country_id else '-')) }}
+            {{ attribute_field('division_id', 'Division', team.division or ('#' ~ team.division_id if team.division_id else '-')) }}
+            {{ attribute_field('abbreviation', 'Abbreviation', team.abbreviation or '-') }}
+            <div class="object-attribute">
+                <div class="object-attribute-label">Ranking</div>
+                <div class="object-attribute-value">
                     {% if team.ranking_rank %}
                         #{{ team.ranking_rank }}
                     {% else %}
@@ -233,6 +209,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     {% endif %}
                 </div>
             </div>
+            {{ additional_attributes(['country_id', 'division_id', 'abbreviation']) }}
         </div>
     </div>
 </div>

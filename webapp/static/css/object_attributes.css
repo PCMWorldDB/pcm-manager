@@ -1,0 +1,154 @@
+/* Shared object metadata: use object-attributes with object-attribute cells.
+   Labels, values, and inline editors keep the same alignment on every page. */
+.object-attributes {
+    --attribute-surface: #f8fafc;
+    --attribute-border: #e2e8f0;
+    --attribute-label: #64748b;
+    --attribute-value: #182b45;
+    --attribute-link: #174f91;
+    --attribute-focus: #517eb7;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+body.dark-mode .object-attributes {
+    --attribute-surface: #253142;
+    --attribute-border: #435168;
+    --attribute-label: #b3c1d3;
+    --attribute-value: #f1f5f9;
+    --attribute-link: #bcd6f7;
+    --attribute-focus: #93c5fd;
+}
+
+.object-attribute {
+    min-width: 0;
+    min-height: 5rem;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--attribute-border);
+    border-radius: 0.875rem;
+    background: var(--attribute-surface);
+    overflow-wrap: anywhere;
+}
+
+.object-attribute-label,
+.object-attribute-heading {
+    min-height: 1.5rem;
+}
+
+.object-attribute-label {
+    display: block;
+    color: var(--attribute-label);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.5rem;
+}
+
+.object-attribute-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.object-attribute-value {
+    margin-top: 0.375rem;
+    color: var(--attribute-value);
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+}
+
+.object-attribute-value a {
+    color: var(--attribute-link);
+    text-underline-offset: 0.2em;
+}
+
+.attribute-inline-editor > summary {
+    cursor: pointer;
+    list-style: none;
+    border-radius: 0.25rem;
+}
+
+.attribute-inline-editor > summary::-webkit-details-marker {
+    display: none;
+}
+
+.attribute-inline-editor > summary svg {
+    color: var(--attribute-label);
+}
+
+.attribute-inline-editor > summary:hover .object-attribute-label,
+.attribute-inline-editor > summary:hover svg {
+    color: var(--attribute-link);
+}
+
+.attribute-inline-editor > summary:focus-visible,
+.object-attribute a:focus-visible {
+    outline: 3px solid var(--attribute-focus);
+    outline-offset: 3px;
+}
+
+.attribute-inline-editor[open] + .object-attribute-value {
+    display: none;
+}
+
+.attribute-edit-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.625rem;
+}
+
+.attribute-edit-form .form-control {
+    flex: 1 1 8rem;
+    min-width: 0;
+    min-height: 2.25rem;
+}
+
+.attribute-edit-form .btn {
+    min-height: 2.25rem;
+}
+
+.object-attribute-pending {
+    flex-shrink: 0;
+    padding: 0.125rem 0.5rem;
+    border-radius: 1rem;
+    background: #fff0c2;
+    color: #795000;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+body.dark-mode .object-attribute-pending {
+    background: #59441d;
+    color: #ffe09a;
+}
+
+@media (max-width: 1200px) {
+    .object-attributes {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 900px) {
+    .object-attributes {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .object-attributes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 420px) {
+    .object-attributes {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

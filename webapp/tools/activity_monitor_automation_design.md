@@ -7,9 +7,12 @@ research history.
 
 ## Scheduling behavior
 
-- Celery Beat polls once per minute. The deployment must run both the existing
-  Celery worker and a separate Celery Beat process (`celery -A
-  webapp.worker:celery beat`). The local Compose file includes both services.
+- Celery Beat polls once per minute. The local Compose worker runs Beat inside
+  the worker service with `celery -A webapp.worker:celery worker --beat
+  --concurrency=1 --prefetch-multiplier=1 --loglevel=info
+  --schedule=/tmp/celerybeat-schedule`.
+  This existing Activity Monitor poll stays at one minute; the separate shared
+  TaskGroup dispatcher runs hourly and does not yet generate rider-selection SQL.
 - The planner checks one enabled schedule at a time under a database row lock.
   It reads the namespace database and selects currently due riders using the
   same planning function as the manual due list.
@@ -40,10 +43,26 @@ research history.
 
 The automatic schedule is intentionally disabled by default. Before enabling it
 in a namespace, confirm that the namespace has the Activity Monitor tables,
-PCS is enabled for the server, and both Celery worker and Beat are running.
-The current cloud release is not changed by this local implementation. The
-deployment operator must include the Beat service when rolling this into the
-cloud; without Beat, saved settings will not be polled. No production database
-is changed by this local implementation. Saving a disabled setting stores only
+PCS is enabled for the server, and the combined Celery worker/Beat service is
+running. Run exactly one instance of this combined service to avoid duplicate
+periodic jobs. If multiple workers are needed later, move Beat back into a
+single separate service and remove `--beat` from every worker command.
+
+When upgrading an existing Compose deployment, stop and remove the old scheduler
+before starting the combined worker:
+
+```text
+docker compose stop scheduler
+docker compose rm -f scheduler
+docker compose up -d --build worker
+```
+
+Run the first two commands using the old Compose configuration, before replacing
+it with the combined-service configuration. Worker restarts also restart Beat;
+its local schedule file is temporary and is lost when the container is recreated.
+The current cloud release is not changed by this configuration change. Cloud
+deployments must likewise run one combined worker/Beat service or one separate
+Beat instance; without Beat, saved settings will not be polled. No production
+database is changed by this configuration change. Saving a disabled setting stores only
 the schedule configuration in the selected namespace; it does not initiate
 external source requests.

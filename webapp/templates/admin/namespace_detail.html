@@ -41,8 +41,8 @@
             <hr>
 
             <div class="row mb-3">
-                <div class="col-md-4">
-                    <h6>Status</h6>
+                <div class="col-6 col-md-3 mb-3">
+                    <h6>Status <span class="text-muted" tabindex="0" role="img" aria-label="Draft: being prepared. Active: available for use. Archived: retained for history." title="Draft: being prepared. Active: available for use. Archived: retained for history.">&#9432;</span></h6>
                     <form method="POST" action="{{ url_for('web.admin_namespace_update_status', namespace_id=namespace.id) }}" class="d-inline status-form">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="d-flex align-items-center gap-2">
@@ -57,8 +57,14 @@
                         </div>
                     </form>
                 </div>
-                <div class="col-md-4">
-                    <h6>PCM Version</h6>
+                <div class="col-6 col-md-3 mb-3">
+                    <h6>PCM Version <span class="text-muted" tabindex="0" role="img" aria-label="Game version used for CDB mappings. Upload a compatible CDB when changing this version before creating releases." title="Game version used for CDB mappings. Upload a compatible CDB when changing this version before creating releases.">&#9432;</span></h6>
+                    {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+                        <div class="d-flex align-items-center gap-2">
+                            {{ metadata_form.pcm_version(class="form-select form-select-sm metadata-field w-auto", required=true, form="namespace-metadata-form", aria_label=metadata_form.pcm_version.label.text) }}
+                            <button type="submit" form="namespace-metadata-form" class="btn btn-sm btn-success metadata-save" style="display: none;">Save</button>
+                        </div>
+                        {% else %}
                     <p>
                         {% if namespace.pcm_version %}
                             {{ namespace.pcm_version }}
@@ -66,9 +72,16 @@
                             <span class="text-muted">Not set</span>
                         {% endif %}
                     </p>
+                        {% endif %}
                 </div>
-                <div class="col-md-4">
-                    <h6>Database Year</h6>
+                <div class="col-6 col-md-3 mb-3">
+                    <h6>Database Year <span class="text-muted" tabindex="0" role="img" aria-label="Current database season used for season queries. Changing it keeps the namespace URL, database, files, and history." title="Current database season used for season queries. Changing it keeps the namespace URL, database, files, and history.">&#9432;</span></h6>
+                    {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+                        <div class="d-flex align-items-center gap-2">
+                            {{ metadata_form.database_year(class="form-control form-control-sm metadata-field", style="width: 6rem;", required=true, form="namespace-metadata-form", aria_label=metadata_form.database_year.label.text) }}
+                            <button type="submit" form="namespace-metadata-form" class="btn btn-sm btn-success metadata-save" style="display: none;">Save</button>
+                        </div>
+                        {% else %}
                     <p>
                         {% if namespace.database_year %}
                             {{ namespace.database_year }}
@@ -76,9 +89,10 @@
                             <span class="text-muted">Not set</span>
                         {% endif %}
                     </p>
+                        {% endif %}
                 </div>
-                <div class="col-md-4">
-                    <h6>Gender</h6>
+                <div class="col-6 col-md-3 mb-3">
+                    <h6>Gender <span class="text-muted" tabindex="0" role="img" aria-label="Gender of this database, selected when the namespace was created." title="Gender of this database, selected when the namespace was created.">&#9432;</span></h6>
                     <p>
                         {% if namespace.gender %}
                             {{ namespace.gender }}
@@ -89,6 +103,11 @@
                 </div>
             </div>
 
+            {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+            <form id="namespace-metadata-form" method="POST" action="{{ url_for('web.admin_namespace_update_metadata', namespace_id=namespace.id) }}" class="mb-3">
+                {{ metadata_form.hidden_tag() }}
+            </form>
+            {% endif %}
             <hr>
 
             <div class="row mb-3">
@@ -105,22 +124,7 @@
             </div>
             {% endif %}
 
-            {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
-            <div class="card mb-3">
-                <div class="card-body">
-                    <h6>Current season and PCM version</h6>
-                    <p class="text-muted small">These settings drive season queries and CDB mappings. Changing them keeps the namespace URL, database, files, and history. When changing PCM version, upload a compatible CDB before creating releases.</p>
-                    <form method="POST" action="{{ url_for('web.admin_namespace_update_metadata', namespace_id=namespace.id) }}">
-                        {{ metadata_form.hidden_tag() }}
-                        {{ metadata_form.database_year.label(class="form-label") }}
-                        {{ metadata_form.database_year(class="form-control", required=true) }}
-                        {{ metadata_form.pcm_version.label(class="form-label") }}
-                        {{ metadata_form.pcm_version(class="form-select", required=true) }}
-                        {{ metadata_form.submit(class="btn btn-primary mt-2") }}
-                    </form>
-                </div>
-            </div>
-            {% endif %}
+
 
             <hr>
 
@@ -171,6 +175,18 @@ document.addEventListener('DOMContentLoaded', function() {
         const tab = document.querySelector('[data-bs-target="#cdb-import"]');
         if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
     }
+    const metadataFields = Array.from(document.querySelectorAll('.metadata-field'));
+    metadataFields.forEach(field => { field.dataset.original = field.value; });
+    function updateMetadataSaveButtons() {
+        const changed = metadataFields.some(field => field.value !== field.dataset.original);
+        document.querySelectorAll('.metadata-save').forEach(button => {
+            button.style.display = changed ? 'inline-block' : 'none';
+        });
+    }
+    metadataFields.forEach(field => {
+        field.addEventListener('input', updateMetadataSaveButtons);
+        field.addEventListener('change', updateMetadataSaveButtons);
+    });
     // Handle status dropdown change
     const statusSelect = document.querySelector('.status-select');
     const saveBtn = document.querySelector('.save-btn');

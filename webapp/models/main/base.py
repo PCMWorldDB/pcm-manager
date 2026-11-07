@@ -142,16 +142,26 @@ class AuditAction:
     NAMESPACE_STATUS_CHANGED = 'namespace_status_changed'
 
 
-class ExternalSyncLog(MainDBModel):
-    """Audit log for external provider synchronization jobs."""
-    __tablename__ = 'external_sync_log'
+class ExternalCallTaskGroup(MainDBModel):
+    """Provider-neutral request group, including legacy synchronization history."""
+    __tablename__ = 'external_call_task_group'
 
-    provider = db.Column(db.String(50), nullable=False, index=True)
-    sync_type = db.Column(db.String(80), nullable=False, index=True)
+    namespace_id = db.Column(db.Integer, db.ForeignKey('namespaces.id', ondelete='SET NULL'),
+                             nullable=True, index=True)
+    namespace = db.relationship('Namespace', foreign_keys=[namespace_id])
+
+    # Compatibility metadata for old FC sync screens; queue groups have no provider.
+    provider = db.Column(db.String(50), nullable=True, index=True)
+    sync_type = db.Column(db.String(80), nullable=True, index=True)
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     season_year = db.Column(db.Integer, nullable=True, index=True)
     gender = db.Column(db.String(20), nullable=True, index=True)
     status = db.Column(db.String(20), nullable=False, default='success', index=True)
+    priority = db.Column(db.String(4), nullable=False, default='high', server_default='high')
+    origin = db.Column(db.String(9), nullable=False, default='manual', server_default='manual')
+    is_worker_queued = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    worker_message_id = db.Column(db.String(36), nullable=True)
+    worker_queued_at = db.Column(db.DateTime, nullable=True)
     requested_count = db.Column(db.Integer, nullable=True)
     synced_count = db.Column(db.Integer, nullable=True)
     failed_count = db.Column(db.Integer, nullable=True)
@@ -161,41 +171,69 @@ class ExternalSyncLog(MainDBModel):
 
     executed_by = db.relationship('User', foreign_keys=[executed_by_id])
 
+    __table_args__ = (
+        db.CheckConstraint("priority IN ('high', 'low')", name='ck_external_group_priority'),
+        db.CheckConstraint("origin IN ('manual', 'scheduled')", name='ck_external_group_origin'),
+        Index('ix_external_group_dispatch', 'status', 'is_worker_queued', 'priority', 'timestamp', 'id'),
+    )
+
     def __repr__(self):
         return (
-            f'<ExternalSyncLog provider={self.provider} sync_type={self.sync_type} '
+            f'<ExternalCallTaskGroup namespace_id={self.namespace_id} '
             f'status={self.status} timestamp={self.timestamp}>'
         )
 
 
-class ExternalSyncAPICallLog(MainDBModel):
-    """Per-request debug log for external provider API calls."""
+class ExternalCallTask(MainDBModel):
+    """One provider request, or a preserved historical API call audit row."""
 
-    __tablename__ = 'external_sync_api_call_log'
+    __tablename__ = 'external_call_task'
 
-    external_sync_log_id = db.Column(
+    task_group_id = db.Column(
         db.Integer,
-        db.ForeignKey('external_sync_log.id', ondelete='SET NULL'),
+        db.ForeignKey('external_call_task_group.id', ondelete='SET NULL'),
         nullable=True,
         index=True,
     )
     provider = db.Column(db.String(50), nullable=False, index=True)
     endpoint = db.Column(db.String(255), nullable=False, index=True)
-    request_url = db.Column(db.Text, nullable=False)
+    request_url = db.Column(db.Text, nullable=True)
     request_params_json = db.Column(db.Text, nullable=True)
+    # Informational record reference; namespace context comes from task_group.
+    # No FK: the associated record may live in a separate namespace database.
+    related_to_id = db.Column(db.Integer, nullable=True)
+    related_to_table = db.Column(db.String(100), nullable=True)
     attempt = db.Column(db.Integer, nullable=False, default=1)
     max_attempts = db.Column(db.Integer, nullable=False, default=1)
-    outcome = db.Column(db.String(40), nullable=False, index=True)
+    outcome = db.Column(db.String(40), nullable=True, index=True)
+    # Audit rows remain historical; only explicitly queued rows are executable.
+    status = db.Column(db.String(20), nullable=False, default='historical', index=True)
+    available_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+    result_json = db.Column(db.Text)
     http_status = db.Column(db.Integer, nullable=True, index=True)
     duration_ms = db.Column(db.Integer, nullable=True)
     response_bytes = db.Column(db.Integer, nullable=True)
     error_type = db.Column(db.String(120), nullable=True)
     error_message = db.Column(db.Text, nullable=True)
 
-    external_sync_log = db.relationship('ExternalSyncLog', foreign_keys=[external_sync_log_id])
+    task_group = db.relationship('ExternalCallTaskGroup', foreign_keys=[task_group_id])
+    external_sync_log_id = db.synonym('task_group_id')
+    external_sync_log = db.synonym('task_group')
+
+    __table_args__ = (
+        Index('ix_external_call_task_related_record',
+              'task_group_id', 'related_to_table', 'related_to_id'),
+    )
 
     def __repr__(self):
         return (
-            f'<ExternalSyncAPICallLog provider={self.provider} endpoint={self.endpoint} '
+            f'<ExternalCallTask provider={self.provider} endpoint={self.endpoint} '
             f'outcome={self.outcome} http_status={self.http_status}>'
         )
+
+
+# Existing FC routes and audit readers continue to use the renamed tables.
+ExternalSyncLog = ExternalCallTaskGroup
+ExternalSyncAPICallLog = ExternalCallTask

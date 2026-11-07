@@ -1,5 +1,45 @@
 # ProCyclingStats (PCS)
 
+## Shared rider storage
+
+`PcsRider` (`pcs_riders`) and `PcsRiderResult` (`pcs_rider_results`) use the
+`main` bind and store PCS rider-page data independently of the Activity Monitor,
+FirstCycling IDs, and Namespace CDB rider matches. The existing `PcsRaceResult`
+race-page matching workflow is unchanged. No fetching, scheduling, or backfill
+is added by these models.
+
+The rider's canonical PCS slug is unique; `profile_url`, `display_name`,
+`birth_date`, and `nationality` hold profile facts. `source_payload` retains
+additional parser facts such as title, heading, and canonical URL. Only facts
+currently extracted are modeled; height, weight, and team are not extracted by
+the current rider-page parser.
+
+Result columns follow `activity_profile.parse_pcs_html` rows: `year` maps to
+`season`, `date` to `result_date`, and `result` to `result_position`. Other
+fields retain their parser names. `race_id` is a PCS string grouping key, not
+a numeric FirstCycling ID. `source_payload` retains the original row. Missing
+season/date values are allowed, and headings, classifications, DNS, and DNF
+remain distinguishable. `confirmed_participation` is the parser's row flag,
+not confirmation that a PCS profile matches a CDB rider.
+
+Future callers must supply a stable `source_result_key` per rider and result
+row. The database enforces uniqueness of `(rider_id, source_result_key)` even
+for undated rows. Deleting a PCS rider cascades to that rider's results.
+Neither table references monitor records or Namespace rider IDs.
+
+For an existing deployment, an operator must review and manually apply
+[`pcs_rider_tables_main.sql`](../../tools/pcs_rider_tables_main.sql) to the
+**main database only**, using `psql -v ON_ERROR_STOP=1 -d <main-database>
+-f webapp/tools/pcs_rider_tables_main.sql` from the repository root. Confirm
+the connection targets main and that both new tables are absent before running;
+the script intentionally fails if either exists. Take the normal database
+backup first. No Namespace database changes are needed. New installations
+include the tables through the existing main model initialization. To undo
+before storing data, manually drop `pcs_rider_results` then `pcs_riders` in main;
+after data is stored, dropping these tables removes that data.
+
+## Race-page integration
+
 This integration parses supplied PCS race result HTML and matches riders against
 a Namespace's CDB. Parsing HTML does not fetch a remote page.
 

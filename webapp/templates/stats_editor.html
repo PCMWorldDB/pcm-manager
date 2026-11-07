@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Stats Editor - WDB{% endblock %}
+{% block title %}{{ 'Races' if active_method == 'by_race' else 'Bulk Stat Editor' if active_method == 'by_list' else 'Stat Edit Log' }} - WDB{% endblock %}
 
 {% block styles %}
     body > .container {
@@ -49,37 +49,12 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">Stats Editor</h2>
+        <h2 class="mb-1">{{ 'Races' if active_method == 'by_race' else 'Bulk Stat Editor' if active_method == 'by_list' else 'Stat Edit Log' }}</h2>
         <p class="text-muted mb-0">Make changes to rider stats</p>
     </div>
 </div>
 
-<ul class="nav nav-tabs mb-3">
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.stats_editor') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="by_race">
-            <button class="nav-link {% if active_method == 'by_race' %}active{% endif %}" type="submit">By Race Result</button>
-        </form>
-    </li>
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.stats_editor') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="by_list">
-            <button class="nav-link {% if active_method == 'by_list' %}active{% endif %}" type="submit">By List</button>
-        </form>
-    </li>
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.stats_editor') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="log">
-            <button class="nav-link {% if active_method == 'log' %}active{% endif %}" type="submit">Log</button>
-        </form>
-    </li>
-</ul>
+
 {% if active_method == 'log' %}
 {% include 'stat_edit_log.html' %}
 {% endif %}

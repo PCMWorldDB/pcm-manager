@@ -7,6 +7,57 @@ from webapp.extensions import db
 from webapp.models.main.base import MainDBModel
 
 
+class PcsRider(MainDBModel):
+    """Shared PCS profile facts, independent of CDB and monitor identities."""
+
+    __tablename__ = 'pcs_riders'
+
+    rider_slug = db.Column(db.String(255), nullable=False, unique=True)
+    profile_url = db.Column(db.String(1000), nullable=False)
+    display_name = db.Column(db.String(255))
+    birth_date = db.Column(db.Date, index=True)
+    nationality = db.Column(db.String(100), index=True)
+    source_payload = db.Column(db.JSON)
+    last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    results = db.relationship(
+        'PcsRiderResult', back_populates='rider',
+        cascade='all, delete-orphan', passive_deletes=True,
+    )
+
+
+class PcsRiderResult(MainDBModel):
+    """A PCS rider-page row, including headings and non-finishing statuses."""
+
+    __tablename__ = 'pcs_rider_results'
+
+    rider_id = db.Column(db.Integer, db.ForeignKey('pcs_riders.id', ondelete='CASCADE'), nullable=False)
+    # Caller-defined stable row identity within a rider; never a monitor/FC ID.
+    source_result_key = db.Column(db.String(200), nullable=False)
+    season = db.Column(db.Integer, index=True)
+    result_date = db.Column(db.Date)
+    race_id = db.Column(db.String(1000))
+    race_url = db.Column(db.String(1000), nullable=False)
+    race_name = db.Column(db.String(255))
+    race_category = db.Column(db.String(100))
+    race_type = db.Column(db.String(100))
+    stage_number = db.Column(db.Integer)
+    stage_name = db.Column(db.String(255))
+    row_type = db.Column(db.String(40), nullable=False)
+    result_position = db.Column(db.String(40))
+    participation_status = db.Column(db.String(40), nullable=False)
+    confirmed_participation = db.Column(db.Boolean, nullable=False)
+    source_payload = db.Column(db.JSON)
+    last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    rider = db.relationship('PcsRider', back_populates='results')
+
+    __table_args__ = (
+        db.UniqueConstraint('rider_id', 'source_result_key', name='uq_pcs_rider_result_key'),
+        Index('ix_pcs_rider_result_rider_date', 'rider_id', 'result_date'),
+    )
+
+
 class PcsRaceResult(MainDBModel):
     """Stores raw PCS race result rows and namespace CDB rider matches."""
 

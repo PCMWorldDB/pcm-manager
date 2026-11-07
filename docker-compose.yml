@@ -2,7 +2,7 @@ version: '3.8'
 
 x-common-env: &common-env
   FLASK_APP: wsgi.py
-  FLASK_ENV: development
+  ENV: ${ENV:-local}
   BCRYPT_LOG_ROUNDS: 12
   SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-this-in-production}
   DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/main
@@ -71,6 +71,7 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     volumes:
       - ./webapp:/app/webapp
+      - ./envs:/app/envs:ro
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
     ports:
@@ -90,27 +91,15 @@ services:
       context: .
       dockerfile: docker/webapp/Dockerfile
     container_name: worker
-    command: celery -A webapp.worker:celery worker --loglevel=info
+    # Run exactly one instance: embedded Beat must not be replicated.
+    command: celery -A webapp.worker:celery worker --beat --concurrency=1 --prefetch-multiplier=1 --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
       <<: *common-env
     volumes:
       - ./webapp:/app/webapp
+      - ./envs:/app/envs:ro
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
-    depends_on: *common-depends
-    networks:
-      - pcm-manager-network
-
-  scheduler:
-    build:
-      context: .
-      dockerfile: docker/webapp/Dockerfile
-    container_name: scheduler
-    command: celery -A webapp.worker:celery beat --loglevel=info --schedule=/tmp/celerybeat-schedule
-    environment:
-      <<: *common-env
-    volumes:
-      - ./webapp:/app/webapp
     depends_on: *common-depends
     networks:
       - pcm-manager-network

@@ -31,6 +31,7 @@ COPY --from=cdb-converter /opt/cdb-converter/node_modules /opt/cdb-converter/nod
 # Copy application code
 COPY webapp/ /app/webapp/
 COPY wsgi.py /app/wsgi.py
+COPY envs/ /app/envs/
 
 # Create data directories
 RUN mkdir -p /app/filestore

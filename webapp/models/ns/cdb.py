@@ -1,5 +1,9 @@
-"""Namespace tables imported one-to-one from mapped PCM CDB tables."""
-from sqlalchemy import Boolean, Column, Float, Integer, String, false
+"""Namespace CDB objects and their shared change history."""
+from sqlalchemy import (
+    BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    Index, Integer, String, Text, false, func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 
 from webapp.models.ns.base import NamespaceBase
 
@@ -133,6 +137,79 @@ class Region(CDBRecord, NamespaceBase):
         return f'<Region {self.constant or self.id}>'
 
 
+class CDBChange(NamespaceBase):
+    """One proposed or applied attribute change; frozen after approval.
+
+    Attribute names use logical mapped field names. Values are serialized as
+    strings, with SQL NULL representing null or an absent value. Inserts/deletes
+    also use one row per attribute. Actor IDs refer to main
+    users without a cross-database foreign key. Status is a current projection;
+    lifecycle history belongs in CDBChangeEvent. Services enforce transitions.
+    Numeric deltas are derived from after_value minus before_value after typed
+    validation. Nullable race/list markers retain stats approval scopes; both
+    are NULL for individual edits. batch_id groups a submission within a scope.
+    """
+
+    __tablename__ = 'cdb_changes'
+
+    id = Column(BigInteger, primary_key=True)
+    entity_type = Column(String(50), nullable=False)
+    entity_id = Column(Integer, nullable=False)
+    attribute_name = Column(String(100), nullable=False)
+    operation = Column(String(20), nullable=False)
+    before_value = Column(Text)
+    after_value = Column(Text)
+    source = Column(String(50), nullable=False)
+    created_by_id = Column(Integer)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    batch_id = Column(String(64), index=True)
+    race_result_id = Column(Integer, index=True)
+    stat_list_id = Column(Integer, index=True)
+    status = Column(String(20), nullable=False, default='pending', server_default='pending')
+    approved_by_id = Column(Integer)
+    approved_at = Column(DateTime(timezone=True))
+    applied_at = Column(DateTime(timezone=True))
+    context = Column(JSONB, nullable=False, default=dict, server_default='{}')
+
+    __table_args__ = (
+        CheckConstraint("operation IN ('insert', 'update', 'delete')", name='ck_cdb_changes_operation'),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name='ck_cdb_changes_status'),
+        CheckConstraint('race_result_id IS NULL OR stat_list_id IS NULL', name='ck_cdb_changes_source_scope'),
+        Index('idx_cdb_changes_entity_created', 'entity_type', 'entity_id', 'created_at'),
+    )
+
+
+class CDBChangeEvent(NamespaceBase):
+    """Append-only lifecycle action referencing a change without copying its payload.
+
+    Event types include created, approved, rejected, approval_revoked, applied,
+    conflict_overridden, and released. release_id identifies the release for a release event, allowing
+    the same change to appear in multiple releases. No cascade deletes history.
+
+    conflict_overridden context stores reviewed_current_value (string or null)
+    and an optional reason; actor_id/occurred_at identify the decision. An applied
+    event records actual_before_value in context. Services must recheck the
+    reviewed value transactionally before applying; a later value needs a fresh
+    override. These context contracts and append-only writes are service rules.
+    """
+
+    __tablename__ = 'cdb_change_events'
+
+    id = Column(BigInteger, primary_key=True)
+    change_id = Column(BigInteger, ForeignKey('cdb_changes.id', ondelete='RESTRICT'), nullable=False)
+    event_type = Column(String(50), nullable=False)
+    actor_id = Column(Integer)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    release_id = Column(Integer, ForeignKey('releases.id', ondelete='RESTRICT'), index=True)
+    context = Column(JSONB, nullable=False, default=dict, server_default='{}')
+
+    __table_args__ = (
+        Index('idx_cdb_change_events_change_time', 'change_id', 'occurred_at'),
+    )
+
+
+# Only mapped objects belong here: import/export iterates this collection.
 CDB_TABLES = [Country, Division, Region, Team, Rider]
+CDB_HISTORY_TABLES = [CDBChange, CDBChangeEvent]
 
 

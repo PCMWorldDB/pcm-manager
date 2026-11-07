@@ -28,6 +28,7 @@ from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import NotFound
 
 from webapp.web import web_bp
+from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, activity_sql
 from webapp.web.forms import (
     AdminPasswordResetForm,
     LoginForm,
@@ -52,6 +53,8 @@ from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclin
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.models.main.firstcycling import FirstCyclingRaceStage
 from webapp.integrations.cdb import get_field_mapping
+from webapp.integrations.cdb.editability import get_editable_fields
+from webapp.integrations.cdb import attribute_changes
 from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
@@ -405,6 +408,18 @@ STAT_MIN_VALUE = 50
 STAT_MAX_VALUE = 85
 STAT_COLUMN_MAP = {stat_name: f'stat_{stat_name}' for stat_name in STAT_DELTA_FIELDS}
 
+
+def _require_editable_stat_changes(changes):
+    editable = get_editable_fields('rider')
+    if any(isinstance(item, dict) and item.get('stat_name') in STAT_COLUMN_MAP
+           and STAT_COLUMN_MAP[item['stat_name']] not in editable for item in changes):
+        abort(403)
+
+
+@web_bp.app_context_processor
+def inject_cdb_editability():
+    return {'editable_rider_fields': get_editable_fields('rider')}
+
 EXTERNAL_SYNC_TYPE_LABELS = {
     'all': 'All Syncs',
     'fc_race_calendar': 'Race Calendar',
@@ -510,9 +525,9 @@ APP_PANELS = {
         'required_permissions': [('activity-monitor', 'read')],
     },
     'stat_editor': {
-        'display_name': 'Stats Editor',
+        'display_name': 'Races',
         'description': 'Maintain rider stats from race results',
-        'endpoint': 'web.stats_editor',
+        'endpoint': 'web.races',
         'resources': ['stats'],
         'required_permissions': [('stats', 'read')],
     },
@@ -520,6 +535,13 @@ APP_PANELS = {
         'display_name': 'Teams',
         'description': 'Manage teams and rosters',
         'endpoint': 'web.teams',
+        'resources': ['teams'],
+        'required_permissions': [('teams', 'read')],
+    },
+    'rider_manager': {
+        'display_name': 'Riders',
+        'description': 'Browse riders and maintain rider stats',
+        'endpoint': 'web.riders',
         'resources': ['teams'],
         'required_permissions': [('teams', 'read')],
     },
@@ -694,8 +716,8 @@ def _get_panel_display_name(panel_name):
 def _get_panel_menu_items():
     """Return all known app panels with access metadata for global navigation."""
     panel_items = []
-    panel_order = {'stat_editor': 0, 'team_manager': 1, 'release_manager': 2}
-    for panel_name in sorted(APP_PANELS, key=lambda name: (panel_order.get(name, 3), name)):
+    panel_order = {'team_manager': 0, 'rider_manager': 1, 'stat_editor': 2, 'release_manager': 3}
+    for panel_name in sorted(panel_order, key=panel_order.get):
         panel_url = _get_panel_url(panel_name)
         can_access = _can_access_panel(panel_name)
         panel_items.append({
@@ -1253,6 +1275,13 @@ def _namespace_roster_rider_from_row(row):
         stat_rec=row.get('stat_rec'),
         stat_cob=row.get('stat_cob'),
         stat_att=row.get('stat_att'),
+        monitor_id=row.get('monitor_id'),
+        activity_available=row.get('activity_available'),
+        latest_check_at=row.get('latest_check_at'),
+        latest_check_status=row.get('latest_check_status'),
+        latest_result_date=row.get('latest_result_date'),
+        latest_race_name=row.get('latest_race_name'),
+        days_since_last_race=(date.today() - row['latest_result_date']).days if row.get('latest_result_date') else None,
     )
 
 
@@ -1434,6 +1463,15 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
     team_query = (filters.get('team') or '').strip()
     selected_country = (filters.get('country') or '').strip()
     selected_division = (filters.get('division') or '').strip()
+    activity_view = filters.get('view') == 'activity'
+    if not activity_view and filters.get('stat_key') in STAT_COLUMN_MAP:
+        column = STAT_COLUMN_MAP[filters['stat_key']]
+        for bound, operator in (('stat_min', '>='), ('stat_max', '<=')):
+            if filters.get(bound) not in (None, ''):
+                where_clauses.append(f'c.{column} {operator} :{bound}')
+                params[bound] = int(filters[bound])
+    if activity_view and filters.get('activity_status') in ACTIVITY_CONDITIONS:
+        where_clauses.append(ACTIVITY_CONDITIONS[filters['activity_status']])
 
     if rider_query:
         where_clauses.append(
@@ -1470,6 +1508,10 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            activity_join = activity_sql(conn) if activity_view else ''
+            activity_columns = 'activity.*,' if activity_view else ''
+            activity_order = 'activity.latest_result_date DESC NULLS LAST,' if activity_view else ''
             country_rows = conn.execute(
                 text(
                     """
@@ -1503,6 +1545,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                     f"""
                     SELECT COUNT(*) AS total
                     FROM rider c
+                    {activity_join}
                     LEFT JOIN team t ON t.id = c.team_id
                     LEFT JOIN region region ON region.id = c.region_id
                     {where_sql}
@@ -1514,6 +1557,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                 text(
                     f"""
                     SELECT
+                        {activity_columns}
                         c.id AS cyclist_id,
                         c.first_cycling_id,
                         c.first_name,
@@ -1528,11 +1572,13 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         COALESCE(country.constant, c.region_id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
                     FROM rider c
+                    {activity_join}
                     LEFT JOIN team t ON t.id = c.team_id
                     LEFT JOIN region region ON region.id = c.region_id
                     LEFT JOIN country country ON country.id = region.country_id
                     {where_sql}
                     ORDER BY
+                        {activity_order}
                         c.last_name ASC NULLS LAST,
                         c.first_name ASC NULLS LAST,
                         c.first_last_name ASC NULLS LAST,
@@ -3855,6 +3901,7 @@ def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
     ).mappings().all()
 
     applied_count = 0
+    editable = get_editable_fields('rider')
     for row in pending_rows:
         rider_id = _safe_int(row.get('rider_id'))
         final_value = _safe_int(row.get('final_value'))
@@ -3864,6 +3911,9 @@ def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
 
         if rider_id is None or final_value is None or not column_name:
             continue
+
+        if column_name not in editable:
+            abort(403)
 
         conn.execute(
             text(
@@ -7796,10 +7846,156 @@ def activity_monitor_clear_pcs_profile(rider_id):
     return redirect(url_for('web.activity_monitor_rider_detail', rider_id=rider_id))
 
 
+@web_bp.route('/teams/review', endpoint='teams_review')
+@web_bp.route('/riders/review', endpoint='riders_review')
+@web_bp.route('/races/review', endpoint='races_review')
+@login_required
+def object_review(object_type=None):
+    object_type = object_type or request.endpoint.rsplit('.', 1)[-1].removesuffix('_review')
+    panel = 'stat_editor' if object_type == 'races' else 'team_manager'
+    if not _can_access_panel(panel):
+        abort(403)
+    selected_namespace = _get_selected_namespace(_get_accessible_namespaces())
+    changes = []
+    if selected_namespace is not None:
+        changes = _load_attribute_review(selected_namespace, object_type[:-1])
+    return render_template(
+        'object_review.html', object_type=object_type,
+        selected_namespace=selected_namespace, changes=changes,
+        can_approve_attributes=_can_attribute_action('approve'),
+    )
+
+
+def _can_attribute_action(action):
+    return current_user.is_superadmin or current_user.has_permission('cdb_attributes', action)
+
+
+def _load_attribute_review(namespace, entity_type, include_history=False):
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            loader = attribute_changes.history_events if include_history else attribute_changes.review_queue
+            changes = [dict(change) for change in loader(conn, entity_type)]
+            riders = {}
+            if entity_type == 'rider' and changes:
+                rider_ids = list({change['entity_id'] for change in changes})
+                riders = {row['id']: _cdb_rider_display_name(row) for row in conn.execute(text(
+                    'SELECT id, first_name, last_name, first_last_name FROM rider WHERE id = ANY(:ids)'
+                ), {'ids': rider_ids}).mappings()}
+        actor_field = 'actor_id' if include_history else 'created_by_id'
+        user_ids = {change[actor_field] for change in changes if change[actor_field] is not None}
+        usernames = {user.id: user.username for user in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
+        for change in changes:
+            change['submitted_by'] = usernames.get(change[actor_field], 'Unknown user') if change[actor_field] is not None else 'System'
+            change['rider_name'] = riders.get(change['entity_id']) or f"Rider #{change['entity_id']}"
+        return changes
+    finally:
+        engine.dispose()
+
+
+def _attribute_editor_context(namespace, entity_type, entity_id):
+    if namespace is None:
+        return {}
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            fields = attribute_changes.editor_fields(conn, entity_type, entity_id)
+        return {'attribute_fields': fields, 'attribute_field_map': {field['name']: field for field in fields},
+                'can_edit_attributes': _can_attribute_action('update'), 'attribute_entity_type': entity_type,
+                'attribute_entity_id': entity_id, 'attribute_namespace_slug': namespace.slug}
+    finally:
+        engine.dispose()
+
+
+@web_bp.route('/attributes/<entity_type>/<int:entity_id>/propose', methods=['POST'])
+@login_required
+def propose_attribute(entity_type, entity_id):
+    if not _can_attribute_action('update'):
+        abort(403)
+    if entity_type not in ('rider', 'team', 'race'):
+        abort(404)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            attribute_changes.propose(
+                conn, entity_type, entity_id, request.form.get('attribute_name', ''),
+                None if request.form.get('clear_value') == '1' else request.form.get('value', ''), current_user.id)
+    except PermissionError:
+        abort(403)
+    except LookupError:
+        abort(404)
+    except attribute_changes.AttributeConflict as exc:
+        flash(str(exc), 'warning')
+    except ValueError as exc:
+        flash(str(exc), 'error')
+    else:
+        flash('Change submitted for review. The current value has not changed.', 'success')
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.' + entity_type + '_detail',
+                            **{entity_type + '_id': entity_id}, namespace_slug=namespace.slug))
+
+
+@web_bp.route('/attributes/<entity_type>/review/<int:change_id>/<action>', methods=['POST'])
+@login_required
+def review_attribute(entity_type, change_id, action):
+    if not _can_attribute_action('approve'):
+        abort(403)
+    if entity_type not in ('rider', 'team', 'race') or action not in ('approve', 'reject'):
+        abort(404)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            attribute_changes.decide(conn, entity_type, change_id, action, current_user.id)
+    except PermissionError:
+        abort(403)
+    except LookupError:
+        abort(404)
+    except attribute_changes.AttributeConflict as exc:
+        flash(str(exc), 'warning')
+    except ValueError as exc:
+        flash(str(exc), 'error')
+    else:
+        flash('Change approved and applied.' if action == 'approve' else 'Change rejected.', 'success')
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.' + entity_type + 's_review', namespace_slug=namespace.slug))
+
+
+@web_bp.route('/teams/change-log', endpoint='teams_change_log')
+@web_bp.route('/riders/change-log', endpoint='riders_change_log')
+@web_bp.route('/races/change-log', endpoint='races_change_log')
+@login_required
+def object_change_log():
+    """Display recorded attribute events from the selected namespace."""
+    object_type = request.endpoint.rsplit('.', 1)[-1].removesuffix('_change_log')
+    panel = 'stat_editor' if object_type == 'races' else 'team_manager'
+    if not _can_access_panel(panel):
+        abort(403)
+    selected_namespace = _get_selected_namespace(_get_accessible_namespaces())
+    return render_template(
+        'object_change_log.html', object_type=object_type,
+        selected_namespace=selected_namespace,
+        changes=_load_attribute_review(selected_namespace, object_type[:-1], include_history=True)
+        if selected_namespace is not None else [],
+    )
+
+
+@web_bp.route('/riders', methods=['GET', 'POST'], endpoint='riders')
 @web_bp.route('/teams', methods=['GET', 'POST'])
 @login_required
 def teams():
-    """Teams panel using selected namespace CDB roster data."""
+    """Dedicated team and rider pages using selected namespace CDB roster data."""
     if not _can_access_panel('team_manager'):
         abort(403)
 
@@ -7807,7 +8003,7 @@ def teams():
     selected_namespace = _get_selected_namespace(available_namespaces)
     selected_year, selected_gender = _resolve_namespace_season(selected_namespace)
     season_selected = selected_namespace is not None and selected_year is not None
-    active_method = _load_team_panel_active_method(selected_namespace)
+    active_method = 'riders' if request.endpoint == 'web.riders' else 'teams'
 
     team_division_options = []
     team_country_options = []
@@ -7831,11 +8027,32 @@ def teams():
             active_method = 'riders'
             _save_team_panel_active_method(selected_namespace, active_method)
             if action == 'clear_filters':
-                rider_filters = _default_riders_state()
+                rider_filters = {**_default_riders_state(), 'view': rider_filters['view']}
+            elif action == 'set_view':
+                view = request.form.get('view', '')
+                if view not in ('stats', 'activity'):
+                    abort(400)
+                if view == 'activity' and not _can_access_panel('activity_monitor'):
+                    abort(403)
+                rider_filters.update(view=view, page=1)
             elif action == 'set_page':
                 rider_filters['page'] = max(request.form.get('page', type=int) or 1, 1)
             else:
+                stat_key = request.form.get('stat_key', rider_filters['stat_key'])
+                if stat_key and stat_key not in STAT_COLUMN_MAP:
+                    abort(400)
+                stat_bounds = {key: request.form.get(key, rider_filters[key]).strip() for key in ('stat_min', 'stat_max')}
+                if any(value and (not value.isdigit() or not 0 <= int(value) <= 99) for value in stat_bounds.values()):
+                    abort(400)
+                if all(stat_bounds.values()) and int(stat_bounds['stat_min']) > int(stat_bounds['stat_max']):
+                    abort(400)
+                activity_status = request.form.get('activity_status', rider_filters['activity_status'])
+                if activity_status not in ACTIVITY_FILTERS:
+                    abort(400)
                 rider_filters.update({
+                    'stat_key': stat_key,
+                    **stat_bounds,
+                    'activity_status': activity_status,
                     'q': (request.form.get('q', type=str) or '').strip(),
                     'country': (request.form.get('country', type=str) or '').strip(),
                     'division': (request.form.get('division', type=str) or '').strip(),
@@ -7856,7 +8073,10 @@ def teams():
                     'team': (request.form.get('team', type=str) or '').strip(),
                 }
             _save_teams_state(selected_namespace, team_filters)
-        return redirect(url_for('web.teams'))
+        return redirect(url_for('web.riders' if requested_method == 'riders' else 'web.teams'))
+
+    if active_method == 'riders' and rider_filters['view'] == 'activity' and not _can_access_panel('activity_monitor'):
+        abort(403)
 
     if season_selected and active_method == 'teams':
         teams, team_division_options, team_country_options, rider_counts = _load_namespace_roster_teams(
@@ -7883,12 +8103,7 @@ def teams():
                 team_filters['team'],
             )
     elif season_selected and active_method == 'riders':
-        filters = {
-            'q': rider_filters['q'],
-            'country': rider_filters['country'],
-            'division': rider_filters['division'],
-            'team': rider_filters['team'],
-        }
+        filters = dict(rider_filters)
         page = rider_filters['page']
         per_page = rider_filters['per_page']
 
@@ -7980,39 +8195,11 @@ def teams():
         rider_filters=rider_filters,
         rider_pagination=rider_pagination,
         per_page_options=(50, 100, 150, 250),
+        stat_fields=STAT_DELTA_FIELDS,
+        rider_stats_map={rider.rider_id: _namespace_roster_stats_from_rider(rider) for rider in riders},
+        can_view_activity=_can_access_panel('activity_monitor'),
+        activity_filter_options=ACTIVITY_FILTERS,
     )
-
-
-@web_bp.route('/riders', methods=['GET', 'POST'])
-@login_required
-def riders():
-    """Compatibility route for the Riders tab in the Teams panel."""
-    if not _can_access_panel('team_manager'):
-        abort(403)
-
-    available_namespaces = _get_accessible_namespaces()
-    selected_namespace = _get_selected_namespace(available_namespaces)
-    state = _load_riders_state(selected_namespace)
-
-    if request.method == 'POST':
-        action = (request.form.get('action', type=str) or 'apply_filters').strip().lower()
-        if action == 'clear_filters':
-            state = _default_riders_state()
-        elif action == 'set_page':
-            state['page'] = max(request.form.get('page', type=int) or 1, 1)
-        else:
-            state.update({
-                'q': (request.form.get('q', type=str) or '').strip(),
-                'country': (request.form.get('country', type=str) or '').strip(),
-                'division': (request.form.get('division', type=str) or '').strip(),
-                'team': (request.form.get('team', type=str) or '').strip(),
-                'per_page': min(max(request.form.get('per_page', type=int) or 100, 25), 250),
-                'page': 1,
-            })
-        _save_riders_state(selected_namespace, state)
-
-    _save_team_panel_active_method(selected_namespace, 'riders')
-    return redirect(url_for('web.teams'))
 
 
 @web_bp.route('/teams/<int:team_id>')
@@ -8037,6 +8224,7 @@ def team_detail(team_id):
 
     return render_template(
         'teams_detail.html',
+        **_attribute_editor_context(selected_namespace, 'team', team_id),
         team=team,
         riders=riders,
         rider_stats_map=rider_stats_map,
@@ -8080,12 +8268,10 @@ def rider_detail(rider_id):
         parsed_referrer = urllib.parse.urlsplit(request.referrer)
         if not parsed_referrer.netloc or parsed_referrer.netloc == request.host:
             referrer_path = parsed_referrer.path or ''
-    came_from_riders = referrer_path.endswith('/riders') or (
-        referrer_path.endswith('/teams')
-        and _load_team_panel_active_method(selected_namespace) == 'riders'
-    )
+    came_from_riders = referrer_path.endswith('/riders')
 
     profile_context = dict(
+        **_attribute_editor_context(selected_namespace, 'rider', rider_id),
         rider=rider,
         team=team,
         rider_stats=rider_stats,
@@ -8093,7 +8279,7 @@ def rider_detail(rider_id):
         rider_stat_edits=rider_stat_edits,
         selected_namespace=selected_namespace,
         stat_fields=STAT_DELTA_FIELDS,
-        back_url=url_for('web.teams'),
+        back_url=url_for('web.riders' if came_from_riders else 'web.teams'),
         back_label='Back to Riders' if came_from_riders else 'Back to Teams',
         back_params={
             'team_id': back_team_id,
@@ -8185,6 +8371,7 @@ def rider_stats_action(rider_id, action):
                 abort(400)
         except (ValueError, TypeError):
             abort(400)
+        _require_editable_stat_changes(changes)
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.begin() as conn:
@@ -8338,6 +8525,11 @@ def _save_teams_state(namespace, state):
 
 def _default_riders_state():
     return {
+        'view': 'stats',
+        'stat_key': '',
+        'stat_min': '',
+        'stat_max': '',
+        'activity_status': '',
         'q': '',
         'country': '',
         'division': '',
@@ -8351,8 +8543,9 @@ def _load_riders_state(namespace):
     states = session.get('riders_state_by_namespace') or {}
     saved_state = states.get(_stats_editor_session_key(namespace)) or {}
     state = _default_riders_state()
-    for key in ('q', 'country', 'division', 'team'):
+    for key in ('q', 'country', 'division', 'team', 'stat_key', 'stat_min', 'stat_max', 'activity_status'):
         state[key] = (saved_state.get(key, state[key]) or '').strip()
+    state['view'] = 'activity' if saved_state.get('view') == 'activity' else 'stats'
     state['page'] = max(_safe_int(saved_state.get('page')) or state['page'], 1)
     state['per_page'] = min(max(_safe_int(saved_state.get('per_page')) or state['per_page'], 25), 250)
     return state
@@ -8381,6 +8574,9 @@ def _save_team_panel_active_method(namespace, active_method):
     session['team_panel_state_by_namespace'] = states
 
 
+@web_bp.route('/races', methods=['GET', 'POST'], endpoint='races')
+@web_bp.route('/riders/bulk-stat-editor', methods=['GET', 'POST'], endpoint='bulk_stat_editor')
+@web_bp.route('/riders/stat-edit-log', methods=['GET', 'POST'], endpoint='stat_edit_log')
 @web_bp.route('/stats-editor', methods=['GET', 'POST'])
 @login_required
 def stats_editor():
@@ -8393,6 +8589,17 @@ def stats_editor():
     selected_year, selected_gender = _resolve_namespace_season(selected_namespace)
     season_selected = selected_namespace is not None and selected_year is not None
     editor_state = _load_stats_editor_state(selected_namespace)
+    page_methods = {
+        'web.races': 'by_race',
+        'web.bulk_stat_editor': 'by_list',
+        'web.stat_edit_log': 'log',
+    }
+    page_endpoints = {method: endpoint for endpoint, method in page_methods.items()}
+    if request.endpoint in page_methods:
+        editor_state['active_method'] = page_methods[request.endpoint]
+        _save_stats_editor_state(selected_namespace, editor_state)
+    elif request.method == 'GET':
+        return redirect(url_for(page_endpoints[editor_state['active_method']], **request.args))
 
     if request.method == 'POST':
         action = (request.form.get('action', type=str) or 'apply_filters').strip().lower()
@@ -8430,7 +8637,7 @@ def stats_editor():
             ]
 
         _save_stats_editor_state(selected_namespace, next_state)
-        return redirect(url_for('web.stats_editor'))
+        return redirect(url_for(page_endpoints[next_state['active_method']]))
 
     active_method = editor_state['active_method']
 
@@ -9156,6 +9363,8 @@ def stats_editor_save_list_stat_deltas(list_id):
     if not isinstance(parsed_changes, list):
         flash('Invalid stat changes format.', 'error')
         return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+
+    _require_editable_stat_changes(parsed_changes)
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
@@ -10175,6 +10384,8 @@ def stats_editor_save_stat_deltas(race_id):
     if not isinstance(parsed_changes, list):
         flash('Invalid stat changes format.', 'error')
         return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+
+    _require_editable_stat_changes(parsed_changes)
 
     rider_ids = {
         _safe_int(item.get('first_cycling_rider_id'))
@@ -11314,7 +11525,6 @@ def admin_namespace_create():
         db.session.add(namespace)
         db.session.commit()
         
-        logger.info(f"Namespace created: '{namespace.name}' (slug: {namespace.slug}) by user {current_user.username}")
         
         # Log namespace creation
         AuditLog.log_action(
@@ -11339,12 +11549,10 @@ def admin_namespace_create():
         # Automatically provision the namespace database
         from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
         
-        logger.info(f"Starting automatic provisioning for namespace: {namespace.slug}")
         
         try:
             # Provision database
             flash('Provisioning namespace database...', 'info')
-            logger.info(f"Provisioning database for namespace: {namespace.slug}")
             
             provisioner = NamespaceProvisioner()
             result = provisioner.provision_namespace(namespace.database_name)
@@ -11362,12 +11570,10 @@ def admin_namespace_create():
             
             db.session.commit()
             
-            logger.info(f"Database provisioned successfully: {result['database_name']}")
             flash(f'✓ Database provisioned: {result["database_name"]}', 'success')
             
             # Import CDB data if file was uploaded
             if sqlite_file_path:
-                logger.info(f"Starting CDB import for namespace: {namespace.slug}")
                 flash('Importing CDB data...', 'info')
                 
                 # Build full path to CDB file
@@ -11375,7 +11581,6 @@ def admin_namespace_create():
                 cdb_path = os.path.join(get_cdb_import_path(namespace.slug), cdb_filename)
                 
                 if os.path.exists(cdb_path):
-                    logger.info(f"CDB file found at: {cdb_path}")
                     
                     with CDBImporter(cdb_path, namespace.build_connection_string(), namespace.pcm_version, expected_database=namespace.database_name) as importer:
                         stats = importer.import_all_tables(expected_fingerprint=initial_fingerprint)
@@ -11383,7 +11588,6 @@ def admin_namespace_create():
                     
                     # Show import statistics
                     for table, count in stats.items():
-                        logger.info(f"Imported {count} records to {table}")
                         flash(f'✓ Imported {count} {table}', 'success')
                     
                     # Log CDB import
@@ -11398,7 +11602,6 @@ def admin_namespace_create():
                     )
                     db.session.commit()
                     
-                    logger.info(f"CDB import completed successfully for namespace: {namespace.slug}")
                     flash('CDB import completed successfully!', 'success')
                 else:
                     error_msg = f'CDB file not found at {cdb_path}'
@@ -11939,8 +12142,19 @@ def _register_namespace_scoped_routes():
         ('/dashboard', 'dashboard', dashboard, ['GET']),
         ('/teams', 'teams', teams, ['GET', 'POST']),
         ('/teams/<int:team_id>', 'team_detail', team_detail, ['GET']),
-        ('/riders', 'riders', riders, ['GET', 'POST']),
+        ('/riders', 'riders', teams, ['GET', 'POST']),
+        ('/teams/review', 'teams_review', object_review, ['GET']),
+        ('/teams/change-log', 'teams_change_log', object_change_log, ['GET']),
+        ('/riders/change-log', 'riders_change_log', object_change_log, ['GET']),
+        ('/races/change-log', 'races_change_log', object_change_log, ['GET']),
+        ('/riders/review', 'riders_review', object_review, ['GET']),
+        ('/races/review', 'races_review', object_review, ['GET']),
+        ('/races', 'races', stats_editor, ['GET', 'POST']),
+        ('/riders/bulk-stat-editor', 'bulk_stat_editor', stats_editor, ['GET', 'POST']),
+        ('/riders/stat-edit-log', 'stat_edit_log', stats_editor, ['GET', 'POST']),
         ('/riders/<int:rider_id>', 'rider_detail', rider_detail, ['GET']),
+        ('/attributes/<entity_type>/<int:entity_id>/propose', 'propose_attribute', propose_attribute, ['POST']),
+        ('/attributes/<entity_type>/review/<int:change_id>/<action>', 'review_attribute', review_attribute, ['POST']),
         ('/riders/<int:rider_id>/stats/<action>', 'rider_stats_action', rider_stats_action, ['POST']),
         ('/stats-editor', 'stats_editor', stats_editor, ['GET', 'POST']),
         ('/stats-editor/lists/create', 'stats_editor_create_list', stats_editor_create_list, ['POST']),

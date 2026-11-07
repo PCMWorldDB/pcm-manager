@@ -7,27 +7,6 @@
         background: #1f2937 !important;
         color: #e5e7eb;
     }
-
-    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active) {
-        color: #d1d5db;
-    }
-
-    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):hover,
-    body.dark-mode .admin-integrations .nav-tabs .nav-link:not(.active):focus {
-        background: #374151;
-        border-color: #4b5563;
-        color: #ffffff;
-    }
-
-    body.dark-mode .admin-integrations .nav-tabs {
-        border-bottom-color: #4b5563;
-    }
-
-    body.dark-mode .admin-integrations .nav-tabs .nav-link.active {
-        background: #374151;
-        border-color: #4b5563 #4b5563 #374151;
-        color: #ffffff;
-    }
 {% endblock %}
 
 {% block content %}
@@ -95,7 +74,7 @@
                 </div>
 
                 <div class="mb-2">
-                    <ul class="nav nav-tabs mb-3">
+                    <ul class="nav nav-tabs nav-subtabs mb-3" aria-label="Sync sections">
                         {% for view_key, view_label in sync_views.items() %}
                         <li class="nav-item">
                             <a class="nav-link {% if active_sync_view == view_key %}active{% endif %}"

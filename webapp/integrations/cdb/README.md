@@ -28,6 +28,43 @@ working copy is converted back to PCM's packed `.cdb` format for download.
 
 ## Files
 
+Manual object edits use the shared [editable-field allowlist](editable_fields.yaml).
+Only listed logical model attributes are editable; omitted objects and fields are
+read-only. The initial policy enables rider stats and leaves teams and races
+read-only. Race fields cannot be enabled until a namespace CDB race model exists.
+Primary keys and `is_deleted` cannot be enabled. This policy is separate from
+import preservation rules and does not grant user permissions. The stats save
+and application handlers enforce it on the server, and editor inputs reflect it.
+Numeric validation and edit/approval permission checks still apply. The file is
+read when used; deploy the same configuration to all web workers. To enable a
+team field, add its logical attribute (for example `team_name`) under `team`;
+this config does not itself create a team editing endpoint.
+
+## Attribute proposals and review
+
+Rider and team detail pages show proposal forms for configured non-stat fields.
+Editable values have a pencil icon that opens an inline input and save icon.
+Saving returns to the detail page. Pending proposals show an hourglass linking
+to Review while the current value stays visible; another edit is unavailable
+until the proposal is reviewed. Read-only viewers also see pending indicators.
+Saving creates a pending `cdb_changes` row and a `created` event, without changing
+the object. Each object's Review tab lists its pending proposals. Approval locks
+the proposal and object, checks the current value against the recorded baseline,
+and applies the value and approval/application events in one transaction.
+Conflicting proposals must be rejected and resubmitted against the current value.
+Stats never enter this workflow. Race proposals require a future namespace race
+model and mapping; the race Review tab is ready to display proposals when added.
+
+Deployment: first review and manually run
+[the history schema SQL](../../tools/cdb_change_history_namespace.sql) against each
+existing **namespace** database if those tables do not exist. Never run it on main.
+Then run `docker compose exec web flask seed-roles` to register `cdb_attributes`
+read/update/approve permissions in **main** using the existing RBAC seed process.
+Only admin receives these permissions initially. Assign update to proposers and
+approve to reviewers as needed; page access also requires its existing teams or
+stats read permission. The deployment commands are operator steps, not automatic
+migrations. Back up databases before schema changes.
+
 - `cdb_mappings.yaml`: authoritative PCM version, table, and import policies.
 - `api.py`: mapping loaders, version lookups, table inspection, rider lookup,
   and transactional SQLite updates used by release generation.

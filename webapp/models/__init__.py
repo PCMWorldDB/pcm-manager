@@ -8,6 +8,8 @@ from webapp.models.main.base import (
     AuditAction,
     ExternalSyncLog,
     ExternalSyncAPICallLog,
+    ExternalCallTaskGroup,
+    ExternalCallTask,
 )
 from webapp.models.main.role import Role, Resource, Action, RolePermission
 from webapp.models.main.namespace import Namespace
@@ -21,7 +23,7 @@ from webapp.models.main.firstcycling import (
     FirstCyclingRider,
 )
 from webapp.models.main.race_result_map import RaceResultMap
-from webapp.models.main.pcs import PcsRaceResult
+from webapp.models.main.pcs import PcsRaceResult, PcsRider, PcsRiderResult
 
 
 # Association tables and relationship configuration are handled in CLI after db.create_all()
@@ -34,6 +36,8 @@ __all__ = [
     'SoftDeleteMixin',
     'ExternalSyncLog',
     'ExternalSyncAPICallLog',
+    'ExternalCallTaskGroup',
+    'ExternalCallTask',
     'Role',
     'Resource',
     'Action',
@@ -53,4 +57,6 @@ __all__ = [
     'FirstCyclingRider',
     'RaceResultMap',
     'PcsRaceResult',
+    'PcsRider',
+    'PcsRiderResult',
 ]

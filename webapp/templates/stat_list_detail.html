@@ -167,15 +167,39 @@ body.dark-mode .panel-card .border.bg-light {
             {% endif %}
         </span>
     </h1>
-    <a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor') }}">Back To Stats Editor</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('web.bulk_stat_editor') }}">Back To Bulk Stat Editor</a>
 </div>
 
 {% endif %}
+{% if not profile_context %}
+{% block rider_stats_section %}
+{% if profile_context %}
+<div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+<h5 class="mb-0">Rider Stats</h5>
+<div class="d-flex flex-nowrap align-items-center gap-2">
+{% if can_update_stats %}<button type="button" class="btn btn-outline-primary btn-sm" id="rider-stats-toggle" aria-label="Edit Rider Stats" aria-expanded="false" aria-controls="rider-stats-editor">Edit</button>{% endif %}
+
+                {% if can_approve_stats %}
+                <form method="post" action="{{ (url_for('web.rider_stats_action', rider_id=profile_context.rider.cyclist_id, action='approve') if profile_context else url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id)) }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button
+                        type="submit"
+                        class="btn btn-success"
+                        {% if not selected_namespace or not scope_delta_status.unapproved_changes or not is_submitted_for_approval or stat_conflicts %}disabled{% endif %}>
+                        Approve{% if not can_approve_stats %} &#128274;{% endif %}
+                    </button>
+                </form>
+                {% endif %}
+</div>
+</div>
+<div id="rider-stats-view">{{ super() }}</div>
+<div id="rider-stats-editor" hidden>
+{% endif %}
 <!-- Main List Editor Section -->
-<div class="panel-card card mb-4">
+<div class="{% if not profile_context %}panel-card card mb-4{% endif %}">
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="mb-0">{{ 'Edit Rider Stats' if profile_context else 'Rider List' }}</h4>
+            {% if not profile_context %}<h4 class="mb-0">Rider List</h4>{% endif %}
             <div class="d-flex align-items-center gap-2 ms-auto">
                 {% if profile_context %}
                 {% if scope_delta_status.unapproved_changes %}
@@ -196,7 +220,7 @@ body.dark-mode .panel-card .border.bg-light {
                     <button type="submit" class="btn btn-success" {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>Submit for Approval</button>
                 </form>
                 {% endif %}
-                {% if can_approve_stats %}
+                {% if not profile_context %}                {% if can_approve_stats %}
                 <form method="post" action="{{ (url_for('web.rider_stats_action', rider_id=profile_context.rider.cyclist_id, action='approve') if profile_context else url_for('web.stats_editor_approve_list_stat_deltas', list_id=stat_list.id)) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button
@@ -206,7 +230,7 @@ body.dark-mode .panel-card .border.bg-light {
                         Approve{% if not can_approve_stats %} &#128274;{% endif %}
                     </button>
                 </form>
-                {% endif %}
+                {% endif %}{% endif %}
             </div>
         </div>
 
@@ -268,8 +292,10 @@ body.dark-mode .panel-card .border.bg-light {
                     <thead>
                         <tr>
                             {% if not profile_context %}<th style="width: 60px;">Actions</th>{% endif %}
+                            {% if not profile_context %}
                             <th>Rider</th>
                             <th>Team</th>
+                            {% endif %}
                             {% for stat_key in stat_fields %}
                             <th class="stat-col">{{ stat_key|upper }}</th>
                             {% endfor %}
@@ -288,6 +314,7 @@ body.dark-mode .panel-card .border.bg-light {
                                     <button type="submit" class="btn btn-sm btn-outline-danger">X</button>
                                 </form>
                             </td>{% endif %}
+                            {% if not profile_context %}
                             <td class="{% if not row.rider_in_namespace %}text-muted{% endif %}">
                                 {% if row.rider_link_id %}
                                 <a href="{{ url_for('web.rider_detail', rider_id=row.rider_link_id) }}" class="text-reset text-decoration-none">
@@ -306,6 +333,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 {{ row.team_name }}
                                 {% endif %}
                             </td>
+                            {% endif %}
                             {% for stat_key in stat_fields %}
                             {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                             {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
@@ -313,7 +341,7 @@ body.dark-mode .panel-card .border.bg-light {
                                 {% if stat_value is not none %}
                                 <div class="stat-input-row">
                                     <span class="delta-display" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" style="visibility: hidden;">+0</span>
-                                    <input type="{{ 'number' if can_update_stats else 'text' }}" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1" {% if not can_update_stats %}disabled title="Editing locked"{% endif %}>
+                                    <input type="{{ 'number' if can_update_stats else 'text' }}" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1" {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields %}disabled title="Editing locked"{% endif %}>
                                 </div>
                                 {% else %}-{% endif %}
                             </td>
@@ -330,6 +358,10 @@ body.dark-mode .panel-card .border.bg-light {
     </div>
 </div>
 
+
+{% if profile_context %}</div>{% endif %}
+{% endblock %}
+{% endif %}
 {% if not profile_context %}
 <!-- Rider Search Section -->
 <div class="panel-card card">
@@ -393,6 +425,23 @@ body.dark-mode .panel-card .border.bg-light {
 {% endblock %}
 
 {% block scripts %}
+{% if profile_context %}
+<script>
+(function () {
+    const toggle = document.getElementById('rider-stats-toggle');
+    if (!toggle) return;
+    const view = document.getElementById('rider-stats-view');
+    const editor = document.getElementById('rider-stats-editor');
+    toggle.addEventListener('click', function () {
+        const editing = editor.hidden;
+        editor.hidden = !editing;
+        view.hidden = editing;
+        toggle.textContent = editing ? 'View mode' : 'Edit';
+        toggle.setAttribute('aria-expanded', String(editing));
+    });
+})();
+</script>
+{% endif %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/stat_input_controls.css', v=4) }}">
 <script src="{{ url_for('static', filename='js/stat_input_controls.js') }}"></script>
 <script>

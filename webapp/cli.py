@@ -13,6 +13,7 @@ from webapp.extensions import db, bcrypt
 from webapp.models import User, Role, Namespace
 from webapp.rbac_seed import sync_rbac_metadata
 from webapp.config import (
+    get_setting,
     get_base_data_path,
     ensure_base_directories,
     ensure_namespace_directories,
@@ -27,7 +28,7 @@ def _startup_init_lock(log=None):
     if log is None:
         log = lambda _: None
 
-    provisioner_url = os.getenv('PROVISIONER_DATABASE_URL')
+    provisioner_url = get_setting('PROVISIONER_DATABASE_URL')
     engine = None
     owns_engine = False
 
@@ -105,8 +106,8 @@ def initialize_database(log=None):
         log('   ✓ Roles seeded')
 
         # Step 3: Create admin user (if credentials provided via env vars)
-        admin_username = os.getenv('ADMIN_USERNAME')
-        admin_password = os.getenv('ADMIN_PASSWORD')
+        admin_username = get_setting('ADMIN_USERNAME')
+        admin_password = get_setting('ADMIN_PASSWORD')
 
         if admin_username and admin_password:
             log(f'\n3. Creating admin user: {admin_username}...')
@@ -149,8 +150,8 @@ def _provision_main_database(log=None):
     if log is None:
         log = lambda _: None
 
-    database_url = os.getenv('DATABASE_URL')
-    provisioner_url = os.getenv('PROVISIONER_DATABASE_URL')
+    database_url = get_setting('SQLALCHEMY_DATABASE_URI')
+    provisioner_url = get_setting('PROVISIONER_DATABASE_URL')
 
     if not database_url:
         raise click.ClickException('DATABASE_URL is not configured')

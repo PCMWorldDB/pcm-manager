@@ -1,0 +1,17 @@
+{% set endpoint = request.endpoint or '' %}
+{% set is_rider = endpoint in ['web.riders', 'web.riders_review', 'web.riders_change_log', 'web.rider_detail', 'web.bulk_stat_editor', 'web.stat_edit_log'] or endpoint.startswith('web.stats_editor_list') %}
+{% set is_team = endpoint in ['web.teams', 'web.teams_review', 'web.teams_change_log', 'web.team_detail'] %}
+{% set is_race = endpoint in ['web.races', 'web.races_review', 'web.races_change_log'] or endpoint.startswith('web.stats_editor_race') %}
+{% if is_team or is_rider or is_race %}
+<nav class="nav nav-tabs mb-3" aria-label="{{ 'Teams' if is_team else 'Riders' if is_rider else 'Races' }} sections">
+    {% set section = 'teams' if is_team else 'riders' if is_rider else 'races' %}
+    {% if current_user.is_superadmin or current_user.has_permission('teams' if is_team or is_rider else 'stats', 'read') %}
+    <a class="nav-link {{ 'active' if not endpoint.endswith('_review') and not endpoint.endswith('_change_log') and endpoint not in ['web.bulk_stat_editor', 'web.stat_edit_log'] and not endpoint.startswith('web.stats_editor_list') else '' }}" href="{{ url_for('web.' ~ section) }}">{{ section|title }}</a>
+    <a class="nav-link {{ 'active' if endpoint.endswith('_review') else '' }}" href="{{ url_for('web.' ~ section ~ '_review') }}">Review</a>
+    <a class="nav-link {{ 'active' if endpoint.endswith('_change_log') else '' }}" href="{{ url_for('web.' ~ section ~ '_change_log') }}">Change Log</a>
+    {% endif %}
+    {% if is_rider and (current_user.is_superadmin or current_user.has_permission('stats', 'read')) %}
+    <a class="nav-link {{ 'active' if endpoint == 'web.bulk_stat_editor' or endpoint.startswith('web.stats_editor_list') else '' }}" href="{{ url_for('web.bulk_stat_editor') }}">Bulk Stat Editor</a>
+    {% endif %}
+</nav>
+{% endif %}

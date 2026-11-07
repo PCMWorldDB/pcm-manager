@@ -5,7 +5,7 @@ Each namespace gets its own PostgreSQL database with this schema.
 """
 from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, DateTime, BigInteger, UniqueConstraint, Index
 from webapp.models.ns.base import NamespaceBase
-from webapp.models.ns.cdb import CDB_TABLES
+from webapp.models.ns.cdb import CDB_HISTORY_TABLES, CDB_TABLES
 from sqlalchemy.orm import relationship
 
 from webapp.integrations.cdb import (
@@ -190,6 +190,7 @@ class StatListItem(NamespaceBase):
 NAMESPACE_TABLES = [
     *CDB_TABLES,
     Release,
+    *CDB_HISTORY_TABLES,
     ReleaseFile,
     StatChange,
     StatChangeSnapshot,
