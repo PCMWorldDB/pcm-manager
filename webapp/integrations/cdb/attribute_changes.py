@@ -9,6 +9,7 @@ import math
 from sqlalchemy import Boolean, Float, Integer, String, insert, select, update
 
 from webapp.integrations.cdb.editability import get_editable_fields
+from webapp.integrations.cdb.rider_state import refresh_pending_flags
 from webapp.models.ns.cdb import CDB_TABLES, CDBChange, CDBChangeEvent
 
 
@@ -130,6 +131,8 @@ def propose(conn, entity_type, entity_id, attribute, raw_value, actor_id):
         source='attribute_editor', created_by_id=actor_id).returning(changes.c.id)).scalar_one()
     conn.execute(insert(CDBChangeEvent.__table__).values(
         change_id=change_id, event_type='created', actor_id=actor_id))
+    if entity_type == 'rider':
+        refresh_pending_flags(conn, [entity_id])
     return change_id
 
 
@@ -170,6 +173,8 @@ def decide(conn, entity_type, change_id, action, actor_id):
     if action == 'reject':
         conn.execute(update(changes).where(changes.c.id == change_id).values(status='rejected'))
         conn.execute(insert(events).values(change_id=change_id, event_type='rejected', actor_id=actor_id))
+        if entity_type == 'rider':
+            refresh_pending_flags(conn, [change['entity_id']])
         return
     table, column = _column(entity_type, change['attribute_name'])
     row = conn.execute(select(table).where(table.c.id == change['entity_id'], table.c.is_deleted.is_(False))
@@ -188,3 +193,5 @@ def decide(conn, entity_type, change_id, action, actor_id):
         {'change_id': change_id, 'event_type': 'applied', 'actor_id': actor_id,
          'context': {'actual_before_value': current}},
     ])
+    if entity_type == 'rider':
+        refresh_pending_flags(conn, [change['entity_id']])

@@ -142,3 +142,38 @@ def test_missing_activity_history_keeps_roster_visible(app, rider_views):
         assert total == 2 and len(rows) == 2
         assert all(row.activity_available is False for row in rows)
         assert all(row.latest_result_date is None for row in rows)
+
+
+def test_country_names_use_namespace_country_flag_name(app, client, rider_views):
+    namespaces, engines = rider_views
+    for index, engine in enumerate(engines):
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO country (id, constant, flag_name) VALUES (1, 'ITA', :name)"),
+                         {'name': 'Italy' if index == 0 else 'Different Italy'})
+            conn.execute(text("INSERT INTO region (id, country_id) VALUES (1, 1)"))
+            conn.execute(text("INSERT INTO team (id, team_name, country_id) VALUES (1, 'Test Team', 1)"))
+            conn.execute(text('UPDATE rider SET team_id=1, region_id=1'))
+            conn.execute(text("UPDATE activity_monitor_riders SET nationality='ITA', nationality_code='ITA'"))
+    with app.app_context():
+        for index, namespace in enumerate(namespaces):
+            expected = 'Italy' if index == 0 else 'Different Italy'
+            riders, total, countries, _ = routes._load_namespace_roster_riders(namespace, {'country': '1'})
+            assert total == 2 and all(rider.nation_name == expected for rider in riders)
+            assert countries == [{'value': '1', 'label': expected}]
+            teams, _, countries, _ = routes._load_namespace_roster_teams(namespace, selected_country='1')
+            assert len(teams) == 1 and teams[0].nation_name == expected
+            assert countries == [{'value': '1', 'label': expected}]
+            assert routes._load_namespace_roster_team(namespace, 1).nation_name == expected
+            assert routes._load_namespace_roster_rider(namespace, 1).nation_name == expected
+            assert all(rider.nation_name == expected for rider in routes._load_namespace_roster_riders_for_team(namespace, 1))
+            with engines[index].connect() as conn:
+                label = conn.execute(text(f'SELECT {routes._activity_monitor_country_sql()} FROM activity_monitor_riders r')).scalar_one()
+                assert label == expected
+    for path in ['/n/view-alpha/riders', '/n/view-alpha/teams', '/n/view-alpha/teams/1', '/n/view-alpha/riders/1']:
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert b'Italy' in page.data and b'>ITA<' not in page.data
+    with engines[0].begin() as conn:
+        conn.execute(text("UPDATE country SET flag_name=' ' WHERE id=1"))
+    with app.app_context():
+        assert routes._load_namespace_roster_rider(namespaces[0], 1).nation_name == 'ITA'

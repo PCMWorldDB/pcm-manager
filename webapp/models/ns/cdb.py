@@ -26,6 +26,15 @@ class Rider(CDBRecord, NamespaceBase):
     region_id = Column(Integer)
     team_id = Column(Integer)
 
+    identity_pcs_status = Column(String(20), nullable=False, default='unknown', server_default='unknown')
+    has_pending_stat_changes = Column(Boolean, nullable=False, default=False, server_default=false())
+    has_pending_attribute_changes = Column(Boolean, nullable=False, default=False, server_default=false())
+
+    __table_args__ = (
+        CheckConstraint("identity_pcs_status IN ('unknown', 'verified', 'review', 'failed')",
+                        name='ck_rider_identity_pcs_status'),
+    )
+
     # Basic info
     first_name = Column(String(100))
     last_name = Column(String(100))

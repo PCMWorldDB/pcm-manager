@@ -27,7 +27,9 @@ def get_editable_fields(entity_type):
             continue
         for field in fields:
             column = model.__table__.columns.get(field)
-            if column is None or column.primary_key or field == 'is_deleted':
+            if column is None or column.primary_key or field in {
+                'is_deleted', 'identity_pcs_status', 'has_pending_stat_changes', 'has_pending_attribute_changes',
+            }:
                 raise ValueError(f'Invalid editable field: {object_name}.{field}')
     return frozenset(policy.get(entity_type, ()))
 

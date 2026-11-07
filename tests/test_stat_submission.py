@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from webapp.extensions import db
 from webapp.models import AuditLog, FirstCyclingRace, Role, User
 from webapp.web import routes
+from webapp.models.ns.cdb import Rider, CDBChange
 
 
 @pytest.mark.parametrize('role,expected', [
@@ -40,7 +41,10 @@ def test_submit_counts_stage_edits_only_in_selected_namespace(app, client, monke
         db.session.commit()
         engine = create_engine(db.engine.url, connect_args={'options': f'-csearch_path={schema}'})
         with engine.begin() as conn:
-            conn.execute(text('CREATE TABLE stat_changes (id serial PRIMARY KEY, race_result_id integer, stat_list_id integer, is_approved boolean)'))
+            conn.execute(text('CREATE TABLE stat_changes (id serial PRIMARY KEY, rider_id integer DEFAULT 1, race_result_id integer, stat_list_id integer, is_approved boolean)'))
+            Rider.__table__.create(conn)
+            CDBChange.__table__.create(conn)
+            conn.execute(text('INSERT INTO rider (id) VALUES (1)'))
             conn.execute(text('INSERT INTO stat_changes (race_result_id, stat_list_id, is_approved) VALUES (11,NULL,FALSE), (12,NULL,FALSE), (12,NULL,TRUE), (99,NULL,FALSE), (11,1,FALSE)'))
         user = User(username=uuid4().hex, is_active=True)
         user.roles.append(Role.query.filter_by(name='admin').one())
@@ -98,6 +102,9 @@ def test_submit_counts_stage_edits_only_in_selected_namespace(app, client, monke
             assert approvals[0].resource_id == 987654321
             assert approvals[0].details['approved_count'] == 3
             assert approvals[0].details['applied_count'] == 2
+        with engine.connect() as conn:
+            # Race 99 and list 1 still contain pending edits for this rider.
+            assert conn.execute(text('SELECT has_pending_stat_changes FROM rider WHERE id=1')).scalar() is True
         assert client.post(path).status_code == 302
         assert len(sent) == 2
     finally:

@@ -222,14 +222,6 @@
                         <label for="rider_team" class="form-label">Team</label>
                         <input id="rider_team" name="team" class="form-control" type="search" value="{{ rider_filters.team }}" placeholder="Search by team name">
                     </div>
-                    <div class="col-lg-2 col-md-6">
-                        <label for="per_page" class="form-label">Per page</label>
-                        <select id="per_page" name="per_page" class="form-select">
-                            {% for option in per_page_options %}
-                            <option value="{{ option }}" {% if rider_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
                     <div class="col-12 d-flex align-items-end gap-2 flex-wrap rider-view-filters">
                         {% if rider_filters.view == 'stats' %}
                         <div>
@@ -261,8 +253,14 @@
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
             <h5 class="mb-0">Riders ({{ rider_pagination.total }})</h5>
-            <div class="text-muted">
-                Showing {{ rider_pagination.start }}-{{ rider_pagination.end }} of {{ rider_pagination.total }}
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span class="text-muted">Showing {{ rider_pagination.start }}-{{ rider_pagination.end }} of {{ rider_pagination.total }}</span>
+                <label for="per_page" class="visually-hidden">Rows per page</label>
+                <select id="per_page" name="per_page" form="riders-filters-form" class="form-select form-select-sm w-auto">
+                    {% for option in per_page_options %}
+                    <option value="{{ option }}" {% if rider_pagination.per_page == option %}selected{% endif %}>{{ option }} / page</option>
+                    {% endfor %}
+                </select>
             </div>
         </div>
 
@@ -450,7 +448,7 @@ document.addEventListener('DOMContentLoaded', function () {
         clearTimeout(filterTimer);
         submitting = true;
     });
-    filtersForm.querySelectorAll('select').forEach(function (field) {
+    Array.from(filtersForm.elements).filter(field => field.tagName === 'SELECT').forEach(function (field) {
         field.addEventListener('change', applyFilters);
     });
     filtersForm.querySelectorAll('input[type="number"]').forEach(function (field) {

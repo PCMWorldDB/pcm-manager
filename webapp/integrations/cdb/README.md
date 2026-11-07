@@ -42,6 +42,19 @@ this config does not itself create a team editing endpoint.
 
 ## Attribute proposals and review
 
+Rider workflow state is stored in `identity_pcs_status` (unknown, verified,
+review, failed) and the derived `has_pending_stat_changes` and
+`has_pending_attribute_changes` flags. The flags are refreshed transactionally
+by edit/approval workflows across all scopes, so approving one proposal cannot
+clear a flag while another remains pending. These internal fields are read-only
+to the manual field editor and are not mapped into the external CDB. Identity
+defaults to unknown; this schema change does not infer or change PCS verification.
+For existing namespace databases, pause writes, back up, and manually run
+[rider_state_namespace.sql](../../tools/rider_state_namespace.sql) after the history
+schema and before deploying this code. It backfills pending flags from existing
+changes; run it against each namespace, never main. New namespaces receive the
+columns through normal schema creation.
+
 Rider and team detail pages show proposal forms for configured non-stat fields.
 Editable values have a pencil icon that opens an inline input and save icon.
 Saving returns to the detail page. Pending proposals show an hourglass linking

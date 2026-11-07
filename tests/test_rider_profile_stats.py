@@ -1,5 +1,6 @@
 """Individual edits save drafts and explicitly submit the current edits for approval."""
 import json
+from bs4 import BeautifulSoup
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -74,6 +75,18 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert b'stat_input_controls.js' in profile.data
         assert b'>Edit Stats<' not in profile.data
         assert b'No stat edits found for this rider.' in profile.data
+        markup = BeautifulSoup(profile.data, 'html.parser')
+        editor = markup.select_one('#rider-stats-editor')
+        assert editor.has_attr('hidden')
+        attributes_card = editor.find_parent('div', class_='panel-card')
+        assert attributes_card.find('h5', string='Rider Attributes') is not None
+        assert markup.select_one('#rider-stats-view').find_parent('div', class_='panel-card') is attributes_card
+        assert markup.select_one('#rider-attribute-approvals') is not None
+        actions = [form['action'].rsplit('/', 1)[-1] for form in editor.select('form[action*="/stats/"]')]
+        assert actions == (['save', 'approve'] if role == 'admin' else ['save'])
+        assert editor.select_one('#save-stat-delta-btn').get_text(strip=True) == 'Save & Submit'
+        assert not markup.select('#rider-stats-toggle')[0].parent.select('form')
+        assert b"editing ? 'View' : 'Edit'" in profile.data
         wrong_rider = json.dumps([{'first_cycling_rider_id': 2, 'stat_name': 'mo', 'final_value': 80}])
         assert client.post(base + 'save', data={'changes_json': wrong_rider}).status_code == 400
         assert client.post(base + 'submit').status_code == 302
@@ -83,12 +96,9 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
             with app.app_context():
                 with engine.connect() as conn:
                     fingerprint = routes._individual_pending_fingerprint(conn, 1)
-                assert not routes._individual_submission_matches(namespace, 1, fingerprint)
-            if role == 'admin':
-                assert client.post(base + 'approve').status_code == 302
-                with engine.connect() as conn:
-                    assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 70
-            assert client.post(base + 'submit').status_code == 302
+                assert routes._individual_submission_matches(namespace, 1, fingerprint)
+            with engine.connect() as conn:
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 70
             with app.app_context():
                 with engine.connect() as conn:
                     fingerprint = routes._individual_pending_fingerprint(conn, 1)
@@ -102,6 +112,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert b'<th>Name</th>' in history.data
         assert b'Individual' in history.data
         assert b'Test Rider' in history.data
+        assert (b'Approve rider stats' in history.data) == (role == 'admin')
         if role == 'admin':
             with engine.begin() as conn:
                 conn.execute(text('UPDATE rider SET stat_mo=71 WHERE id=1'))

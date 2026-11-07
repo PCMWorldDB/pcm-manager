@@ -49,7 +49,7 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
         db.session.add(user)
         db.session.commit()
         user_id = user.id
-    namespace = SimpleNamespace(id=123456789, build_connection_string=lambda: 'selected-list-namespace')
+    namespace = SimpleNamespace(id=123456789, database_name='worlddb_test', slug='list-test', build_connection_string=lambda: 'selected-list-namespace')
     monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: [namespace])
     monkeypatch.setattr(routes, '_get_selected_namespace', lambda _: namespace)
     monkeypatch.setattr(routes, 'create_engine', lambda url: engine if url == 'selected-list-namespace' else pytest.fail('Wrong namespace'))

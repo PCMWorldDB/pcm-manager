@@ -10,7 +10,7 @@ from webapp.web import routes
 
 
 PATHS = [
-    '/teams', '/riders', '/races', '/riders/bulk-stat-editor',
+    '/teams', '/riders', '/races', '/riders/bulk-editor',
     '/riders/stat-edit-log', '/teams/review', '/riders/review', '/races/review',
     '/teams/change-log', '/riders/change-log', '/races/change-log',
 ]
@@ -52,7 +52,7 @@ def test_object_pages_and_permissions(app, client, monkeypatch, allowed):
         if allowed:
             assert b'<h2 class="mb-1">Teams</h2>' in client.get('/teams').data
             assert b'<h2 class="mb-1">Riders</h2>' in client.get('/riders').data
-            assert b'<h2 class="mb-1">Bulk Stat Editor</h2>' in client.get('/riders/bulk-stat-editor').data
+            assert b'<h2 class="mb-1">Bulk Editor</h2>' in client.get('/riders/bulk-editor').data
             assert b'<h2 class="mb-1">Races</h2>' in client.get('/races').data
             response = client.post('/riders', data={'action': 'apply_filters', 'q': 'Example'})
             assert response.location.endswith('/riders')
@@ -76,6 +76,7 @@ def test_review_namespace_urls_do_not_fall_back(app, client, monkeypatch):
     namespaces = [SimpleNamespace(id=index, slug=slug) for index, slug in [(123, 'alpha'), (456, 'beta')]]
     monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: namespaces)
     monkeypatch.setattr(routes, '_load_attribute_review', lambda namespace, entity_type, include_history=False: [])
+    monkeypatch.setattr(routes, '_load_namespace_rider_stat_edits', lambda *args, **kwargs: [])
     try:
         with client.session_transaction() as session:
             session['_user_id'] = str(user_id)
@@ -85,7 +86,7 @@ def test_review_namespace_urls_do_not_fall_back(app, client, monkeypatch):
                 response = client.get(f'/n/{namespace.slug}/{section}/review')
                 assert response.status_code == 200
                 assert f'href="/n/{namespace.slug}/{section}/review"'.encode() in response.data
-                assert b'No pending attribute changes.' in response.data
+                assert (b'No pending stat approvals.' if section == 'riders' else b'No pending attribute changes.') in response.data
                 with client.session_transaction() as session:
                     assert session['selected_namespace_id'] == namespace.id
                 response = client.get(f'/n/{namespace.slug}/{section}/change-log')

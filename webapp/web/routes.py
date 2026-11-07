@@ -25,7 +25,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import create_engine, text, Integer, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from werkzeug.exceptions import NotFound
+from werkzeug.exceptions import HTTPException, NotFound
 
 from webapp.web import web_bp
 from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, activity_sql
@@ -55,6 +55,7 @@ from webapp.models.main.firstcycling import FirstCyclingRaceStage
 from webapp.integrations.cdb import get_field_mapping
 from webapp.integrations.cdb.editability import get_editable_fields
 from webapp.integrations.cdb import attribute_changes
+from webapp.integrations.cdb.rider_state import refresh_pending_flags
 from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
@@ -278,6 +279,23 @@ def _normalize_name_search_term(value):
             .replace('ß', 'ss').replace('þ', 'th').replace('ð', 'd')
             .replace('ø', 'o').replace('ł', 'l').replace('đ', 'd')
             .replace('ı', 'i'))
+
+
+def _activity_monitor_country_sql():
+    """Display the namespace CDB's country name, including historical snapshots."""
+    return """COALESCE(
+        (SELECT COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''))
+         FROM rider cdb_rider
+         JOIN region ON region.id = cdb_rider.region_id
+         JOIN country ON country.id = region.country_id
+         WHERE cdb_rider.id = r.source_worlddb_rider_id AND r.present_in_cdb),
+        (SELECT COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''))
+         FROM country
+         WHERE UPPER(country.constant) = UPPER(COALESCE(NULLIF(r.nationality_code, ''), r.nationality))
+            OR LOWER(country.flag_name) = LOWER(r.nationality)
+         ORDER BY country.id LIMIT 1),
+        NULLIF(r.nationality, ''), NULLIF(r.nationality_code, ''), '—'
+    )"""
 
 
 def _activity_monitor_attention_sql(rider_alias='r'):
@@ -1382,11 +1400,11 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                     """
                     SELECT DISTINCT
                         t.country_id::text AS value,
-                        COALESCE(country.constant, t.country_id::text) AS label
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), t.country_id::text) AS label
                     FROM team t
                     LEFT JOIN country country ON country.id = t.country_id
                     WHERE t.country_id IS NOT NULL
-                    ORDER BY COALESCE(country.constant, t.country_id::text) ASC
+                    ORDER BY COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), t.country_id::text) ASC
                     """
                 )
             ).mappings().all()
@@ -1408,7 +1426,7 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                         t.abbreviation,
                         t.country_id,
                         t.division_id,
-                        COALESCE(country.constant, t.country_id::text) AS nation_name,
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), t.country_id::text) AS nation_name,
                         COALESCE(division.constant, t.division_id::text) AS division,
                         t.abbreviation AS uci_code,
                         NULL AS ranking_rank,
@@ -1426,6 +1444,7 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
                         t.country_id,
                         t.division_id,
                         country.constant,
+                        country.flag_name,
                         division.constant
                     ORDER BY
                         t.team_name ASC NULLS LAST,
@@ -1517,12 +1536,12 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                     """
                     SELECT DISTINCT
                         country.id::text AS value,
-                        COALESCE(country.constant, country.id::text) AS label
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS label
                     FROM rider c
                     LEFT JOIN region region ON region.id = c.region_id
                     LEFT JOIN country country ON country.id = region.country_id
                     WHERE country.id IS NOT NULL
-                    ORDER BY COALESCE(country.constant, country.id::text) ASC
+                    ORDER BY COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) ASC
                     """
                 )
             ).mappings().all()
@@ -1569,7 +1588,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         c.size_cm,
                         c.weight_kg,
                         COALESCE(t.team_name, t.short_name) AS team_name,
-                        COALESCE(country.constant, c.region_id::text) AS nation_name,
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
                     FROM rider c
                     {activity_join}
@@ -1622,7 +1641,7 @@ def _load_namespace_roster_team(namespace, team_id):
                         team.abbreviation,
                         team.country_id,
                         team.division_id,
-                        COALESCE(country.constant, team.country_id::text) AS nation_name,
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), team.country_id::text) AS nation_name,
                         COALESCE(division.constant, team.division_id::text) AS division,
                         team.abbreviation AS uci_code,
                         NULL AS ranking_rank
@@ -1666,7 +1685,7 @@ def _load_namespace_roster_riders_for_team(namespace, team_id):
                         c.size_cm,
                         c.weight_kg,
                         t.team_name,
-                        COALESCE(country.constant, c.region_id::text) AS nation_name,
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
                     FROM rider c
                     LEFT JOIN team t ON t.id = c.team_id
@@ -1715,7 +1734,7 @@ def _load_namespace_roster_rider(namespace, rider_id):
                         c.size_cm,
                         c.weight_kg,
                         t.team_name,
-                        COALESCE(country.constant, c.region_id::text) AS nation_name,
+                        COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
                     FROM rider c
                     LEFT JOIN team t ON t.id = c.team_id
@@ -1772,7 +1791,7 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
     }
 
 
-def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offset=0):
+def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offset=0, approved=None):
     """Load newest edits for a rider, or a page of the namespace-wide stat log."""
     if namespace is None:
         return []
@@ -1808,11 +1827,12 @@ def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offse
                     LEFT JOIN rider c ON c.id = sc.rider_id
                     LEFT JOIN releases rel ON rel.id = sc.release_id
                     WHERE (CAST(:rider_id AS INTEGER) IS NULL OR sc.rider_id = :rider_id)
+                      AND (CAST(:approved AS BOOLEAN) IS NULL OR COALESCE(sc.is_approved, FALSE) = :approved)
                     ORDER BY sc.id DESC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
-                {'rider_id': rider_id, 'limit': limit, 'offset': offset},
+                {'rider_id': rider_id, 'limit': limit, 'offset': offset, 'approved': approved},
             ).mappings().all()
     except Exception:
         logger.exception('Failed to load stat edits for cyclist %s from namespace %s', rider_id, namespace.slug)
@@ -1888,6 +1908,8 @@ def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offse
             'id': row.get('id'),
             'rider_name': row.get('rider_name') or f'Rider #{row_rider_id}',
             'rider_url': url_for('web.rider_detail', rider_id=row_rider_id),
+            'approve_url': url_for('web.rider_stats_action', rider_id=row_rider_id, action='approve')
+            if row.get('race_result_id') is None and row.get('stat_list_id') is None else None,
             'source': source,
             'stat': stat_code.upper() if stat_code else '-',
             'original_value': row.get('original_value'),
@@ -3967,6 +3989,8 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                 selected_columns.append('gender')
             if 'created_at' in stat_list_columns:
                 selected_columns.append('created_at')
+            if 'created_by_id' in stat_list_columns:
+                selected_columns.append('created_by_id')
 
             query = """
                 SELECT {selected_columns}
@@ -5052,10 +5076,10 @@ def activity_monitor_riders():
                         WHERE """ + team_label_sql + """ IS NOT NULL
                         ORDER BY value
                     """)).scalars().all()
-                    country_options = conn.execute(text("""
-                        SELECT DISTINCT COALESCE(NULLIF(nationality, ''), nationality_code) AS value
-                        FROM activity_monitor_riders
-                        WHERE COALESCE(NULLIF(nationality, ''), nationality_code) IS NOT NULL
+                    country_name_sql = _activity_monitor_country_sql()
+                    country_options = conn.execute(text(f"""
+                        SELECT DISTINCT {country_name_sql} AS value
+                        FROM activity_monitor_riders r
                         ORDER BY value
                     """)).scalars().all()
                     division_options = conn.execute(text("""
@@ -5092,7 +5116,7 @@ def activity_monitor_riders():
                         where.append(f"({_normalized_name_sql(f'({team_label_sql})')} LIKE :team OR r.team_id::text = :team_exact)")
                         params.update(team=f"%{_normalize_name_search_term(filters['team'])}%", team_exact=filters['team'])
                     if filters['country']:
-                        where.append(_normalized_name_sql("COALESCE(NULLIF(r.nationality, ''), r.nationality_code, '')") + " LIKE :country")
+                        where.append(_normalized_name_sql(country_name_sql) + " LIKE :country")
                         params['country'] = f"%{_normalize_name_search_term(filters['country'])}%"
                     if filters['division']:
                         where.append(
@@ -5206,7 +5230,7 @@ def activity_monitor_riders():
                                r.first_cycling_id, r.first_name, r.last_name, r.birth_date,
                                r.nationality, r.nationality_code, r.team_id,
                                NULLIF(r.team_name, '') AS team_name,
-                               COALESCE(NULLIF(r.nationality, ''), r.nationality_code, '—') AS country_name,
+                               {country_name_sql} AS country_name,
                                {division_label_sql} AS division_name,
                                r.identity_status, r.identity_hold, r.identity_hold_reason,
                                CASE WHEN r.birth_date IS NOT NULL
@@ -6722,11 +6746,11 @@ def activity_monitor_rider_detail(rider_id):
     try:
         engine = create_engine(selected_namespace.build_connection_string())
         with engine.connect() as conn:
-            row = conn.execute(text("""
+            row = conn.execute(text(f"""
                 SELECT r.id, r.source_worlddb_rider_id AS worlddb_rider_id,
                        r.identity_generation, r.first_cycling_id,
                        r.first_name, r.last_name, r.birth_date,
-                       COALESCE(NULLIF(r.nationality, ''), r.nationality_code, '—') AS nationality,
+                       {_activity_monitor_country_sql()} AS nationality,
                        NULLIF(r.team_name, '') AS team_name,
                        COALESCE(NULLIF(d.constant, ''), d.id::text, '—') AS division_name,
                        r.identity_status, r.identity_hold,
@@ -6738,7 +6762,7 @@ def activity_monitor_rider_detail(rider_id):
             """), {'rider_id': rider_id}).mappings().first()
             if row is not None:
                 rider = dict(row)
-                race_days_row = conn.execute(text("""
+                race_days_row = conn.execute(text(f"""
                     SELECT CASE WHEN BOOL_OR(
                                       LOWER(TRIM(COALESCE(c.source, ''))) IN ('pcs', 'pcs_html', 'procyclingstats')
                                       AND LOWER(REPLACE(TRIM(COALESCE(c.source_status, '')), '_', ' '))
@@ -7856,12 +7880,25 @@ def object_review(object_type=None):
     if not _can_access_panel(panel):
         abort(403)
     selected_namespace = _get_selected_namespace(_get_accessible_namespaces())
-    changes = []
-    if selected_namespace is not None:
+    review_tab = request.args.get('tab', 'stats') if object_type == 'riders' else 'attributes'
+    if review_tab not in ('stats', 'identity', 'activity', 'attributes'):
+        abort(404)
+    if object_type == 'riders' and review_tab == 'stats' and not _can_access_panel('stat_editor'):
+        abort(403)
+    changes, attribute_history, pending_stats, historical_stats = [], [], [], []
+    if selected_namespace is not None and review_tab == 'attributes':
         changes = _load_attribute_review(selected_namespace, object_type[:-1])
+        if object_type == 'riders':
+            attribute_history = _load_attribute_review(selected_namespace, 'rider', include_history=True)
+    elif selected_namespace is not None and review_tab == 'stats':
+        pending_stats = _load_namespace_rider_stat_edits(selected_namespace, approved=False, limit=200)
+        historical_stats = _load_namespace_rider_stat_edits(selected_namespace, approved=True, limit=200)
     return render_template(
         'object_review.html', object_type=object_type,
         selected_namespace=selected_namespace, changes=changes,
+        review_tab=review_tab, attribute_history=attribute_history,
+        pending_stats=pending_stats, historical_stats=historical_stats,
+        can_approve_stats=_can_approve_stats(),
         can_approve_attributes=_can_attribute_action('approve'),
     )
 
@@ -7902,8 +7939,15 @@ def _attribute_editor_context(namespace, entity_type, entity_id):
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, namespace)
             fields = attribute_changes.editor_fields(conn, entity_type, entity_id)
+        pending = [dict(field['pending']) for field in fields if field['pending']]
+        actor_ids = {change['created_by_id'] for change in pending if change['created_by_id'] is not None}
+        actors = {user.id: user.username for user in User.query.filter(User.id.in_(actor_ids)).all()} if actor_ids else {}
+        for change in pending:
+            change['submitted_by'] = actors.get(change['created_by_id'], 'Unknown user') if change['created_by_id'] is not None else 'System'
         return {'attribute_fields': fields, 'attribute_field_map': {field['name']: field for field in fields},
-                'can_edit_attributes': _can_attribute_action('update'), 'attribute_entity_type': entity_type,
+                'pending_attribute_changes': pending,
+                'can_edit_attributes': _can_attribute_action('update'),
+                'can_approve_attributes': _can_attribute_action('approve'), 'attribute_entity_type': entity_type,
                 'attribute_entity_id': entity_id, 'attribute_namespace_slug': namespace.slug}
     finally:
         engine.dispose()
@@ -7969,7 +8013,8 @@ def review_attribute(entity_type, change_id, action):
         flash('Change approved and applied.' if action == 'approve' else 'Change rejected.', 'success')
     finally:
         engine.dispose()
-    return redirect(url_for('web.' + entity_type + 's_review', namespace_slug=namespace.slug))
+    return redirect(url_for('web.' + entity_type + 's_review', namespace_slug=namespace.slug,
+                            **({'tab': 'attributes'} if entity_type == 'rider' else {})))
 
 
 @web_bp.route('/teams/change-log', endpoint='teams_change_log')
@@ -8003,6 +8048,7 @@ def teams():
     selected_namespace = _get_selected_namespace(available_namespaces)
     selected_year, selected_gender = _resolve_namespace_season(selected_namespace)
     season_selected = selected_namespace is not None and selected_year is not None
+
     active_method = 'riders' if request.endpoint == 'web.riders' else 'teams'
 
     team_division_options = []
@@ -8316,8 +8362,8 @@ def _individual_submission_matches(namespace, rider_id, fingerprint):
     submission = AuditLog.query.filter_by(
         action='individual_stats_submitted',
         resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
-    ).order_by(AuditLog.id.desc()).first()
-    return submission is not None and (submission.details or {}).get('fingerprint') == fingerprint
+    ).filter(AuditLog.details['fingerprint'].as_string() == fingerprint).first()
+    return submission is not None
 
 
 def _load_individual_stat_editor(namespace, rider_id, current_stats):
@@ -8373,6 +8419,7 @@ def rider_stats_action(rider_id, action):
             abort(400)
         _require_editable_stat_changes(changes)
     engine = create_engine(namespace.build_connection_string())
+    submission_fingerprint = None
     try:
         with engine.begin() as conn:
             # Serialize individual saves and approvals for this rider within this namespace.
@@ -8402,7 +8449,18 @@ def rider_stats_action(rider_id, action):
                             VALUES (:rider_id, :stat, :original, :final, :delta, FALSE, :override)
                         '''), {**params, 'stat': stat, 'original': original, 'final': final,
                                'delta': final - original, 'override': bool(item.get('is_confilict_override'))})
-                flash('Saved stat changes.', 'success')
+                submission_fingerprint = _individual_pending_fingerprint(conn, rider_id)
+                refresh_pending_flags(conn, [rider_id])
+                if submission_fingerprint:
+                    # Persist the submission while the namespace rider lock is
+                    # still held. A failed audit write must roll back the edits.
+                    AuditLog.log_action(
+                        'individual_stats_submitted', current_user,
+                        resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
+                        details={'fingerprint': submission_fingerprint}, ip_address=request.remote_addr,
+                        user_agent=request.headers.get('User-Agent'),
+                    )
+                    db.session.commit()
             else:
                 fingerprint = _individual_pending_fingerprint(conn, rider_id)
                 if action == 'submit':
@@ -8424,6 +8482,7 @@ def rider_stats_action(rider_id, action):
                 else:
                     _apply_scope_stat_changes_to_cdb(conn, INDIVIDUAL_STAT_SCOPE, params)
                     conn.execute(text(f'UPDATE stat_changes SET is_approved = TRUE WHERE {INDIVIDUAL_STAT_SCOPE} AND is_approved = FALSE'), params)
+                    refresh_pending_flags(conn, [rider_id])
                     AuditLog.log_action(
                         'individual_stats_approved', current_user,
                         resource_type=f'namespace:{namespace.id}:individual', resource_id=rider_id,
@@ -8431,6 +8490,11 @@ def rider_stats_action(rider_id, action):
                     )
                     db.session.commit()
                     flash('Approved stat changes.', 'success')
+        if action == 'save':
+            if submission_fingerprint:
+                flash('Saved and submitted stat changes for approval. Current stats are unchanged.', 'success')
+            else:
+                flash('No pending stat changes to submit.', 'info')
     finally:
         engine.dispose()
     return redirect(url_for('web.rider_detail', rider_id=rider_id))
@@ -8575,7 +8639,7 @@ def _save_team_panel_active_method(namespace, active_method):
 
 
 @web_bp.route('/races', methods=['GET', 'POST'], endpoint='races')
-@web_bp.route('/riders/bulk-stat-editor', methods=['GET', 'POST'], endpoint='bulk_stat_editor')
+@web_bp.route('/riders/bulk-editor', methods=['GET', 'POST'], endpoint='bulk_editor')
 @web_bp.route('/riders/stat-edit-log', methods=['GET', 'POST'], endpoint='stat_edit_log')
 @web_bp.route('/stats-editor', methods=['GET', 'POST'])
 @login_required
@@ -8588,10 +8652,23 @@ def stats_editor():
     selected_namespace = _get_selected_namespace(available_namespaces)
     selected_year, selected_gender = _resolve_namespace_season(selected_namespace)
     season_selected = selected_namespace is not None and selected_year is not None
+    if request.endpoint == 'web.bulk_editor':
+        bulk_tab = request.args.get('tab', 'lists')
+        if bulk_tab not in ('lists', 'editor'):
+            abort(400)
+        if bulk_tab == 'editor':
+            if 'list_id' in request.args:
+                list_id = request.args.get('list_id', type=int)
+                if list_id is None or list_id < 1:
+                    abort(404)
+                return stats_editor_list_detail(list_id)
+            if _can_create_stats():
+                return bulk_editor_new()
+            return render_template('bulk_editor_empty.html', selected_namespace=selected_namespace)
     editor_state = _load_stats_editor_state(selected_namespace)
     page_methods = {
         'web.races': 'by_race',
-        'web.bulk_stat_editor': 'by_list',
+        'web.bulk_editor': 'by_list',
         'web.stat_edit_log': 'log',
     }
     page_endpoints = {method: endpoint for endpoint, method in page_methods.items()}
@@ -8831,6 +8908,24 @@ def stats_editor():
 
     if active_method == 'by_list':
         list_entries = _load_namespace_stat_lists(selected_namespace)
+        creator_ids = {item.get('created_by_id') for item in list_entries} - {None}
+        creators = {user.id: user.username for user in User.query.filter(User.id.in_(creator_ids)).all()} if creator_ids else {}
+        for item in list_entries:
+            item['list_type'] = 'stat'
+            item['creator_label'] = creators.get(item.get('created_by_id'), 'Unknown creator')
+        creator_choices = sorted(
+            {(str(item.get('created_by_id') or 'unknown'), item['creator_label']) for item in list_entries},
+            key=lambda choice: choice[1].casefold(),
+        )
+        name_filter = (request.args.get('list_name') or '').strip()
+        creator_filter = (request.args.get('creator_id') or '').strip()
+        type_filter = (request.args.get('list_type') or '').strip()
+        if type_filter not in ('', 'stat', 'attribute'):
+            abort(400)
+        list_entries = [item for item in list_entries
+                        if (not name_filter or name_filter.casefold() in item['list_name'].casefold())
+                        and (not creator_filter or str(item.get('created_by_id') or 'unknown') == creator_filter)
+                        and (not type_filter or item['list_type'] == type_filter)]
 
     log_page = max(1, request.args.get('log_page', 1, type=int))
     log_entries = []
@@ -8841,6 +8936,7 @@ def stats_editor():
 
     return render_template(
         'stats_editor.html',
+        creator_choices=creator_choices if active_method == 'by_list' else [],
         log_entries=log_entries[:100],
         log_has_next=len(log_entries) > 100,
         log_page=log_page,
@@ -8867,6 +8963,135 @@ def stats_editor():
     )
 
 
+def _search_stat_list_riders(namespace, rider_ids, list_search_rider, list_search_team):
+    selected_namespace = namespace
+    list_search_results = []
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        if list_search_rider or list_search_team:
+            search_where = []
+            search_params = {
+                'selected_cdb_ids': list(rider_ids) or [-1],
+            }
+            if list_search_rider:
+                search_where.append(
+                    "(" + _normalized_name_sql('c.first_name') + " LIKE :rider_term"
+                    + " OR " + _normalized_name_sql('c.last_name') + " LIKE :rider_term"
+                    + " OR " + _normalized_name_sql('c.first_last_name') + " LIKE :rider_term"
+                    + " OR " + _normalized_name_sql("CONCAT_WS(' ', c.first_name, c.last_name)") + " LIKE :rider_term)"
+                )
+                search_params['rider_term'] = f'%{_normalize_name_search_term(list_search_rider)}%'
+            if list_search_team:
+                search_where.append(
+                    """
+                    (
+                        """ + _normalized_name_sql('t.team_name') + """ LIKE :team_term
+                        OR """ + _normalized_name_sql('t.short_name') + """ LIKE :team_term
+                        OR """ + _normalized_name_sql('t.abbreviation') + """ LIKE :team_term
+                    )
+                    """
+                )
+                search_params['team_term'] = f'%{_normalize_name_search_term(list_search_team)}%'
+
+            search_filter = ' AND '.join(search_where) if search_where else 'TRUE'
+            try:
+                with engine.connect() as conn:
+                    _ensure_namespace_database_connection(conn, namespace)
+                    search_rows = conn.execute(
+                        text(
+                            f"""
+                            SELECT
+                                c.id AS rider_id,
+                                c.first_cycling_id,
+                                c.first_name,
+                                c.last_name,
+                                c.first_last_name,
+                                c.team_id,
+                                COALESCE(t.team_name, t.short_name) AS team_name,
+                                {_snapshot_stat_select_list('c')}
+                            FROM rider c
+                            LEFT JOIN team t ON t.id = c.team_id
+                            WHERE {search_filter}
+                              AND NOT (c.id = ANY(:selected_cdb_ids))
+                            ORDER BY
+                                c.last_name ASC NULLS LAST,
+                                c.first_name ASC NULLS LAST,
+                                c.first_last_name ASC NULLS LAST,
+                                c.id ASC
+                            LIMIT 50
+                            """
+                        ),
+                        search_params,
+                    ).mappings().all()
+            except Exception:
+                logger.exception('Failed to search CDB cyclists for stat list in namespace %s', selected_namespace.slug)
+                search_rows = []
+
+            list_search_results = [
+                SimpleNamespace(
+                    rider_id=row.get('rider_id'),
+                    first_cycling_id=row.get('first_cycling_id'),
+                    name=_cdb_rider_display_name(row),
+                    first_name=row.get('first_name'),
+                    last_name=row.get('last_name'),
+                    team_id=row.get('team_id'),
+                    team_name=row.get('team_name'),
+                    stats=_snapshot_stats_from_row(row),
+                )
+                for row in search_rows
+            ]
+
+    finally:
+        engine.dispose()
+    return list_search_results
+
+
+@web_bp.route('/riders/bulk-editor/new')
+@login_required
+def bulk_editor_new():
+    if not _can_create_stats():
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    year, gender = _resolve_namespace_season(namespace)
+    if namespace is None or year is None or not gender:
+        flash('Select a namespace with Database Year and Gender before starting a list.', 'warning')
+        return redirect(url_for('web.bulk_editor'))
+    rider_term = (request.args.get('list_search_rider') or '').strip()
+    team_term = (request.args.get('list_search_team') or '').strip()
+    return render_template(
+        'bulk_editor_new.html', new_list=True, selected_namespace=namespace,
+        list_search_rider=rider_term, list_search_team=team_term,
+        list_search_results=_search_stat_list_riders(namespace, [], rider_term, team_term),
+        list_item_rider_ids=set(), stat_fields=STAT_DELTA_FIELDS,
+    )
+
+
+@web_bp.route('/stats-editor/lists/<int:list_id>/rename', methods=['POST'])
+@login_required
+def stats_editor_rename_list(list_id):
+    if not _can_create_stats():
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    name = (request.form.get('list_name') or '').strip()
+    if not name or len(name) > 120:
+        flash('Enter a list name between 1 and 120 characters.', 'warning')
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _lock_editable_stat_list(conn, namespace, list_id)
+            _ensure_namespace_database_connection(conn, namespace)
+            row = conn.execute(text('UPDATE stat_lists SET list_name=:name WHERE id=:id RETURNING id'),
+                               {'name': name, 'id': list_id}).first()
+            if row is None:
+                abort(404)
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
+
+
 @web_bp.route('/stats-editor/lists/create', methods=['POST'])
 @login_required
 def stats_editor_create_list():
@@ -8874,9 +9099,16 @@ def stats_editor_create_list():
         abort(403)
 
     list_name = (request.form.get('list_name', type=str) or '').strip()
-    if not list_name:
+    rider_id = request.form.get('rider_id', type=int)
+    if not list_name and rider_id is None:
         flash('List Name is required.', 'warning')
         return redirect(url_for('web.stats_editor'))
+
+    if len(list_name) > 120:
+        flash('List names must be 120 characters or fewer.', 'warning')
+        return redirect(url_for('web.bulk_editor_new'))
+    if not list_name:
+        list_name = f'Draft list - {datetime.utcnow():%Y-%m-%d %H:%M:%S} - {secrets.token_hex(3)}'
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
@@ -8893,6 +9125,12 @@ def stats_editor_create_list():
     engine = create_engine(connection_string)
     try:
         with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, selected_namespace)
+            if rider_id is not None:
+                rider_exists = conn.execute(text('SELECT id FROM rider WHERE id=:id'), {'id': rider_id}).first()
+                if rider_exists is None:
+                    flash('That rider was not found in this namespace CDB.', 'warning')
+                    return redirect(url_for('web.bulk_editor_new'))
             stat_list_columns = {
                 row[0]
                 for row in conn.execute(
@@ -8942,6 +9180,9 @@ def stats_editor_create_list():
                 ),
                 insert_params,
             ).mappings().first()
+            if rider_id is not None:
+                conn.execute(text('INSERT INTO stat_list_items (stat_list_id, rider_id) VALUES (:list_id, :rider_id)'),
+                             {'list_id': row['id'], 'rider_id': rider_id})
         new_list_id = row['id'] if row else None
     except Exception:
         logger.exception('Failed to create stat list in namespace %s', selected_namespace.slug)
@@ -8951,13 +9192,17 @@ def stats_editor_create_list():
         engine.dispose()
 
     flash(f"Created list '{list_name}'.", 'success')
-    return redirect(url_for('web.stats_editor_list_detail', list_id=new_list_id))
+    return redirect(url_for(
+        'web.bulk_editor', tab='editor', list_id=new_list_id,
+        list_search_rider=request.form.get('list_search_rider', ''),
+        list_search_team=request.form.get('list_search_team', ''),
+    ))
 
 
 @web_bp.route('/stats-editor/lists/<int:list_id>/add-rider', methods=['POST'])
 @login_required
 def stats_editor_add_list_rider(list_id):
-    if not _can_access_panel('stat_editor'):
+    if not _can_update_stats():
         abort(403)
 
     rider_id = request.form.get('rider_id', type=int)
@@ -8967,18 +9212,19 @@ def stats_editor_add_list_rider(list_id):
 
     if rider_id is None and first_cycling_id is None:
         flash('Select a rider to add.', 'warning')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before adding riders.', 'warning')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
     try:
         with engine.begin() as conn:
+            _lock_editable_stat_list(conn, selected_namespace, list_id)
             rider_row = conn.execute(
                 text(
                     """
@@ -8996,7 +9242,7 @@ def stats_editor_add_list_rider(list_id):
             ).mappings().first()
             if rider_row is None:
                 flash('That rider was not found in this namespace CDB.', 'warning')
-                return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+                return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
             conn.execute(
                 text(
@@ -9012,19 +9258,21 @@ def stats_editor_add_list_rider(list_id):
                     'rider_id': rider_row['id'],
                 },
             )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception('Failed to add rider to stat list in namespace %s', selected_namespace.slug)
         flash('Failed to add rider to list.', 'error')
     finally:
         engine.dispose()
 
-    return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+    return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
 
 @web_bp.route('/stats-editor/lists/<int:list_id>/toggle-rider', methods=['POST'])
 @login_required
 def stats_editor_toggle_list_rider(list_id):
-    if not _can_access_panel('stat_editor'):
+    if not _can_update_stats():
         abort(403)
 
     rider_id = request.form.get('rider_id', type=int)
@@ -9034,18 +9282,19 @@ def stats_editor_toggle_list_rider(list_id):
     list_search_team = (request.form.get('list_search_team', type=str) or '').strip()
 
     if rider_id is None and first_cycling_id is None:
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before editing list riders.', 'warning')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
     try:
         with engine.begin() as conn:
+            _lock_editable_stat_list(conn, selected_namespace, list_id)
             rider_row = conn.execute(
                 text(
                     """
@@ -9063,7 +9312,7 @@ def stats_editor_toggle_list_rider(list_id):
             ).mappings().first()
             if rider_row is None:
                 flash('That rider is not linked in this namespace CDB yet.', 'warning')
-                return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+                return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
             rider_id = rider_row['id']
 
             if is_checked:
@@ -9109,13 +9358,16 @@ def stats_editor_toggle_list_rider(list_id):
                         'rider_id': rider_id,
                     },
                 )
+            refresh_pending_flags(conn, [rider_id])
+    except HTTPException:
+        raise
     except Exception:
         logger.exception('Failed to toggle rider in stat list in namespace %s', selected_namespace.slug)
         flash('Failed to update list rider selection.', 'error')
     finally:
         engine.dispose()
 
-    return redirect(url_for('web.stats_editor_list_detail', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
+    return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id, list_search_rider=list_search_rider, list_search_team=list_search_team))
 
 
 @web_bp.route('/stats-editor/lists/<int:list_id>')
@@ -9136,6 +9388,8 @@ def stats_editor_list_detail(list_id):
     list_items = []
     try:
         with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, selected_namespace)
+            list_is_approved = _stat_list_is_approved(conn, list_id)
             list_row = conn.execute(
                 text(
                     """
@@ -9178,6 +9432,7 @@ def stats_editor_list_detail(list_id):
     if rider_ids:
         try:
             with engine.connect() as conn:
+                _ensure_namespace_database_connection(conn, selected_namespace)
                 rider_rows = conn.execute(
                     text(
                         f"""
@@ -9206,77 +9461,9 @@ def stats_editor_list_detail(list_id):
         for row in rider_rows
     }
 
-    if list_search_rider or list_search_team:
-        search_where = []
-        search_params = {
-            'selected_cdb_ids': list(rider_ids) or [-1],
-        }
-        if list_search_rider:
-            search_where.append(
-                "(" + _normalized_name_sql('c.first_name') + " LIKE :rider_term"
-                + " OR " + _normalized_name_sql('c.last_name') + " LIKE :rider_term"
-                + " OR " + _normalized_name_sql('c.first_last_name') + " LIKE :rider_term"
-                + " OR " + _normalized_name_sql("CONCAT_WS(' ', c.first_name, c.last_name)") + " LIKE :rider_term)"
-            )
-            search_params['rider_term'] = f'%{_normalize_name_search_term(list_search_rider)}%'
-        if list_search_team:
-            search_where.append(
-                """
-                (
-                    """ + _normalized_name_sql('t.team_name') + """ LIKE :team_term
-                    OR """ + _normalized_name_sql('t.short_name') + """ LIKE :team_term
-                    OR """ + _normalized_name_sql('t.abbreviation') + """ LIKE :team_term
-                )
-                """
-            )
-            search_params['team_term'] = f'%{_normalize_name_search_term(list_search_team)}%'
-
-        search_filter = ' AND '.join(search_where) if search_where else 'TRUE'
-        try:
-            with engine.connect() as conn:
-                search_rows = conn.execute(
-                    text(
-                        f"""
-                        SELECT
-                            c.id AS rider_id,
-                            c.first_cycling_id,
-                            c.first_name,
-                            c.last_name,
-                            c.first_last_name,
-                            c.team_id,
-                            COALESCE(t.team_name, t.short_name) AS team_name,
-                            {_snapshot_stat_select_list('c')}
-                        FROM rider c
-                        LEFT JOIN team t ON t.id = c.team_id
-                        WHERE {search_filter}
-                          AND NOT (c.id = ANY(:selected_cdb_ids))
-                        ORDER BY
-                            c.last_name ASC NULLS LAST,
-                            c.first_name ASC NULLS LAST,
-                            c.first_last_name ASC NULLS LAST,
-                            c.id ASC
-                        LIMIT 50
-                        """
-                    ),
-                    search_params,
-                ).mappings().all()
-        except Exception:
-            logger.exception('Failed to search CDB cyclists for stat list in namespace %s', selected_namespace.slug)
-            search_rows = []
-
-        list_search_results = [
-            SimpleNamespace(
-                rider_id=row.get('rider_id'),
-                first_cycling_id=row.get('first_cycling_id'),
-                name=_cdb_rider_display_name(row),
-                first_name=row.get('first_name'),
-                last_name=row.get('last_name'),
-                team_id=row.get('team_id'),
-                team_name=row.get('team_name'),
-                stats=_snapshot_stats_from_row(row),
-            )
-            for row in search_rows
-        ]
+    list_search_results = _search_stat_list_riders(
+        selected_namespace, rider_ids, list_search_rider, list_search_team,
+    )
 
     rider_snapshot_map = _load_namespace_scope_snapshots(selected_namespace, stat_list_id=list_id, rider_ids=rider_ids)
     rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, rider_ids)
@@ -9328,6 +9515,9 @@ def stats_editor_list_detail(list_id):
     return render_template(
         'stat_list_detail.html',
         stat_list=list_row,
+        list_is_approved=list_is_approved,
+        can_manage_list=_can_update_stats() and not list_is_approved,
+        can_create_stats=_can_create_stats() and not list_is_approved,
         is_submitted_for_approval=_list_is_submitted_for_approval(selected_namespace, list_id),
         rows=rows,
         list_search_rider=list_search_rider,
@@ -9338,8 +9528,8 @@ def stats_editor_list_detail(list_id):
         scope_delta_status=scope_delta_status,
         stat_conflicts=stat_conflicts,
         stat_fields=STAT_DELTA_FIELDS,
-        can_approve_stats=_can_approve_stats(),
-        can_update_stats=_can_update_stats(),
+        can_approve_stats=_can_approve_stats() and not list_is_approved,
+        can_update_stats=_can_update_stats() and not list_is_approved,
     )
 
 
@@ -9352,17 +9542,17 @@ def stats_editor_save_list_stat_deltas(list_id):
     raw_changes = request.form.get('changes_json', type=str) or ''
     if not raw_changes.strip():
         flash('No stat changes detected.', 'info')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
     try:
         parsed_changes = json.loads(raw_changes)
     except json.JSONDecodeError:
         flash('Invalid stat changes payload.', 'error')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
     if not isinstance(parsed_changes, list):
         flash('Invalid stat changes format.', 'error')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
     _require_editable_stat_changes(parsed_changes)
 
@@ -9370,7 +9560,7 @@ def stats_editor_save_list_stat_deltas(list_id):
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before saving stat changes.', 'warning')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
     rider_ids = {
         _safe_int(item.get('first_cycling_rider_id'))
@@ -9385,6 +9575,7 @@ def stats_editor_save_list_stat_deltas(list_id):
         saved_count = 0
         skipped_count = 0
         with engine.begin() as conn:
+            _lock_editable_stat_list(conn, selected_namespace, list_id)
             snapshot_rider_rows = conn.execute(
                 text(
                     """
@@ -9515,6 +9706,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                     },
                 )
                 saved_count += 1
+            refresh_pending_flags(conn, rider_ids)
 
         if saved_count > 0:
             flash(f'Saved {saved_count} stat change(s).', 'success')
@@ -9523,13 +9715,31 @@ def stats_editor_save_list_stat_deltas(list_id):
         if skipped_count > 0:
             flash(f'Skipped {skipped_count} invalid or unmatched change(s).', 'warning')
 
+    except HTTPException:
+        raise
     except Exception:
         logger.exception('Failed to save stat edits for list %s', list_id)
         flash('Failed to save stat edits.', 'error')
     finally:
         engine.dispose()
 
-    return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+    return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
+
+
+def _stat_list_is_approved(conn, list_id):
+    return bool(conn.execute(text('''
+        SELECT EXISTS (SELECT 1 FROM stat_changes
+                       WHERE stat_list_id=:id AND is_approved=TRUE)
+    '''), {'id': list_id}).scalar_one())
+
+
+def _lock_editable_stat_list(conn, namespace, list_id):
+    """Serialize edits with approval, and reject edits once any batch was approved."""
+    _ensure_namespace_database_connection(conn, namespace)
+    if conn.execute(text('SELECT id FROM stat_lists WHERE id=:id FOR UPDATE'), {'id': list_id}).first() is None:
+        abort(404)
+    if _stat_list_is_approved(conn, list_id):
+        abort(409, description='Approved lists are read-only.')
 
 
 def _list_pending_submission_fingerprint(conn, list_id):
@@ -9573,14 +9783,15 @@ def _list_is_submitted_for_approval(namespace, list_id):
 def stats_editor_submit_list_for_approval(list_id):
     if not _can_update_stats():
         abort(403)
-    target = url_for('web.stats_editor_list_detail', list_id=list_id)
+    target = url_for('web.bulk_editor', tab='editor', list_id=list_id)
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     if namespace is None:
         flash('Select a namespace before submitting stat changes.', 'warning')
         return redirect(target)
     engine = create_engine(namespace.build_connection_string())
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
+            _lock_editable_stat_list(conn, namespace, list_id)
             list_name = conn.execute(text('SELECT list_name FROM stat_lists WHERE id = :list_id'),
                                      {'list_id': list_id}).scalar_one_or_none()
             if list_name is None:
@@ -9602,7 +9813,7 @@ def stats_editor_submit_list_for_approval(list_id):
         db.session.commit()
         try:
             notified = notify_discord_stat_list_saved(
-                namespace, list_id, list_name, url_for('web.stats_editor_list_detail', list_id=list_id, _external=True),
+                namespace, list_id, list_name, url_for('web.bulk_editor', tab='editor', list_id=list_id, _external=True),
                 pending_count, saved_by=current_user.username,
             )
         except Exception:
@@ -9627,7 +9838,7 @@ def stats_editor_approve_list_stat_deltas(list_id):
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before approving stat changes.', 'warning')
-        return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
@@ -9635,11 +9846,12 @@ def stats_editor_approve_list_stat_deltas(list_id):
     applied_count = 0
     try:
         with engine.begin() as conn:
+            _lock_editable_stat_list(conn, selected_namespace, list_id)
             if not _list_submission_matches(
                 selected_namespace, list_id, _list_pending_submission_fingerprint(conn, list_id),
             ):
                 flash('Submit the current saved changes for approval before approving this list.', 'warning')
-                return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+                return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
             conflicts = _load_scope_stat_change_conflicts(
                 conn,
                 """
@@ -9650,7 +9862,7 @@ def stats_editor_approve_list_stat_deltas(list_id):
             )
             if conflicts:
                 flash(f'Resolve {len(conflicts)} stat conflict(s) before approving this list.', 'warning')
-                return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+                return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
             applied_count = _apply_scope_stat_changes_to_cdb(
                 conn,
@@ -9672,7 +9884,12 @@ def stats_editor_approve_list_stat_deltas(list_id):
                 ),
                 {'list_id': list_id},
             )
+            refresh_pending_flags(conn, conn.execute(text(
+                'SELECT DISTINCT rider_id FROM stat_changes WHERE race_result_id IS NULL AND stat_list_id=:list_id'
+            ), {'list_id': list_id}).scalars().all())
             approved_count = result.rowcount or 0
+    except HTTPException:
+        raise
     except Exception:
         logger.exception('Failed to approve stat changes for list %s', list_id)
         flash('Failed to approve stat changes.', 'error')
@@ -9694,7 +9911,7 @@ def stats_editor_approve_list_stat_deltas(list_id):
     else:
         flash('No pending stat changes to approve.', 'info')
 
-    return redirect(url_for('web.stats_editor_list_detail', list_id=list_id))
+    return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
 
 @web_bp.route('/releases', methods=['GET', 'POST'])
@@ -10558,6 +10775,7 @@ def stats_editor_save_stat_deltas(race_id):
                     },
                 )
                 saved_count += 1
+            refresh_pending_flags(conn, rider_ids)
 
         if saved_changes:
             AuditLog.log_action(
@@ -10774,6 +10992,9 @@ def stats_editor_approve_stat_deltas(race_id):
                 ),
                 approval_params,
             )
+            refresh_pending_flags(conn, conn.execute(text(
+                f"SELECT DISTINCT rider_id FROM stat_changes WHERE {approval_where_clause.replace('stat_changes.', '')}"
+            ), approval_params).scalars().all())
         approved_count = result.rowcount or 0
         if approved_count > 0:
             AuditLog.log_action(
@@ -12150,7 +12371,9 @@ def _register_namespace_scoped_routes():
         ('/riders/review', 'riders_review', object_review, ['GET']),
         ('/races/review', 'races_review', object_review, ['GET']),
         ('/races', 'races', stats_editor, ['GET', 'POST']),
-        ('/riders/bulk-stat-editor', 'bulk_stat_editor', stats_editor, ['GET', 'POST']),
+        ('/riders/bulk-editor', 'bulk_editor', stats_editor, ['GET', 'POST']),
+        ('/riders/bulk-editor/new', 'bulk_editor_new', bulk_editor_new, ['GET']),
+        ('/stats-editor/lists/<int:list_id>/rename', 'stats_editor_rename_list', stats_editor_rename_list, ['POST']),
         ('/riders/stat-edit-log', 'stat_edit_log', stats_editor, ['GET', 'POST']),
         ('/riders/<int:rider_id>', 'rider_detail', rider_detail, ['GET']),
         ('/attributes/<entity_type>/<int:entity_id>/propose', 'propose_attribute', propose_attribute, ['POST']),

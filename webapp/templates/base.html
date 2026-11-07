@@ -825,7 +825,7 @@
         {% block styles %}{% endblock %}
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/navigation.css', v=config.get('STATIC_ASSET_VERSION')) }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/object_attributes.css', v=config.get('STATIC_ASSET_VERSION')) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/object_attributes.css', v=(config.get('STATIC_ASSET_VERSION') or '') ~ '-attribute-list-2') }}">
 </head>
 <body class="{% if current_user.is_authenticated %}has-side-panel{% endif %} {% block body_class %}{% endblock %}">
     {% if current_user.is_authenticated %}

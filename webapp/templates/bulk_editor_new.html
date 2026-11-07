@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}New List - Bulk Editor - WDB{% endblock %}
+{% block content %}
+{% set bulk_tab = 'editor' %}{% include '_bulk_editor_tabs.html' %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>New List</h2>
+    <a class="btn btn-outline-secondary" href="{{ url_for('web.bulk_editor') }}">Back To Bulk Editor</a>
+</div>
+<p class="text-muted">Add the first rider to save a draft list automatically. You can name it later.</p>
+{% include '_stat_list_rider_search.html' %}
+{% endblock %}

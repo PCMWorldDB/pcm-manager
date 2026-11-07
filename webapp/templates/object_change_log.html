@@ -9,30 +9,7 @@
         {% if not selected_namespace %}
         <p class="text-muted mb-0">Select a namespace to view change history.</p>
         {% else %}
-        <div class="table-responsive">
-            <table class="table table-sm table-hover align-middle">
-                <caption>{{ object_type|title }} change events</caption>
-                <thead>
-                    <tr><th scope="col">Occurred On</th><th scope="col">Object</th><th scope="col">Event</th><th scope="col">Attribute</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Source</th><th scope="col">Changed By</th><th scope="col">Status</th></tr>
-                </thead>
-                <tbody>
-                    {% for change in changes %}
-                    <tr>
-                        <td class="text-nowrap">{{ change.occurred_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                        <td>{% if object_type == 'riders' %}<a href="{{ url_for('web.rider_detail', rider_id=change.entity_id, namespace_slug=selected_namespace.slug) }}">{{ change.rider_name }}</a>{% else %}{{ change.entity_id }}{% endif %}</td>
-                        <td>{{ change.event_type.replace('_', ' ')|title }}</td>
-                        <td>{{ change.attribute_name }}</td>
-                        <td>{{ change.before_value if change.before_value is not none else 'Empty' }}</td>
-                        <td>{{ change.after_value if change.after_value is not none else 'Empty' }}</td>
-                        <td>{{ change.source }}</td><td>{{ change.submitted_by }}</td><td>{{ change.status|title }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="9" class="text-muted text-center">No attribute change events recorded.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% if changes|length == 200 %}<p class="text-muted">Showing the latest 200 events.</p>{% endif %}
+        {% include '_attribute_history_table.html' %}
         {% endif %}
     </div>
 </div>

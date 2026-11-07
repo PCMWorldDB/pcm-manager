@@ -1,5 +1,4 @@
-/* Shared object metadata: use object-attributes with object-attribute cells.
-   Labels, values, and inline editors keep the same alignment on every page. */
+/* Shared object metadata: two balanced lists of left-label/right-value rows. */
 .object-attributes {
     --attribute-surface: #f8fafc;
     --attribute-border: #e2e8f0;
@@ -7,9 +6,8 @@
     --attribute-value: #182b45;
     --attribute-link: #174f91;
     --attribute-focus: #517eb7;
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 0.5rem;
+    columns: 2;
+    column-gap: 2.5rem;
 }
 
 body.dark-mode .object-attributes {
@@ -22,12 +20,15 @@ body.dark-mode .object-attributes {
 }
 
 .object-attribute {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    align-items: baseline;
+    gap: 1rem;
+    break-inside: avoid;
     min-width: 0;
-    min-height: 5rem;
-    padding: 0.625rem 0.75rem;
-    border: 1px solid var(--attribute-border);
-    border-radius: 0.875rem;
-    background: var(--attribute-surface);
+    min-height: 2.75rem;
+    padding: 0.625rem 0;
+    border-bottom: 1px solid var(--attribute-border);
     overflow-wrap: anywhere;
 }
 
@@ -39,9 +40,13 @@ body.dark-mode .object-attributes {
 .object-attribute-label {
     display: block;
     color: var(--attribute-label);
-    font-size: 0.8125rem;
+    font-size: 0.9rem;
     font-weight: 500;
     line-height: 1.5rem;
+}
+
+.object-attribute-label::after {
+    content: ':';
 }
 
 .object-attribute-heading {
@@ -53,12 +58,18 @@ body.dark-mode .object-attributes {
 }
 
 .object-attribute-value {
-    margin-top: 0.375rem;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+    margin: 0;
     color: var(--attribute-value);
     font-size: 1rem;
     font-weight: 600;
     line-height: 1.5;
     font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 .object-attribute-value a {
@@ -67,6 +78,10 @@ body.dark-mode .object-attributes {
 }
 
 .attribute-inline-editor > summary {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.375rem;
     cursor: pointer;
     list-style: none;
     border-radius: 0.25rem;
@@ -91,16 +106,22 @@ body.dark-mode .object-attributes {
     outline-offset: 3px;
 }
 
-.attribute-inline-editor[open] + .object-attribute-value {
+.attribute-inline-editor[open] > summary {
     display: none;
+}
+
+.attribute-inline-editor[open] {
+    width: 100%;
+    min-width: 0;
 }
 
 .attribute-edit-form {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 0.5rem;
-    margin-top: 0.625rem;
+    justify-content: flex-end;
+    margin: 0;
 }
 
 .attribute-edit-form .form-control {
@@ -129,26 +150,8 @@ body.dark-mode .object-attribute-pending {
     color: #ffe09a;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 700px) {
     .object-attributes {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 900px) {
-    .object-attributes {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 600px) {
-    .object-attributes {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 420px) {
-    .object-attributes {
-        grid-template-columns: minmax(0, 1fr);
+        columns: 1;
     }
 }

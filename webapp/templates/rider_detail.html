@@ -114,15 +114,11 @@ td.stat-value.range-elite {
                 </div>
             </div>
             {{ attribute_field('birth_date', 'Birth Date', rider.birth_date_display or '-') }}
-            {{ attribute_field('size_cm', 'Height', rider_measurements.get('size_cm') if rider_measurements.get('size_cm') is not none else '-') }}
-            {{ attribute_field('weight_kg', 'Weight', rider_measurements.get('weight_kg') if rider_measurements.get('weight_kg') is not none else '-') }}
+            {{ attribute_field('size_cm', 'Height', (rider_measurements.get('size_cm') ~ ' CM') if rider_measurements.get('size_cm') is not none else '-') }}
+            {{ attribute_field('weight_kg', 'Weight', (rider_measurements.get('weight_kg') ~ ' KG') if rider_measurements.get('weight_kg') is not none else '-') }}
             {{ additional_attributes(['birth_date', 'size_cm', 'weight_kg', 'id', 'cyclist_id', 'first_cycling_id']) }}
         </div>
-    </div>
-</div>
-
-<div class="panel-card card">
-    <div class="card-body">
+        <hr class="my-4">
         {% block rider_stats_section %}{% if not profile_context %}<h5 class="mb-3">Rider Stats</h5>{% endif %}
         {% if selected_namespace and rider_stats %}
         <div class="table-wrapper">
@@ -196,6 +192,12 @@ td.stat-value.range-elite {
                             <span class="badge {% if edit.is_approved %}bg-success{% else %}bg-warning text-dark{% endif %}">
                                 {{ edit.approval_status }}
                             </span>
+                              {% if not edit.is_approved and can_approve_stats and edit.approve_url %}
+                              <form method="post" action="{{ edit.approve_url }}" class="d-inline-block ms-1">
+                                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                  <button class="btn btn-sm btn-success" title="Approve all submitted individual stat changes for this rider">Approve rider stats</button>
+                              </form>
+                              {% endif %}
                         </td>
                         <td>
                             <span class="badge {% if edit.is_released %}bg-primary{% else %}bg-secondary{% endif %}">
@@ -212,6 +214,15 @@ td.stat-value.range-elite {
         {% else %}
         <p class="text-muted mb-0">Select a namespace to view stat edits.</p>
         {% endif %}
+    </div>
+</div>
+
+<div class="panel-card card" id="rider-attribute-approvals">
+    <div class="card-body">
+        <h5 class="mb-3">Pending Attribute Approvals</h5>
+        {% with changes=pending_attribute_changes or [], object_type='riders', hide_object=true %}
+        {% include '_attribute_review_table.html' %}
+        {% endwith %}
     </div>
 </div>
 {% endblock %}
