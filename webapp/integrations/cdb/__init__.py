@@ -8,6 +8,7 @@ from .api import (
     get_cdb_mappings,
     get_cdb_table_name,
     get_field_mapping,
+    retire_riders_from_sqlite,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     'get_cdb_mappings',
     'get_cdb_table_name',
     'get_field_mapping',
+    'retire_riders_from_sqlite',
 ]

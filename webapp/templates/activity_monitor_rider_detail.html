@@ -39,7 +39,17 @@ body.dark-mode .activity-detail-summary-card { background: #2d3748; }
             <div class="activity-rider-detail-header-fact"><div class="text-muted small">Nationality</div><div>{{ rider.nationality }}</div></div>
             <div class="activity-rider-detail-header-fact"><div class="text-muted small">Date of birth</div><div>{{ rider.birth_date or '—' }}</div></div>
           </div>
-        <a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary">← Back to riders</a>
+        <div class="d-flex flex-column gap-2">
+            {% if rider.is_retired %}
+            <span class="badge text-bg-secondary">Retired</span>
+            {% elif can_retire_rider %}
+            <form method="post" action="{{ url_for('web.activity_monitor_retire_rider', rider_id=rider.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-danger w-100">Retire this rider</button>
+            </form>
+            {% endif %}
+            <a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary">← Back to riders</a>
+        </div>
     </div>
     {% if rider.identity_hold %}<div class="alert alert-warning mt-3 mb-0"><strong>Identity hold:</strong> {{ rider.identity_hold_reason or 'Review this rider identity before using new results.' }}</div>{% endif %}
     {% else %}<a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary mb-3">← Back to riders</a>

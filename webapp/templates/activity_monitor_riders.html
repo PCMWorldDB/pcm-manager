@@ -72,6 +72,7 @@
                         <option value="checked" {% if filters.status == 'checked' %}selected{% endif %}>Has check history</option>
                         <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Review</option>
                         <option value="no_evidence" {% if filters.status == 'no_evidence' %}selected{% endif %}>No race evidence</option>
+                        <option value="retired" {% if filters.status == 'retired' %}selected{% endif %}>Retired</option>
                         <option value="other" {% if filters.status == 'other' %}selected{% endif %}>Not eligible / outside CDB</option>
                     </select>
                 </div>
@@ -164,9 +165,9 @@
                 </thead>
                 <tbody>
                     {% for rider in riders %}
-                    <tr class="{% if rider.needs_attention %}activity-rider-needs-attention{% endif %}" data-rider-id="{{ rider.monitor_rider_id }}">
+                    <tr class="{% if rider.needs_attention and not rider.is_retired %}activity-rider-needs-attention{% endif %}" data-rider-id="{{ rider.monitor_rider_id }}">
                         <td class="activity-rider-selection-cell">
-                            {% if rider.eligible and rider.present_in_cdb %}
+                            {% if rider.eligible and rider.present_in_cdb and not rider.is_retired %}
                             <input class="form-check-input activity-rider-select" type="checkbox" value="{{ rider.monitor_rider_id }}" data-detail-url="{{ url_for('web.activity_monitor_rider_detail', rider_id=rider.monitor_rider_id, q=filters.q, team=filters.team, country=filters.country, division=filters.division, status=filters.status, per_page=per_page_arg, page=page, sort=filters.sort, direction=filters.direction) }}" aria-label="Select {{ (rider.first_name ~ ' ' ~ rider.last_name).strip() or 'rider' }}">
                             {% else %}<span class="text-muted">—</span>{% endif %}
                         </td>
@@ -177,7 +178,7 @@
                         <td class="age-cell">{{ rider.age if rider.age is not none else '—' }}{% if rider.birth_date %}<span class="birth-date"> | {{ rider.birth_date.strftime('%d-%m-%Y') }}</span>{% endif %}</td>
                         <td class="division-cell truncate" title="{{ rider.division_name }}">{{ rider.division_name }}</td>
                         <td class="status-cell">
-                            {% if not rider.eligible or not rider.present_in_cdb %}
+                            {% if rider.is_retired or not rider.eligible or not rider.present_in_cdb %}
                                 <span class="badge text-bg-secondary">{{ rider.status_label }}</span>
                             {% elif rider.needs_attention %}
                                 <span class="badge text-bg-warning">{{ rider.status_label }}</span>
