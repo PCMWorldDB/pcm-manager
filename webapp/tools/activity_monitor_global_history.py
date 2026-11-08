@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -18,6 +20,7 @@ from sqlalchemy import Date as SQLDate, DateTime as SQLDateTime, inspect, text
 
 
 ARCHIVE_TABLE = "activity_monitor_global_history"
+logger = logging.getLogger(__name__)
 TRANSFER_MARKER_TYPE = "__history_bundle_import__"
 HISTORY_BUNDLE_FORMAT = "worlddb-activity-monitor-history"
 HISTORY_BUNDLE_VERSION = 1
@@ -261,7 +264,8 @@ def _json_value(value):
 
 
 def archive_namespace_history(
-    source_engine, main_engine, namespace_slug, *, apply=False, worlddb_rider_id=None
+    source_engine, main_engine, namespace_slug, *, apply=False, worlddb_rider_id=None,
+    progress_callback=None,
 ):
     """Preview or idempotently archive durable records from one namespace.
 
@@ -312,8 +316,68 @@ def archive_namespace_history(
         }
 
     counts = {}
-    payloads = []
+    records_to_sync = 0
+    written = 0
+    batch_size = 2000
+    archive_started_at = time.monotonic()
+
+    def write_batch(batch):
+        # Build one multi-row INSERT per batch. Passing a list of parameter
+        # dictionaries to text() uses DBAPI executemany, which sends one
+        # INSERT per record and is especially slow across Docker's DB boundary.
+        # Keep the last version if a source table contains duplicate archive
+        # keys, matching the previous ordered row-by-row upsert behavior.
+        deduplicated = {}
+        for record in batch:
+            key = (
+                record["namespace_slug"],
+                record["record_type"],
+                record["source_record_key"],
+            )
+            deduplicated[key] = record
+
+        placeholders = []
+        parameters = {}
+        value_columns = (
+            "namespace_slug", "worlddb_rider_id", "record_type",
+            "source_record_key", "occurred_at", "record_data",
+        )
+        for index, record in enumerate(deduplicated.values()):
+            row = []
+            for column in value_columns:
+                parameter = f"{column}_{index}"
+                row.append(
+                    f"CAST(:{parameter} AS JSONB)" if column == "record_data"
+                    else f":{parameter}"
+                )
+                parameters[parameter] = record[column]
+            placeholders.append(f"({', '.join(row)})")
+
+        statement = text(f"""
+            INSERT INTO activity_monitor_global_history
+                (namespace_slug, worlddb_rider_id, record_type,
+                 source_record_key, occurred_at, record_data)
+            VALUES {', '.join(placeholders)}
+            ON CONFLICT (namespace_slug, record_type, source_record_key)
+            DO UPDATE SET
+                worlddb_rider_id = EXCLUDED.worlddb_rider_id,
+                occurred_at = EXCLUDED.occurred_at,
+                record_data = EXCLUDED.record_data,
+                archived_at = CURRENT_TIMESTAMP
+            WHERE activity_monitor_global_history.worlddb_rider_id
+                      IS DISTINCT FROM EXCLUDED.worlddb_rider_id
+               OR activity_monitor_global_history.occurred_at
+                      IS DISTINCT FROM EXCLUDED.occurred_at
+               OR activity_monitor_global_history.record_data
+                      IS DISTINCT FROM EXCLUDED.record_data
+        """)
+        with main_engine.begin() as archive_connection:
+            archive_connection.execute(statement, parameters)
+
     for table_name in tables:
+        table_started_at = time.monotonic()
+        if progress_callback:
+            progress_callback(table_name, 0, 0.0)
         columns = [column["name"] for column in inspector.get_columns(table_name)]
         if "id" not in columns:
             continue
@@ -337,55 +401,81 @@ def archive_namespace_history(
             else:
                 continue
         query += " ORDER BY id"
-        with source_engine.connect() as connection:
-            rows = connection.execute(text(query), params).mappings().all()
-        counts[table_name] = len(rows)
-        for row in rows:
-            record = dict(row)
-            record_id = record.get("id")
-            source_key = str(record.get("source_record_key") or f"id:{record_id}")[:240]
-            rider_id = record.get("rider_id")
-            worlddb_id = record.get("source_worlddb_rider_id")
-            if worlddb_id is None and rider_id is not None:
-                worlddb_id = rider_worlddb_ids.get(rider_id)
-            if worlddb_id is None and record.get("task_id") is not None:
-                worlddb_id = task_worlddb_ids.get(record["task_id"])
-            occurred_at = next((record.get(name) for name in TIME_COLUMNS if record.get(name) is not None), None)
-            payloads.append({
-                "namespace_slug": namespace_slug,
-                "worlddb_rider_id": worlddb_id,
-                "record_type": table_name,
-                "source_record_key": source_key,
-                "occurred_at": occurred_at,
-                "record_data": json.dumps(record, ensure_ascii=False, default=_json_value),
-            })
+        table_count = 0
+        batch = []
+        with source_engine.connect().execution_options(stream_results=True) as connection:
+            result = connection.execute(text(query), params).mappings()
+            for row in result:
+                table_count += 1
+                record = dict(row)
+                record_id = record.get("id")
+                source_key_field = (
+                    "source_result_key"
+                    if table_name == "activity_monitor_results"
+                    else "source_record_key"
+                )
+                source_key = str(record.get(source_key_field) or f"id:{record_id}")[:240]
+                # Restored history is already in the shared archive. Do not
+                # archive it again under its replacement namespace-local ID.
+                if source_key.startswith("archive:"):
+                    continue
+                rider_id = record.get("rider_id")
+                worlddb_id = record.get("source_worlddb_rider_id")
+                if worlddb_id is None and rider_id is not None:
+                    worlddb_id = rider_worlddb_ids.get(rider_id)
+                if worlddb_id is None and record.get("task_id") is not None:
+                    worlddb_id = task_worlddb_ids.get(record["task_id"])
+                occurred_at = next((record.get(name) for name in TIME_COLUMNS if record.get(name) is not None), None)
+                batch.append({
+                    "namespace_slug": namespace_slug,
+                    "worlddb_rider_id": worlddb_id,
+                    "record_type": table_name,
+                    "source_record_key": source_key,
+                    "occurred_at": occurred_at,
+                    "record_data": json.dumps(record, ensure_ascii=False, default=_json_value),
+                })
+                if len(batch) >= batch_size:
+                    records_to_sync += len(batch)
+                    if apply:
+                        write_batch(batch)
+                        written += len(batch)
+                    batch.clear()
+                    if table_count % 5000 == 0:
+                        elapsed = time.monotonic() - table_started_at
+                        logger.info(
+                            "Archiving Activity Monitor table %s for namespace %s: "
+                            "%s records in %.1fs",
+                            table_name, namespace_slug, table_count, elapsed,
+                        )
+                        if progress_callback:
+                            progress_callback(table_name, table_count, elapsed)
+            if batch:
+                records_to_sync += len(batch)
+                if apply:
+                    write_batch(batch)
+                    written += len(batch)
+        counts[table_name] = table_count
+        table_duration = time.monotonic() - table_started_at
+        logger.info(
+            "Archived Activity Monitor table %s for namespace %s: %s records in %.1fs",
+            table_name, namespace_slug, table_count, table_duration,
+        )
+        if progress_callback:
+            progress_callback(table_name, table_count, table_duration)
 
     summary = {
         "namespace": namespace_slug,
         "worlddb_rider_id": int(worlddb_rider_id) if worlddb_rider_id is not None else None,
         "tables": counts,
         "records": sum(counts.values()),
-        "records_to_sync": len(payloads),
-        "written": 0,
+        "records_to_sync": records_to_sync,
+        "written": written,
         "apply": bool(apply),
     }
-    if apply and payloads:
-        with main_engine.begin() as connection:
-            connection.execute(text("""
-                INSERT INTO activity_monitor_global_history
-                    (namespace_slug, worlddb_rider_id, record_type,
-                     source_record_key, occurred_at, record_data)
-                VALUES
-                    (:namespace_slug, :worlddb_rider_id, :record_type,
-                     :source_record_key, :occurred_at, CAST(:record_data AS JSONB))
-                ON CONFLICT (namespace_slug, record_type, source_record_key)
-                DO UPDATE SET
-                    worlddb_rider_id = EXCLUDED.worlddb_rider_id,
-                    occurred_at = EXCLUDED.occurred_at,
-                    record_data = EXCLUDED.record_data,
-                    archived_at = CURRENT_TIMESTAMP
-            """), payloads)
-        summary["written"] = len(payloads)
+    logger.info(
+        "Activity Monitor history archive finished for namespace %s: %s records in %.1fs",
+        namespace_slug, records_to_sync, time.monotonic() - archive_started_at,
+    )
     return summary
 
 
@@ -406,6 +496,7 @@ def sync_activity_monitor_roster(namespace_engine):
         return []
     matched = []
     active_rider_row_ids = []
+    active_identity_keys = []
     with namespace_engine.begin() as connection:
         cyclists = connection.execute(text("""
             SELECT c.id, c.first_cycling_id, c.first_name, c.last_name,
@@ -414,17 +505,34 @@ def sync_activity_monitor_roster(namespace_engine):
             LEFT JOIN cdb_team t ON t.id = c.team_id
             ORDER BY c.id
         """)).mappings().all()
-        monitor_riders_by_fc_id = defaultdict(list)
-        for monitor_rider in connection.execute(text("""
-            SELECT id, source_worlddb_rider_id, first_cycling_id, birth_date, identity_hold
+        monitor_rows = connection.execute(text("""
+            SELECT id, source_worlddb_rider_id, identity_generation,
+                   first_cycling_id, birth_date, identity_hold, present_in_cdb
             FROM activity_monitor_riders
-            WHERE first_cycling_id IS NOT NULL
-        """)).mappings().all():
-            monitor_riders_by_fc_id[monitor_rider["first_cycling_id"]].append(monitor_rider)
+        """)).mappings().all()
+        current_rider_by_worlddb_id = {}
+        max_generation_by_worlddb_id = defaultdict(lambda: -1)
+        monitor_riders_by_fc_id = defaultdict(list)
+        for row in monitor_rows:
+            worlddb_id = row["source_worlddb_rider_id"]
+            if worlddb_id is not None:
+                max_generation_by_worlddb_id[worlddb_id] = max(
+                    max_generation_by_worlddb_id[worlddb_id], row["identity_generation"]
+                )
+                if row["present_in_cdb"]:
+                    current = current_rider_by_worlddb_id.get(worlddb_id)
+                    if current is None or row["identity_generation"] > current["identity_generation"]:
+                        current_rider_by_worlddb_id[worlddb_id] = row
+            if row["first_cycling_id"] is not None:
+                monitor_riders_by_fc_id[row["first_cycling_id"]].append(row)
         cyclist_counts = defaultdict(int)
         for cyclist in cyclists:
             if cyclist["first_cycling_id"] is not None:
                 cyclist_counts[cyclist["first_cycling_id"]] += 1
+        now = datetime.utcnow()
+        updates = []
+        presence_updates = []
+        inserts = []
         for cyclist in cyclists:
             worlddb_id = int(cyclist["id"])
             fc_id = cyclist["first_cycling_id"]
@@ -442,19 +550,8 @@ def sync_activity_monitor_roster(namespace_engine):
                 ]
                 unlinked = matching_monitor_rows[0] if len(matching_monitor_rows) == 1 else None
                 if unlinked and unlinked["source_worlddb_rider_id"] is None:
-                    now = datetime.utcnow()
-                    connection.execute(text("""
-                        UPDATE activity_monitor_riders
-                        SET present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
-                        WHERE id = :id
-                    """), {"now": now, "id": unlinked["id"]})
+                    presence_updates.append({"id": unlinked["id"], "now": now})
                     active_rider_row_ids.append(unlinked["id"])
-            rider = connection.execute(text("""
-                SELECT id, identity_generation FROM activity_monitor_riders
-                WHERE source_worlddb_rider_id = :worlddb_id
-                  AND present_in_cdb = TRUE
-                ORDER BY identity_generation DESC LIMIT 1
-            """), {"worlddb_id": worlddb_id}).mappings().first()
             birth_date = None
             raw_birth_date = cyclist["birth_date"]
             if raw_birth_date:
@@ -462,47 +559,57 @@ def sync_activity_monitor_roster(namespace_engine):
                     birth_date = datetime.strptime(str(raw_birth_date), "%Y%m%d").date()
                 except ValueError:
                     birth_date = None
-            now = datetime.utcnow()
+            rider = current_rider_by_worlddb_id.get(worlddb_id)
             if rider:
-                connection.execute(text("""
-                    UPDATE activity_monitor_riders
-                    SET first_cycling_id = :fc_id, first_name = :first_name,
-                        last_name = :last_name, birth_date = COALESCE(:birth_date, birth_date),
-                        team_id = :team_id, team_name = :team_name,
-                        present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
-                    WHERE id = :id
-                """), {"fc_id": cyclist["first_cycling_id"], "first_name": cyclist["first_name"] or "",
-                       "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
-                       "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "",
-                       "now": now, "id": rider["id"]})
+                active_rider_row_ids.append(rider["id"])
+                updates.append({"id": rider["id"], "fc_id": cyclist["first_cycling_id"],
+                                "first_name": cyclist["first_name"] or "",
+                                "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
+                                "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "",
+                                "now": now})
             else:
-                generation = connection.execute(text("""
-                    SELECT COALESCE(MAX(identity_generation), -1) + 1
-                    FROM activity_monitor_riders WHERE source_worlddb_rider_id = :worlddb_id
-                """), {"worlddb_id": worlddb_id}).scalar_one()
-                connection.execute(text("""
-                    INSERT INTO activity_monitor_riders
-                        (identity_key, source_worlddb_rider_id, identity_generation,
-                         first_cycling_id, first_name, last_name, birth_date, team_id,
-                         team_name, identity_status, identity_hold, eligible,
-                         present_in_cdb, last_seen_cdb_at, created_at, updated_at)
-                    VALUES (:identity_key, :worlddb_id, :generation, :fc_id, :first_name,
-                            :last_name, :birth_date, :team_id, :team_name,
-                            'unverified', FALSE, TRUE, TRUE, :now, :now, :now)
-                """), {"identity_key": f"worlddb:{worlddb_id}:g{generation}",
-                       "worlddb_id": worlddb_id, "generation": generation,
-                       "fc_id": cyclist["first_cycling_id"], "first_name": cyclist["first_name"] or "",
-                       "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
-                       "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "", "now": now})
-                rider_id = connection.execute(text("""
-                    SELECT id FROM activity_monitor_riders
-                    WHERE source_worlddb_rider_id = :worlddb_id
-                      AND identity_generation = :generation
-                """), {"worlddb_id": worlddb_id, "generation": generation}).scalar_one()
-            if rider:
-                rider_id = rider["id"]
-            active_rider_row_ids.append(rider_id)
+                generation = max_generation_by_worlddb_id[worlddb_id] + 1
+                identity_key = f"worlddb:{worlddb_id}:g{generation}"
+                active_identity_keys.append(identity_key)
+                inserts.append({"identity_key": identity_key,
+                                "worlddb_id": worlddb_id, "generation": generation,
+                                "fc_id": cyclist["first_cycling_id"],
+                                "first_name": cyclist["first_name"] or "",
+                                "last_name": cyclist["last_name"] or "", "birth_date": birth_date,
+                                "team_id": cyclist["team_id"], "team_name": cyclist["team_name"] or "",
+                                "now": now})
             matched.append(worlddb_id)
+        if updates:
+            connection.execute(text("""
+                UPDATE activity_monitor_riders
+                SET first_cycling_id = :fc_id, first_name = :first_name,
+                    last_name = :last_name, birth_date = COALESCE(:birth_date, birth_date),
+                    team_id = :team_id, team_name = :team_name,
+                    present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
+                WHERE id = :id
+            """), updates)
+        if presence_updates:
+            connection.execute(text("""
+                UPDATE activity_monitor_riders
+                SET present_in_cdb = TRUE, last_seen_cdb_at = :now, updated_at = :now
+                WHERE id = :id
+            """), presence_updates)
+        if inserts:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, source_worlddb_rider_id, identity_generation,
+                     first_cycling_id, first_name, last_name, birth_date, team_id,
+                     team_name, identity_status, identity_hold, eligible,
+                     present_in_cdb, last_seen_cdb_at, created_at, updated_at)
+                VALUES (:identity_key, :worlddb_id, :generation, :fc_id, :first_name,
+                        :last_name, :birth_date, :team_id, :team_name,
+                        'unverified', FALSE, TRUE, TRUE, :now, :now, :now)
+            """), inserts)
+        if active_identity_keys:
+            active_rider_row_ids.extend(connection.execute(text("""
+                SELECT id FROM activity_monitor_riders
+                WHERE identity_key = ANY(:identity_keys)
+            """), {"identity_keys": active_identity_keys}).scalars().all())
         connection.execute(text("""
             UPDATE activity_monitor_riders
             SET present_in_cdb = FALSE, updated_at = :now
@@ -511,8 +618,11 @@ def sync_activity_monitor_roster(namespace_engine):
     return matched
 
 
-def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
-    """Restore supported append-only records for riders already matched locally."""
+def restore_worlddb_history(
+    main_engine, namespace_engine, worlddb_rider_ids, *, progress_callback=None,
+    archived_after=None, archived_before=None,
+):
+    """Restore matched riders' history using bounded-memory batch inserts."""
     from webapp.models.ns.activity_monitor import ActivityMonitorBase
 
     rider_ids = {int(value) for value in worlddb_rider_ids}
@@ -523,95 +633,207 @@ def restore_worlddb_history(main_engine, namespace_engine, worlddb_rider_ids):
     destination = namespace_engine.connect()
     transaction = destination.begin()
     restored = {table: 0 for table in RECOVERABLE_TABLES}
+    batch_size = 1000
     try:
         local_riders = {
             worlddb_id: (rider_id, generation)
             for worlddb_id, rider_id, generation in destination.execute(text("""
-            SELECT source_worlddb_rider_id, id, identity_generation
-            FROM activity_monitor_riders
-            WHERE source_worlddb_rider_id = ANY(:worlddb_ids)
-              AND present_in_cdb = TRUE
-        """), {"worlddb_ids": sorted(rider_ids)}).all()
+                SELECT source_worlddb_rider_id, id, identity_generation
+                FROM activity_monitor_riders
+                WHERE source_worlddb_rider_id = ANY(:worlddb_ids)
+                  AND present_in_cdb = TRUE
+            """), {"worlddb_ids": sorted(rider_ids)}).all()
         }
         if not local_riders:
             transaction.commit()
             return {"riders": 0, "restored": restored}
 
-        with main_engine.connect() as archive:
-            archived = archive.execute(text("""
-                SELECT namespace_slug, worlddb_rider_id, record_type, source_record_key, record_data
-                FROM activity_monitor_global_history
-                WHERE worlddb_rider_id = ANY(:worlddb_ids)
-                  AND record_type = ANY(:record_types)
-                ORDER BY CASE record_type
-                    WHEN 'activity_monitor_source_checks' THEN 0
-                    WHEN 'activity_monitor_results' THEN 1
-                    ELSE 2 END, id
-            """), {"worlddb_ids": list(local_riders), "record_types": list(RECOVERABLE_TABLES)}).mappings().all()
-
-        check_id_map = {}
-        for entry in archived:
-            table_name = entry["record_type"]
-            record = entry["record_data"]
-            worlddb_id = entry["worlddb_rider_id"]
-            if worlddb_id not in local_riders:
-                continue
-            table = metadata.tables[table_name]
-            target_generation = local_riders[worlddb_id][1]
-            if ("identity_generation" in table.c and
-                    int(record.get("identity_generation") or 0) != target_generation):
-                continue
-            values = {key: _restore_value(table.c[key], value)
-                      for key, value in record.items()
-                      if key in table.c and key != "id"}
-            if "rider_id" in table.c:
-                values["rider_id"] = local_riders[worlddb_id][0]
-            if "identity_generation" in table.c:
-                values["identity_generation"] = target_generation
-            if "source_worlddb_rider_id" in table.c:
-                values["source_worlddb_rider_id"] = worlddb_id
-            source_key_column = "source_result_key" if table_name == "activity_monitor_results" else "source_record_key"
-            if source_key_column in table.c:
-                key_digest = hashlib.sha256(
-                    f"{entry['namespace_slug']}\0{table_name}\0{entry['source_record_key']}".encode()
-                ).hexdigest()
-                values[source_key_column] = f"archive:{key_digest}"
-            if table_name == "activity_monitor_source_checks":
-                values["run_id"] = None
-            elif table_name == "activity_monitor_results":
-                old_check_id = record.get("source_check_id")
-                values["source_check_id"] = check_id_map.get((entry["namespace_slug"], old_check_id))
-            elif table_name == "activity_monitor_rider_schedules":
-                pass
-            elif table_name == "activity_monitor_identity_alerts":
-                values["cdb_import_id"] = None
-            elif table_name == "activity_monitor_eligibility_events":
-                values["cdb_import_id"] = None
-            elif table_name == "activity_monitor_profile_links" and values.get("is_current"):
-                current_exists = destination.execute(text("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM activity_monitor_profile_links
-                        WHERE rider_id = :rider_id
-                          AND identity_generation = :generation
-                          AND is_current = TRUE
-                    )
-                """), {"rider_id": values["rider_id"],
-                       "generation": values["identity_generation"]}).scalar_one()
-                if current_exists:
+        if archived_after is not None:
+            # If a namespace database was recreated while its import files
+            # remained, its file checkpoint must not hide the initial full
+            # restore. Require at least one previously restored archive key.
+            has_restored_archive_rows = False
+            for table_name, key_column in (
+                ("activity_monitor_source_checks", "source_record_key"),
+                ("activity_monitor_results", "source_result_key"),
+            ):
+                table = metadata.tables.get(table_name)
+                if table is None or key_column not in table.c:
                     continue
-            statement = pg_insert(table).values(**values).on_conflict_do_nothing().returning(table.c.id)
-            inserted_id = destination.execute(statement).scalar_one_or_none()
-            was_inserted = inserted_id is not None
-            if inserted_id is None and source_key_column in table.c:
-                inserted_id = destination.execute(
-                    text(f'SELECT id FROM "{table_name}" WHERE "{source_key_column}" = :key'),
-                    {"key": values[source_key_column]},
-                ).scalar_one_or_none()
-            if table_name == "activity_monitor_source_checks" and record.get("id") is not None and inserted_id is not None:
-                check_id_map[(entry["namespace_slug"], record["id"])] = inserted_id
-            if was_inserted:
-                restored[table_name] += 1
+                has_restored_archive_rows = destination.execute(text(
+                    f"SELECT 1 FROM {table_name} "
+                    f"WHERE {key_column} LIKE 'archive:%' LIMIT 1"
+                )).first() is not None
+                if has_restored_archive_rows:
+                    break
+            if not has_restored_archive_rows:
+                archived_after = None
+
+        current_profiles = set()
+        if "activity_monitor_profile_links" in metadata.tables:
+            local_rider_row_ids = [value[0] for value in local_riders.values()]
+            current_profiles = set(destination.execute(text("""
+                SELECT rider_id, identity_generation
+                FROM activity_monitor_profile_links
+                WHERE rider_id = ANY(:rider_ids) AND is_current = TRUE
+            """), {"rider_ids": local_rider_row_ids}).all())
+
+        # Source checks precede result rows in RECOVERABLE_TABLES. Track their
+        # archive keys, then resolve all replacement IDs with one array query.
+        check_key_by_old_id = {}
+        check_id_map = {}
+        for table_name in RECOVERABLE_TABLES:
+            table = metadata.tables.get(table_name)
+            if table is None:
+                continue
+            source_key_column = (
+                "source_result_key" if table_name == "activity_monitor_results"
+                else "source_record_key"
+            )
+            pending = []
+            processed = 0
+            table_started_at = time.monotonic()
+
+            def flush_batch():
+                if not pending:
+                    return
+                statement = (
+                    pg_insert(table).values(pending)
+                    .on_conflict_do_nothing()
+                    .returning(table.c.id)
+                )
+                inserted_ids = destination.execute(statement).scalars().all()
+                restored[table_name] += len(inserted_ids)
+                pending.clear()
+
+            if progress_callback:
+                progress_callback(table_name, 0, 0.0)
+            with main_engine.connect().execution_options(stream_results=True) as archive:
+                archive_query = """
+                    SELECT namespace_slug, worlddb_rider_id, source_record_key, record_data
+                    FROM activity_monitor_global_history
+                    WHERE worlddb_rider_id = ANY(:worlddb_ids)
+                      AND record_type = :record_type
+                """
+                archive_params = {
+                    "worlddb_ids": list(local_riders),
+                    "record_type": table_name,
+                }
+                # Source checks are scanned through the checkpoint window because
+                # result rows can refer to older checks. Other history is restored
+                # only when its archive row changed since the last successful CDB
+                # restore.
+                if archived_after is not None and table_name != "activity_monitor_source_checks":
+                    archive_query += " AND archived_at > :archived_after"
+                    archive_params["archived_after"] = archived_after
+                if archived_before is not None:
+                    archive_query += " AND archived_at <= :archived_before"
+                    archive_params["archived_before"] = archived_before
+                archive_query += " ORDER BY id"
+                entries = archive.execute(
+                    text(archive_query), archive_params
+                ).mappings()
+
+                for entry in entries:
+                    processed += 1
+                    worlddb_id = entry["worlddb_rider_id"]
+                    if worlddb_id not in local_riders:
+                        continue
+                    record = entry["record_data"]
+                    restored_source_key = (
+                        record.get("source_result_key")
+                        if table_name == "activity_monitor_results"
+                        else record.get("source_record_key")
+                    )
+                    if isinstance(restored_source_key, str) and restored_source_key.startswith("archive:"):
+                        continue
+                    target_rider_id, target_generation = local_riders[worlddb_id]
+                    if ("identity_generation" in table.c and
+                            int(record.get("identity_generation") or 0) != target_generation):
+                        continue
+
+                    values = {
+                        key: _restore_value(table.c[key], value)
+                        for key, value in record.items()
+                        if key in table.c and key != "id"
+                    }
+                    if "rider_id" in table.c:
+                        values["rider_id"] = target_rider_id
+                    if "identity_generation" in table.c:
+                        values["identity_generation"] = target_generation
+                    if "source_worlddb_rider_id" in table.c:
+                        values["source_worlddb_rider_id"] = worlddb_id
+                    if source_key_column in table.c:
+                        key_digest = hashlib.sha256(
+                            f"{entry['namespace_slug']}\0{table_name}\0"
+                            f"{entry['source_record_key']}".encode()
+                        ).hexdigest()
+                        values[source_key_column] = f"archive:{key_digest}"
+
+                    if table_name == "activity_monitor_source_checks":
+                        values["run_id"] = None
+                        old_id = record.get("id")
+                        if old_id is not None:
+                            check_key_by_old_id[(entry["namespace_slug"], old_id)] = (
+                                values.get("source_record_key")
+                            )
+                    elif table_name == "activity_monitor_results":
+                        old_check_id = record.get("source_check_id")
+                        values["source_check_id"] = check_id_map.get(
+                            (entry["namespace_slug"], old_check_id)
+                        )
+                    elif table_name in {
+                        "activity_monitor_identity_alerts",
+                        "activity_monitor_eligibility_events",
+                    }:
+                        values["cdb_import_id"] = None
+                    elif table_name == "activity_monitor_profile_links" and values.get("is_current"):
+                        current_key = (
+                            values["rider_id"], values["identity_generation"]
+                        )
+                        if current_key in current_profiles:
+                            continue
+                        current_profiles.add(current_key)
+
+                    pending.append(values)
+                    if len(pending) >= batch_size:
+                        flush_batch()
+                    if processed % 5000 == 0:
+                        elapsed = time.monotonic() - table_started_at
+                        logger.info(
+                            "Restoring Activity Monitor table %s: %s archived records in %.1fs",
+                            table_name, processed, elapsed,
+                        )
+                        if progress_callback:
+                            progress_callback(table_name, processed, elapsed)
+                flush_batch()
+
+            if table_name == "activity_monitor_source_checks" and check_key_by_old_id:
+                archive_keys = list({key for key in check_key_by_old_id.values() if key})
+                if archive_keys:
+                    key_to_new_id = dict(destination.execute(text("""
+                        SELECT source_record_key, id
+                        FROM activity_monitor_source_checks
+                        WHERE source_record_key = ANY(:source_keys)
+                    """), {"source_keys": archive_keys}).all())
+                    check_id_map = {
+                        old_key: key_to_new_id.get(archive_key)
+                        for old_key, archive_key in check_key_by_old_id.items()
+                    }
+
+            elapsed = time.monotonic() - table_started_at
+            logger.info(
+                "Restored Activity Monitor table %s: %s archived records in %.1fs",
+                table_name, processed, elapsed,
+            )
+            if progress_callback:
+                progress_callback(table_name, processed, elapsed)
+
         transaction.commit()
+        logger.info(
+            "Activity Monitor history restore finished for %s riders: %s",
+            len(local_riders), restored,
+        )
         return {"riders": len(local_riders), "restored": restored}
     except Exception:
         transaction.rollback()

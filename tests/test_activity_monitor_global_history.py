@@ -73,10 +73,19 @@ def test_history_archive_dry_run_and_worlddb_link_are_idempotent(app):
         with app.app_context():
             main_engine = db.engines["main"]
             install_global_history_schema(main_engine)
+            archive_progress = []
             preview = archive_namespace_history(
-                engines[0], main_engine, namespace_slugs[0], apply=False
+                engines[0], main_engine, namespace_slugs[0], apply=False,
+                progress_callback=lambda table, count, seconds: archive_progress.append(
+                    (table, count, seconds)
+                ),
             )
             assert preview["records"] == 3
+            assert {table for table, _, _ in archive_progress} == {
+                "activity_monitor_source_checks",
+                "activity_monitor_task_events",
+                "activity_monitor_tasks",
+            }
             with main_engine.connect() as connection:
                 assert connection.execute(text(
                     "SELECT COUNT(*) FROM activity_monitor_global_history WHERE namespace_slug = :slug"
