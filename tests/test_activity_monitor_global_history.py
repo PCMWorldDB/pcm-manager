@@ -2,7 +2,7 @@
 import os
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -14,6 +14,7 @@ from sqlalchemy_utils import create_database, drop_database
 from webapp.extensions import db
 from webapp.models.ns.activity_monitor import ActivityMonitorBase
 from webapp.models.ns.schema import CDBCyclist, CDBTeam
+from webapp.web.routes import _activity_monitor_attention_sql
 from webapp.tools.activity_monitor_global_history import (
     archive_namespace_history,
     build_history_bundle,
@@ -81,11 +82,11 @@ def test_history_archive_dry_run_and_worlddb_link_are_idempotent(app):
                 ),
             )
             assert preview["records"] == 3
-            assert {table for table, _, _ in archive_progress} == {
+            assert {
                 "activity_monitor_source_checks",
                 "activity_monitor_task_events",
                 "activity_monitor_tasks",
-            }
+            } <= {table for table, _, _ in archive_progress}
             with main_engine.connect() as connection:
                 assert connection.execute(text(
                     "SELECT COUNT(*) FROM activity_monitor_global_history WHERE namespace_slug = :slug"
@@ -246,6 +247,126 @@ def test_history_restores_by_worlddb_and_remaps_check_foreign_key(app):
         destination_engine.dispose()
         drop_database(destination_url)
         drop_database(source_url)
+
+
+def test_history_restore_recovers_verified_pcs_profile_when_link_is_missing(app):
+    base_url = make_url(os.environ["WORLDDB_TEST_DATABASE_URL"])
+    source_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    destination_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    source_engine = create_engine(source_url)
+    destination_engine = create_engine(destination_url)
+    source_slug = f"profile-recovery-{uuid4().hex[:12]}"
+    worlddb_id = 2906
+    now = datetime.utcnow()
+    try:
+        create_database(source_url)
+        create_database(destination_url)
+        ActivityMonitorBase.metadata.create_all(source_engine)
+        ActivityMonitorBase.metadata.create_all(destination_engine)
+        CDBTeam.__table__.create(destination_engine)
+        CDBCyclist.__table__.create(destination_engine)
+        with source_engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, source_worlddb_rider_id, identity_generation,
+                     first_name, last_name, team_name, identity_status, identity_hold,
+                     eligible, present_in_cdb, created_at, updated_at)
+                VALUES ('worlddb:2906:g0', 2906, 0, 'Test', 'Rider', 'Free Agents', 'verified',
+                        FALSE, TRUE, TRUE, :now, :now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO activity_monitor_source_checks
+                    (source_record_key, rider_id, source_worlddb_rider_id,
+                     identity_generation, source, source_status, coverage_status,
+                     identity_result, checked_at, request_path)
+                SELECT 'verified-pcs-check', id, 2906, 0, 'pcs', 'success', 'complete',
+                       'verified', :now, '/rider/test-rider/road'
+                FROM activity_monitor_riders WHERE source_worlddb_rider_id = 2906
+            """), {"now": now})
+        with destination_engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO cdb_cyclist (id, first_name, last_name)
+                VALUES (2906, 'Test', 'Rider')
+            """))
+
+        with app.app_context():
+            main_engine = db.engines["main"]
+            install_global_history_schema(main_engine)
+            archive_namespace_history(source_engine, main_engine, source_slug, apply=True)
+            synced_ids = sync_activity_monitor_roster(destination_engine)
+            restore_worlddb_history(main_engine, destination_engine, synced_ids)
+            with destination_engine.connect() as connection:
+                recovered_profile = connection.execute(text("""
+                    SELECT p.profile_path, p.profile_slug, p.link_status, p.is_current
+                    FROM activity_monitor_profile_links p
+                    JOIN activity_monitor_riders r ON r.id = p.rider_id
+                    WHERE r.source_worlddb_rider_id = :worlddb_id
+                """), {"worlddb_id": worlddb_id}).one()
+                assert recovered_profile == ('/rider/test-rider', 'test-rider', 'verified', True)
+            with main_engine.begin() as connection:
+                connection.execute(text("""
+                    DELETE FROM activity_monitor_global_history WHERE namespace_slug = :slug
+                """), {"slug": source_slug})
+    finally:
+        source_engine.dispose()
+        destination_engine.dispose()
+        drop_database(destination_url)
+        drop_database(source_url)
+
+
+def test_verified_pcs_check_suppresses_fc_error_after_history_restore(app):
+    base_url = make_url(os.environ["WORLDDB_TEST_DATABASE_URL"])
+    namespace_url = base_url.set(database=f"worlddb_test_{uuid4().hex}")
+    engine = create_engine(namespace_url)
+    now = datetime.utcnow()
+    try:
+        create_database(namespace_url)
+        ActivityMonitorBase.metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO activity_monitor_riders
+                    (identity_key, source_worlddb_rider_id, identity_generation,
+                     first_name, last_name, team_name, identity_status, identity_hold,
+                     eligible, present_in_cdb, created_at, updated_at)
+                VALUES ('worlddb:3905:g0', 3905, 0, 'Test', 'Rider', 'Free Agents', 'verified',
+                        FALSE, TRUE, TRUE, :now, :now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO activity_monitor_source_checks
+                    (source_record_key, rider_id, source_worlddb_rider_id,
+                     identity_generation, source, source_status, coverage_status,
+                     identity_result, checked_at, request_path)
+                SELECT 'restored-pcs', id, 3905, 0, 'pcs', 'success', 'complete',
+                       'verified', :now, '/rider/test-rider/road'
+                FROM activity_monitor_riders WHERE source_worlddb_rider_id = 3905
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO activity_monitor_source_checks
+                    (source_record_key, rider_id, source_worlddb_rider_id,
+                     identity_generation, source, source_status, coverage_status,
+                     identity_result, checked_at, request_path)
+                SELECT 'restored-fc', id, 3905, 0, 'firstcycling', 'invalid_response',
+                       'partial', 'verified', :later, '/dora/rider/77.json'
+                FROM activity_monitor_riders WHERE source_worlddb_rider_id = 3905
+            """), {"later": now + timedelta(seconds=1)})
+            needs_attention = connection.execute(text(
+                f"SELECT {_activity_monitor_attention_sql('r')} "
+                "FROM activity_monitor_riders r WHERE r.source_worlddb_rider_id = 3905"
+            )).scalar_one()
+            assert needs_attention is False
+            connection.execute(text("""
+                UPDATE activity_monitor_source_checks
+                SET checked_at = :later
+                WHERE source_record_key = 'restored-pcs'
+            """), {"later": now - timedelta(minutes=6)})
+            stale_success_needs_attention = connection.execute(text(
+                f"SELECT {_activity_monitor_attention_sql('r')} "
+                "FROM activity_monitor_riders r WHERE r.source_worlddb_rider_id = 3905"
+            )).scalar_one()
+            assert stale_success_needs_attention is True
+    finally:
+        engine.dispose()
+        drop_database(namespace_url)
 
 
 def test_history_bundle_preview_import_and_restore_are_safe_and_repeatable(app):

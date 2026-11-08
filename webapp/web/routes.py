@@ -329,6 +329,10 @@ def _activity_monitor_attention_sql(rider_alias='r'):
           AND lower(replace(COALESCE(pcs_success.identity_result, ''), '_', ' ')) = 'verified'
           AND (
               pcs_success.run_id = c.run_id
+              OR (
+                  pcs_success.run_id IS NULL AND c.run_id IS NULL
+                  AND pcs_success.checked_at >= c.checked_at - INTERVAL '5 minutes'
+              )
               OR pcs_success.checked_at > c.checked_at
           )
     )"""
@@ -5719,6 +5723,10 @@ def activity_monitor_problems():
                                     )
                                     AND (
                                         pcs_success.run_id = c.run_id
+                                        OR (
+                                            pcs_success.run_id IS NULL AND c.run_id IS NULL
+                                            AND pcs_success.checked_at >= c.checked_at - INTERVAL '5 minutes'
+                                        )
                                         OR pcs_success.checked_at > c.checked_at
                                     )
                               )

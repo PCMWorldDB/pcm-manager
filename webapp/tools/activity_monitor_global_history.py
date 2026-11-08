@@ -829,6 +829,71 @@ def restore_worlddb_history(
             if progress_callback:
                 progress_callback(table_name, processed, elapsed)
 
+        # Older namespaces may have saved a verified PCS check before profile
+        # links were persisted as their own records. Recover that exact checked
+        # slug when no current profile link survived the CDB replacement.
+        if "activity_monitor_profile_links" in metadata.tables:
+            recovered_profiles = destination.execute(text("""
+                SELECT DISTINCT ON (r.id)
+                       r.id AS rider_id, r.identity_generation,
+                       c.id AS check_id, c.request_path, c.checked_at,
+                       substring(c.request_path from '/rider/([^/]+)') AS profile_slug
+                FROM activity_monitor_riders r
+                JOIN activity_monitor_source_checks c
+                  ON c.rider_id = r.id
+                 AND c.identity_generation = r.identity_generation
+                WHERE r.source_worlddb_rider_id = ANY(:worlddb_ids)
+                  AND r.present_in_cdb = TRUE
+                  AND lower(replace(COALESCE(c.source, ''), '_', ' '))
+                      IN ('pcs', 'pcs html', 'procyclingstats')
+                  AND lower(replace(COALESCE(c.source_status, ''), '_', ' '))
+                      IN ('success', 'results parsed', 'results table empty')
+                  AND lower(replace(COALESCE(c.identity_result, ''), '_', ' ')) = 'verified'
+                  AND c.request_path ~ '^/rider/[^/?#]+(/road)?/?$'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM activity_monitor_profile_links p
+                      WHERE p.rider_id = r.id
+                        AND p.identity_generation = r.identity_generation
+                        AND p.is_current = TRUE
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM activity_monitor_source_checks newer
+                      WHERE newer.rider_id = c.rider_id
+                        AND newer.identity_generation = c.identity_generation
+                        AND lower(replace(COALESCE(newer.source, ''), '_', ' '))
+                            IN ('pcs', 'pcs html', 'procyclingstats')
+                        AND (newer.checked_at, newer.id) > (c.checked_at, c.id)
+                  )
+                ORDER BY r.id, c.checked_at DESC, c.id DESC
+            """), {"worlddb_ids": sorted(local_riders)}).mappings().all()
+            for profile in recovered_profiles:
+                profile_path = profile["request_path"].rstrip("/")
+                profile_slug = profile["profile_slug"]
+                if profile_path.endswith("/road"):
+                    profile_path = profile_path[:-5]
+                destination.execute(text("""
+                    INSERT INTO activity_monitor_profile_links (
+                        source_record_key, rider_id, identity_generation,
+                        profile_path, link_source, link_status, is_current,
+                        profile_slug, checked_at, checked_url, check_result,
+                        created_at, verified_at
+                    ) VALUES (
+                        :source_record_key, :rider_id, :identity_generation,
+                        :profile_path, 'verified', 'verified', TRUE,
+                        :profile_slug, :checked_at,
+                        'https://www.procyclingstats.com' || :request_path,
+                        'verified', :checked_at, :checked_at
+                    ) ON CONFLICT (source_record_key) DO NOTHING
+                """), {
+                    "source_record_key": f"restored-pcs-check:{profile['check_id']}",
+                    "rider_id": profile["rider_id"],
+                    "identity_generation": profile["identity_generation"],
+                    "profile_path": profile_path,
+                    "profile_slug": profile_slug,
+                    "checked_at": profile["checked_at"],
+                    "request_path": profile["request_path"],
+                })
+
         transaction.commit()
         logger.info(
             "Activity Monitor history restore finished for %s riders: %s",
