@@ -98,6 +98,18 @@
             {% endif %}
 
             {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
+            {% if cdb_update_status %}
+            <div id="cdb-update-status" class="alert alert-info mb-3" role="status" aria-live="polite"
+                 data-status-url="{{ url_for('web.admin_namespace_cdb_update_status', namespace_id=namespace.id, job_id=cdb_update_job_id) }}">
+                <div class="d-flex justify-content-between align-items-center gap-3">
+                    <strong id="cdb-update-message">{{ cdb_update_status.message }}</strong>
+                    <span id="cdb-update-percent" class="small">Update running</span>
+                </div>
+                <div class="progress mt-2" style="height: 0.6rem;">
+                    <div id="cdb-update-progress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 12%"></div>
+                </div>
+            </div>
+            {% endif %}
             <div class="card border-warning mb-3">
                 <div class="card-body">
                     <h6 class="card-title">Update this namespace from a CDB</h6>
@@ -141,6 +153,53 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const cdbUpdateStatus = document.getElementById('cdb-update-status');
+    if (cdbUpdateStatus) {
+        const progress = document.getElementById('cdb-update-progress');
+        const message = document.getElementById('cdb-update-message');
+        const percent = document.getElementById('cdb-update-percent');
+        const statusUrl = cdbUpdateStatus.dataset.statusUrl;
+        const progressByStatus = {
+            queued: 8,
+            converting: 22,
+            archiving: 42,
+            importing: 68,
+            restoring: 88,
+        };
+        const terminalStatuses = new Set(['complete', 'complete_with_warning', 'failed', 'failed_after_import']);
+        let pollDelay = 1500;
+
+        async function checkCdbUpdate() {
+            try {
+                const response = await fetch(statusUrl, { headers: { 'Accept': 'application/json' } });
+                if (!response.ok) throw new Error('Status unavailable');
+                const state = await response.json();
+                message.textContent = state.message || 'CDB update is running…';
+                if (terminalStatuses.has(state.status)) {
+                    cdbUpdateStatus.classList.remove('alert-info');
+                    cdbUpdateStatus.classList.add(state.status.startsWith('complete') ? 'alert-success' : 'alert-danger');
+                    progress.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                    progress.classList.add(state.status.startsWith('complete') ? 'bg-success' : 'bg-danger');
+                    progress.style.width = state.status.startsWith('complete') ? '100%' : '100%';
+                    percent.textContent = state.status.startsWith('complete') ? 'Complete' : 'Could not complete';
+                    if (state.status === 'complete') {
+                        setTimeout(function() { window.location.href = window.location.pathname; }, 2500);
+                    }
+                    return;
+                }
+                const width = progressByStatus[state.status] || 12;
+                progress.style.width = `${width}%`;
+                percent.textContent = 'In progress';
+            } catch (error) {
+                message.textContent = 'Checking the CDB update status…';
+            }
+            setTimeout(checkCdbUpdate, pollDelay);
+            pollDelay = Math.min(5000, pollDelay + 500);
+        }
+
+        checkCdbUpdate();
+    }
+
     // Handle status dropdown change
     const statusSelect = document.querySelector('.status-select');
     const saveBtn = document.querySelector('.save-btn');

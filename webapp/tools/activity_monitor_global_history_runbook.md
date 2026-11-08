@@ -100,10 +100,14 @@ shared history archive.
   absent. These rows remain unlinked by WorldDB ID and do not receive archived
   cross-namespace history.
 - Uploading a CDB from the namespace detail page replaces the mapped roster
-  tables atomically. The namespace's Activity Monitor history is archived
-  before the update when the shared archive is installed and remains in its
-  namespace database throughout. New namespaces follow the same mapped-table
-  replacement importer on their initially empty database.
+  tables atomically. The first update archives the namespace's existing
+  Activity Monitor history when the shared archive is installed. After a
+  successful history restore, later CDB updates use the saved checkpoint and
+  skip this full archive scan; newly completed online checks continue to be
+  archived individually. If history is changed outside normal online checks,
+  use the manual archive command below to synchronize those changes. New
+  namespaces follow the same mapped-table replacement importer on their
+  initially empty database.
 - After any archived history source is changed outside normal online checks,
   rerun the namespace archive command with `--apply` to synchronize it.
 

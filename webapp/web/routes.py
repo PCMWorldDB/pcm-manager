@@ -10,6 +10,7 @@ import io
 import shutil
 import secrets
 import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -57,7 +58,7 @@ from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
 from webapp.worker import run_external_sync_task
-from webapp.worker import run_activity_monitor_run_task
+from webapp.worker import run_activity_monitor_run_task, update_namespace_cdb_task
 from webapp.integrations.activity_monitor_queue import (
     enqueue_activity_monitor_run,
     request_activity_monitor_run_stop,
@@ -328,6 +329,10 @@ def _activity_monitor_attention_sql(rider_alias='r'):
           AND lower(replace(COALESCE(pcs_success.identity_result, ''), '_', ' ')) = 'verified'
           AND (
               pcs_success.run_id = c.run_id
+              OR (
+                  pcs_success.run_id IS NULL AND c.run_id IS NULL
+                  AND pcs_success.checked_at >= c.checked_at - INTERVAL '5 minutes'
+              )
               OR pcs_success.checked_at > c.checked_at
           )
     )"""
@@ -5718,6 +5723,10 @@ def activity_monitor_problems():
                                     )
                                     AND (
                                         pcs_success.run_id = c.run_id
+                                        OR (
+                                            pcs_success.run_id IS NULL AND c.run_id IS NULL
+                                            AND pcs_success.checked_at >= c.checked_at - INTERVAL '5 minutes'
+                                        )
                                         OR pcs_success.checked_at > c.checked_at
                                     )
                               )
@@ -11150,9 +11159,28 @@ def admin_integrations_run():
 def admin_namespace_detail(namespace_id):
     """Admin panel - View and manage namespace details"""
     namespace = Namespace.query.get_or_404(namespace_id)
+    from webapp.integrations.cdb.update_jobs import (
+        is_valid_cdb_update_job_id,
+        read_cdb_update_job_status,
+    )
+
+    cdb_update_job_id = request.args.get('cdb_job', '')
+    if not is_valid_cdb_update_job_id(cdb_update_job_id):
+        cdb_update_job_id = None
+    cdb_update_status = (
+        read_cdb_update_job_status(namespace.slug, cdb_update_job_id)
+        if cdb_update_job_id else None
+    )
+    if cdb_update_status and cdb_update_status.get('status') in {
+        'complete', 'complete_with_warning', 'failed', 'failed_after_import',
+    }:
+        cdb_update_status = None
+        cdb_update_job_id = None
     
     return render_template('admin/namespace_detail.html',
                          namespace=namespace,
+                         cdb_update_job_id=cdb_update_job_id if cdb_update_status else None,
+                         cdb_update_status=cdb_update_status,
                          active_section='namespaces')
 
 
@@ -11362,7 +11390,7 @@ def admin_namespace_create():
     return render_template('admin/namespace_form.html', form=form, active_section='namespaces')
 
 
-@web_bp.route('/admin/namespaces/<int:namespace_id>/cdb', methods=['POST'])
+@web_bp.route('/admin/namespaces/<int:namespace_id>/cdb', methods=['GET', 'POST'])
 @login_required
 @admin_required
 def admin_namespace_update_cdb(namespace_id):
@@ -11371,6 +11399,9 @@ def admin_namespace_update_cdb(namespace_id):
         abort(403)
 
     namespace = Namespace.query.get_or_404(namespace_id)
+    if request.method == 'GET':
+        return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
+
     uploaded_file = request.files.get('cdb_file')
     if uploaded_file is None or not uploaded_file.filename:
         flash('Choose a .cdb or .sqlite file to update this namespace.', 'error')
@@ -11378,8 +11409,7 @@ def admin_namespace_update_cdb(namespace_id):
 
     from werkzeug.utils import secure_filename
     from webapp.config import ensure_namespace_directories, get_cdb_import_path
-    from webapp.integrations.cdb.converter import convert_cdb_to_sqlite, validate_sqlite_cdb
-    from webapp.namespace.setup import CDBImporter
+    from webapp.integrations.cdb.update_jobs import write_cdb_update_job_status
 
     original_name = secure_filename(uploaded_file.filename)
     base_name, extension = os.path.splitext(original_name)
@@ -11390,109 +11420,78 @@ def admin_namespace_update_cdb(namespace_id):
 
     ensure_namespace_directories(namespace.slug)
     import_path = get_cdb_import_path(namespace.slug)
+    job_id = secrets.token_hex(16)
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
-    source_path = os.path.join(import_path, f'{base_name}_{timestamp}{extension}')
-    sqlite_path = source_path
-    paths_to_clean = [source_path]
-    cdb_import_completed = False
+    source_filename = f'{base_name}_{timestamp}_{job_id[:8]}{extension}'
+    sqlite_filename = (
+        f'{base_name}_{timestamp}_{job_id[:8]}.sqlite'
+        if extension == '.cdb' else source_filename
+    )
+    source_path = os.path.join(import_path, source_filename)
     try:
         uploaded_file.save(source_path)
-        if extension == '.cdb':
-            sqlite_path = os.path.join(import_path, f'{base_name}_{timestamp}.sqlite')
-            paths_to_clean.append(sqlite_path)
-            convert_cdb_to_sqlite(source_path, sqlite_path)
-        else:
-            validate_sqlite_cdb(sqlite_path)
-
-        # Archive first, so the update remains safe even if a future importer
-        # changes its scope. The current Activity Monitor tables are separate
-        # and are not among the mapped CDB tables replaced below.
-        try:
-            from webapp.tools.activity_monitor_global_history import archive_namespace_history
-
-            namespace_engine = create_engine(namespace.build_connection_string(), pool_pre_ping=True)
-            try:
-                archive_namespace_history(
-                    namespace_engine,
-                    db.engines.get('main') or db.engine,
-                    namespace.slug,
-                    apply=True,
-                )
-            finally:
-                namespace_engine.dispose()
-        except Exception:
-            logger.exception(
-                'Could not synchronize the shared Activity Monitor archive before CDB update: %s',
-                namespace.slug,
-            )
-
-        with CDBImporter(
-            sqlite_path,
-            namespace.build_connection_string(),
-            namespace.pcm_version,
-        ) as importer:
-            stats = importer.import_all_tables(replace_existing=True)
-        try:
-            from webapp.tools.activity_monitor_global_history import (
-                restore_worlddb_history,
-                sync_activity_monitor_roster,
-            )
-
-            destination_engine = create_engine(namespace.build_connection_string(), pool_pre_ping=True)
-            try:
-                worlddb_ids = sync_activity_monitor_roster(destination_engine)
-                if worlddb_ids:
-                    restore_worlddb_history(
-                        db.engines.get('main') or db.engine,
-                        destination_engine,
-                        worlddb_ids,
-                    )
-            finally:
-                destination_engine.dispose()
-        except Exception:
-            logger.exception('Could not restore archived Activity Monitor history for namespace %s', namespace.slug)
-        cdb_import_completed = True
-
-        namespace.sqlite_file_path = f'cdb/import/{os.path.basename(sqlite_path)}'
-        db.session.commit()
-        AuditLog.log_action(
-            action=AuditAction.NAMESPACE_CDB_IMPORTED,
-            user=current_user,
-            resource_type='namespace',
-            resource_id=namespace.id,
-            resource_name=namespace.name,
-            details={
-                'import_stats': stats,
-                'cdb_file': os.path.basename(source_path),
-                'operation': 'replace_mapped_cdb_data',
-                'activity_monitor_history_preserved': True,
-            },
-            ip_address=request.remote_addr,
+        write_cdb_update_job_status(
+            namespace.slug,
+            job_id,
+            'queued',
+            message='CDB uploaded. Waiting for the background update to start…',
+            created_at=datetime.utcnow().isoformat(timespec='seconds') + 'Z',
         )
-        db.session.commit()
-    except Exception:
+        update_namespace_cdb_task.delay(
+            namespace.id,
+            job_id,
+            source_filename,
+            sqlite_filename,
+            extension,
+            current_user.id,
+            request.remote_addr,
+            request.user_agent.string if request.user_agent else None,
+        )
+    except Exception as exc:
+        logger.exception('Could not queue CDB update for namespace %s', namespace.slug)
         db.session.rollback()
-        logger.exception('CDB update failed for namespace %s', namespace.slug)
-        if not cdb_import_completed:
-            for path in paths_to_clean:
-                if os.path.exists(path):
-                    os.remove(path)
-            flash(
-                'The new CDB could not be imported. The previous mapped CDB data and namespace history were kept.',
-                'error',
+        for path in (source_path, os.path.join(import_path, sqlite_filename)):
+            if os.path.exists(path):
+                os.remove(path)
+        try:
+            write_cdb_update_job_status(
+                namespace.slug,
+                job_id,
+                'failed',
+                message='The CDB was uploaded, but the background update could not be started.',
+                error=str(exc),
             )
-        else:
-            flash(
-                'The mapped CDB data was replaced, but namespace metadata or its audit entry could not be saved. Check the namespace details before retrying.',
-                'error',
-            )
+        except Exception:
+            logger.exception('Could not save failed CDB update status for namespace %s', namespace.slug)
+        flash('The CDB update could not be started. The current namespace database was not changed.', 'error')
         return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
-    flash(
-        f"CDB updated for {namespace.name}. Replaced {stats.get('cyclists', 0):,} riders; Activity Monitor history was kept.",
-        'success',
+    flash('CDB uploaded. The namespace update is running in the background.', 'info')
+    return redirect(url_for(
+        'web.admin_namespace_detail', namespace_id=namespace.id, cdb_job=job_id,
+    ))
+
+
+@web_bp.route('/admin/namespaces/<int:namespace_id>/cdb-update/<job_id>', methods=['GET'])
+@login_required
+@admin_required
+def admin_namespace_cdb_update_status(namespace_id, job_id):
+    """Return progress for a CDB update belonging to this namespace."""
+    if not _can_update_namespaces():
+        abort(403)
+
+    from webapp.integrations.cdb.update_jobs import (
+        is_valid_cdb_update_job_id,
+        read_cdb_update_job_status,
     )
-    return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
+
+    if not is_valid_cdb_update_job_id(job_id):
+        abort(404)
+    namespace = Namespace.query.get_or_404(namespace_id)
+    status = read_cdb_update_job_status(namespace.slug, job_id)
+    if status is None:
+        abort(404)
+    return jsonify(status)
 
 
 @web_bp.route('/admin/namespaces/<int:namespace_id>/status', methods=['POST'])
