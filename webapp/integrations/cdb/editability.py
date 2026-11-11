@@ -6,6 +6,12 @@ import yaml
 from webapp.models.ns.cdb import CDB_TABLES
 
 
+SYSTEM_FIELDS = {
+    'is_deleted', 'pcs_identity_status', 'has_pending_stat_changes', 'has_pending_attribute_changes',
+    'pcs_birth_date', 'pcs_latest_updated_at',
+}
+
+
 def get_editable_fields(entity_type):
     """Return the explicit allowlist; invalid configuration fails closed.
 
@@ -27,9 +33,7 @@ def get_editable_fields(entity_type):
             continue
         for field in fields:
             column = model.__table__.columns.get(field)
-            if column is None or column.primary_key or field in {
-                'is_deleted', 'identity_pcs_status', 'has_pending_stat_changes', 'has_pending_attribute_changes',
-            }:
+            if column is None or column.primary_key or field in SYSTEM_FIELDS:
                 raise ValueError(f'Invalid editable field: {object_name}.{field}')
     return frozenset(policy.get(entity_type, ()))
 

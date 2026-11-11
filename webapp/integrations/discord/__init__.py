@@ -1161,7 +1161,7 @@ def load_namespace_stat_list_name(namespace, list_id):
     try:
         with engine.connect() as conn:
             return conn.execute(
-                text("SELECT list_name FROM stat_lists WHERE id = :list_id"),
+                text("SELECT list_name FROM rider_list WHERE id = :list_id"),
                 {'list_id': list_id},
             ).scalar()
     finally:

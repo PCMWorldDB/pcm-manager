@@ -2,7 +2,6 @@
 import json
 import logging
 import random
-import re
 import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -20,7 +19,12 @@ from webapp import create_app
 from webapp.extensions import celery as _celery, db
 from webapp.integrations.firstcycling.api import FirstCyclingClient
 from webapp.integrations.pcs.profile import parse_pcs_profile
-from webapp.models import ExternalCallTask, ExternalCallTaskGroup, ExternalSyncLog
+from webapp.integrations.pcs.slug import rider_profile_url, rider_slug_from_profile_url, valid_rider_slug
+from webapp.integrations.rider_checks import (
+    PROFILE_ENDPOINT, apply_rider_check,
+    RIDER_CHECK_JOBS, enqueue_rider_check,
+)
+from webapp.models import ExternalCallTask, ExternalCallTaskGroup, ScheduledJob, User
 from webapp.models.main.namespace import Namespace
 
 SYNC_TYPE_RACE = 'fc_race_calendar'
@@ -28,12 +32,19 @@ SYNC_TYPE_TEAMS = 'fc_teams'
 SYNC_TYPE_RIDERS = 'fc_riders'
 SYNC_TYPE_RACE_RESULTS = 'fc_race_results'
 logger = logging.getLogger(__name__)
+PCS_MAX_ATTEMPTS = 2
 
 
 class RetryableFetch(Exception):
     def __init__(self, message, delay=60, http_status=None):
         super().__init__(message)
         self.delay = delay
+        self.http_status = http_status
+
+
+class ProfileProcessingError(ValueError):
+    def __init__(self, message, http_status):
+        super().__init__(message)
         self.http_status = http_status
 
 
@@ -53,11 +64,13 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def validate_request(provider, endpoint, params):
-    if endpoint != 'get_rider_profile' or provider not in {'pcs', 'firstcycling'}:
+    if endpoint != PROFILE_ENDPOINT or provider not in {'pcs', 'firstcycling'}:
         raise ValueError('Unsupported provider/endpoint')
+    if not isinstance(params, dict):
+        raise ValueError('Request parameters must be an object')
     if provider == 'pcs':
         slug = params.get('rider_slug', '')
-        if not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', slug):
+        if not valid_rider_slug(slug):
             raise ValueError('A canonical PCS rider_slug is required')
     else:
         rider_id = params.get('rider_id')
@@ -65,7 +78,7 @@ def validate_request(provider, endpoint, params):
             raise ValueError('A positive FirstCycling rider_id is required')
 
 
-def fetch_profile(provider, params):
+def fetch_profile(provider, target):
     if provider == 'firstcycling':
         from webapp.integrations.firstcycling.api import FirstCyclingClient
         client = FirstCyclingClient()
@@ -73,7 +86,7 @@ def fetch_profile(provider, params):
         client.request_delay_seconds = 0
         client.retry_attempts = 0
         try:
-            payload, _ = client.get_rider(int(params['rider_id']))
+            payload, _ = client.get_rider(int(target['rider_id']))
             return payload
         except Exception as exc:
             cause = exc.__cause__
@@ -83,26 +96,36 @@ def fetch_profile(provider, params):
                 raise RetryableFetch('FirstCycling connection failure') from exc
             raise
 
-    url = f"https://www.procyclingstats.com/rider/{params['rider_slug']}/road"
-    request = Request(url, headers={'User-Agent': 'WorldDB/1.0', 'Accept': 'text/html'})
+    slug = rider_slug_from_profile_url(target)
+    if slug is None:
+        raise ValueError('A canonical PCS rider profile URL is required')
+    request = Request(target, headers={'User-Agent': 'WorldDB/1.0', 'Accept': 'text/html'})
+    response_status = None
     try:
         with build_opener(_NoRedirect()).open(request, timeout=30) as response:
+            response_status = getattr(response, 'status', 200)
             html = response.read(5_000_001)
             if len(html) > 5_000_000:
                 raise ValueError('PCS profile exceeds size limit')
+        parsed = parse_pcs_profile(html)
+        canonical_slug = parsed['profile'].get('canonical_slug')
+        if canonical_slug and canonical_slug != slug:
+            raise ValueError('PCS returned a different rider profile')
+        if parsed['status'] not in {'results_parsed', 'results_table_empty'}:
+            raise ValueError(f"PCS profile could not be parsed: {parsed['status']}")
+        return parsed
     except HTTPError as exc:
+        if response_status == 200:
+            raise ProfileProcessingError(str(exc), response_status) from exc
         if exc.code in {403, 429} or exc.code >= 500:
             raise RetryableFetch('PCS cooldown required', max(60, retry_after(exc.headers.get('Retry-After'))), exc.code) from exc
         raise ValueError(f'PCS profile HTTP {exc.code}') from exc
     except (URLError, TimeoutError) as exc:
+        if response_status == 200:
+            raise ProfileProcessingError(str(exc), response_status) from exc
         raise RetryableFetch('PCS connection failure') from exc
-    parsed = parse_pcs_profile(html)
-    canonical_slug = parsed['profile'].get('canonical_slug')
-    if canonical_slug and canonical_slug != params['rider_slug']:
-        raise ValueError('PCS returned a different rider profile')
-    if parsed['status'] not in {'results_parsed', 'results_table_empty'}:
-        raise ValueError(f"PCS profile could not be parsed: {parsed['status']}")
-    return parsed
+    except Exception as exc:
+        raise ProfileProcessingError(str(exc), response_status) from exc
 
 
 # Stable PostgreSQL advisory lock key, shared by every queue worker.
@@ -110,7 +133,8 @@ PCS_LOCK = 812734902
 
 
 def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
-                  origin='manual', priority=None):
+                  origin='manual', priority=None, provider=None, sync_type=None, scheduled_job_id=None,
+                  draft=False):
     """Validate all requests before inserting; caller commits before dispatch."""
     if origin not in {'manual', 'scheduled'}:
         raise ValueError('Unsupported task group origin')
@@ -118,25 +142,71 @@ def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=N
     if priority not in {'high', 'low'}:
         raise ValueError('Unsupported task group priority')
     requests = list(requests)
-    if not requests:
+    if not requests and not draft:
         raise ValueError('A task group requires at least one request')
     for request in requests:
         validate_request(request['provider'], request['endpoint'], request['params'])
-    group = ExternalCallTaskGroup(status='queued', origin=origin, priority=priority,
+    group = ExternalCallTaskGroup(status='draft' if draft else 'queued', origin=origin, priority=priority,
                                   namespace_id=namespace_id, executed_by_id=executed_by_id,
-                                  message=message, requested_count=len(requests))
+                                  message=message, requested_count=len(requests),
+                                  provider=provider, sync_type=sync_type, scheduled_job_id=scheduled_job_id)
     db.session.add(group)
     db.session.flush()
+    _add_group_requests(group, requests)
+    return group
+
+
+def _add_group_requests(group, requests):
     for request in requests:
+        is_pcs = request['provider'] == 'pcs'
+        # Keep the validated slug available to workers that predate URL-backed tasks.
+        params = {'rider_slug': request['params']['rider_slug']} if is_pcs else request['params']
         db.session.add(ExternalCallTask(
             task_group_id=group.id, provider=request['provider'], endpoint=request['endpoint'],
-            request_params_json=json.dumps(request['params']), status='queued',
+            request_url=rider_profile_url(params['rider_slug']) if is_pcs else None,
+            request_params_json=json.dumps(params), status='draft' if group.status == 'draft' else 'queued',
             related_to_id=request.get('related_to_id'),
             related_to_table=request.get('related_to_table'),
-            attempt=0, max_attempts=3,
+            attempt=0, max_attempts=PCS_MAX_ATTEMPTS if is_pcs else 3,
         ))
     db.session.flush()
-    return group
+
+
+def replace_draft_requests(group, requests):
+    """Replace a locked draft's membership after validating the entire request."""
+    if group.status != 'draft':
+        raise ValueError('Only draft groups can be edited.')
+    for request in requests:
+        validate_request(request['provider'], request['endpoint'], request['params'])
+    ExternalCallTask.query.filter_by(task_group_id=group.id).delete()
+    _add_group_requests(group, requests)
+    group.requested_count = len(requests)
+
+
+def cancel_external_group(group_id):
+    """Stop pending requests while allowing an in-flight request to finish."""
+    group = db.session.scalar(select(ExternalCallTaskGroup).where(
+        ExternalCallTaskGroup.id == group_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if group is None or group.status not in {'draft', 'queued', 'running'}:
+        raise ValueError('Only draft, queued, or running groups can be cancelled.')
+    group.status = 'cancelled'
+    group.is_worker_queued = False
+    group.worker_message_id = None
+    ExternalCallTask.query.filter(
+        ExternalCallTask.task_group_id == group_id,
+        ExternalCallTask.status.in_(['draft', 'queued', 'retry_wait']),
+    ).update(dict(status='cancelled', outcome='cancelled', finished_at=datetime.utcnow()),
+             synchronize_session='fetch')
+
+
+def _lock_task_group(task_id):
+    # Claims, completions, and cancellation lock the group before its tasks.
+    return db.session.scalar(select(ExternalCallTaskGroup).where(
+        ExternalCallTaskGroup.id == select(ExternalCallTask.task_group_id).where(
+            ExternalCallTask.id == task_id,
+        ).scalar_subquery(),
+    ).with_for_update().execution_options(populate_existing=True))
 
 
 def _refresh_group(group_id):
@@ -150,6 +220,8 @@ def _refresh_group(group_id):
         ExternalCallTask.status != 'historical')).scalars().all()
     group.synced_count = states.count('success')
     group.failed_count = states.count('failed')
+    if group.status in {'draft', 'cancelled'}:
+        return
     if any(state in {'queued', 'retry_wait', 'running'} for state in states):
         group.status = 'running'
     elif group.failed_count:
@@ -161,12 +233,23 @@ def _refresh_group(group_id):
 def execute_task(task_id):
     """Claim exactly once, commit before I/O, then store results and group state."""
     now = datetime.utcnow()
+    group = _lock_task_group(task_id)
+    if group is not None and group.status in {'draft', 'cancelled'}:
+        db.session.rollback()
+        return False
     task = db.session.execute(select(ExternalCallTask).where(
         ExternalCallTask.id == task_id).with_for_update(skip_locked=True)).scalar_one_or_none()
     if task is None or task.status not in {'queued', 'retry_wait'} or task.available_at > now:
         db.session.rollback()
         return False
     if task.provider == 'pcs':
+        task.max_attempts = min(task.max_attempts, PCS_MAX_ATTEMPTS)
+        if task.attempt >= task.max_attempts or (task.attempt > 0 and task.http_status == 200):
+            task.status = task.outcome = 'failed'
+            task.finished_at = now
+            _refresh_group(task.task_group_id)
+            db.session.commit()
+            return True
         # Non-blocking lock avoids deadlocks with workers holding other task rows.
         if not db.session.execute(text('SELECT pg_try_advisory_xact_lock(:key)'), {'key': PCS_LOCK}).scalar():
             db.session.rollback()
@@ -184,28 +267,61 @@ def execute_task(task_id):
     task.started_at = now
     task.attempt += 1
     provider, endpoint = task.provider, task.endpoint
-    params_json = task.request_params_json
+    request_url, params_json = task.request_url, task.request_params_json
     attempt, max_attempts = task.attempt, task.max_attempts
     _refresh_group(task.task_group_id)
     db.session.commit()
-    result, error, status, available_at, http_status = None, None, 'success', now, None
+    params, payload, result = {}, None, None
+    error, status, available_at, http_status = None, 'success', now, None
     try:
-        params = json.loads(params_json or '{}')
-        validate_request(provider, endpoint, params)
-        result = json.dumps(fetch_profile(provider, params), default=str)
+        if provider == 'pcs' and request_url is not None:
+            validate_request(provider, endpoint, {'rider_slug': rider_slug_from_profile_url(request_url)})
+        else:
+            params = json.loads(params_json or '{}')
+            validate_request(provider, endpoint, params)
+            if provider == 'pcs':
+                # Tasks queued before PCS URLs were stored still carry their slug in JSON.
+                request_url = rider_profile_url(params['rider_slug'])
+        payload = fetch_profile(provider, request_url if provider == 'pcs' else params)
+        if provider == 'pcs':
+            http_status = 200
+        result = json.dumps(payload, default=str)
     except RetryableFetch as exc:
         status = 'retry_wait' if attempt < max_attempts else 'failed'
         available_at = datetime.utcnow() + timedelta(seconds=max(exc.delay, 2 ** attempt))
         error, http_status = str(exc), exc.http_status
     except Exception as exc:
         status, error = 'failed', str(exc)
+        if isinstance(exc, ProfileProcessingError):
+            http_status = exc.http_status
     # Serialize duplicate completion and group aggregate updates.
+    group = _lock_task_group(task_id)
     task = db.session.execute(select(ExternalCallTask).where(
         ExternalCallTask.id == task_id).with_for_update()).scalar_one()
+    if task.status != 'running' or task.attempt != attempt:
+        db.session.rollback()
+        return False
+    if provider == 'pcs' and task.request_url is None and request_url is not None:
+        task.request_url = request_url
+    checked_at = datetime.utcnow()
+    if group is not None and group.status == 'cancelled' and status == 'retry_wait':
+        status = 'cancelled'
+    if status not in {'retry_wait', 'cancelled'} and isinstance(params, dict):
+        try:
+            with db.session.begin_nested():
+                apply_rider_check(task, params, payload, status, checked_at)
+        except Exception as exc:
+            logger.warning('Rider check post-processing failed for task %s (%s)', task.id, type(exc).__name__)
+            error = f'Could not apply rider check results ({type(exc).__name__})'
+            status = 'retry_wait' if provider != 'pcs' and attempt < max_attempts else 'failed'
+            if status == 'retry_wait':
+                available_at = checked_at + timedelta(seconds=2 ** attempt)
+    if group is not None and group.status == 'cancelled' and status == 'retry_wait':
+        status = 'cancelled'
     task.status, task.result_json, task.error_message = status, result, error
     task.available_at, task.http_status = available_at, http_status
     task.outcome = status
-    task.finished_at = datetime.utcnow() if status != 'retry_wait' else None
+    task.finished_at = checked_at if status != 'retry_wait' else None
     _refresh_group(task.task_group_id)
     db.session.commit()
     return True
@@ -264,7 +380,8 @@ def submit_external_group(group_id):
     return True
 
 
-def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=None, message=None):
+def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
+                                 provider=None, sync_type=None):
     """Create/commit high-priority work and notify Celery immediately.
 
     Call from an authorized application action after resolving selected riders.
@@ -272,7 +389,8 @@ def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=
     A broker failure leaves a queued database group for the hourly dispatcher.
     """
     group = enqueue_group(requests, namespace_id=namespace_id,
-                          executed_by_id=executed_by_id, message=message, origin='manual')
+                          executed_by_id=executed_by_id, message=message, origin='manual',
+                          provider=provider, sync_type=sync_type)
     group_id = group.id
     db.session.commit()
     try:
@@ -411,12 +529,12 @@ def run_external_group(self, group_id, submission_id):
 
 @_celery.task(name='webapp.tasks.poll_external_calls', acks_late=True)
 def poll_external_calls():
-    """Hourly dispatch; future rider selection must generate/commit groups first."""
+    """Dispatch committed external call groups."""
     return dispatch_queued_external_groups()
 
 
 def _update_sync_log(log_id, **updates):
-    log = ExternalSyncLog.query.get(log_id)
+    log = ExternalCallTaskGroup.query.get(log_id)
     if log is None:
         return None
 
@@ -428,7 +546,7 @@ def _update_sync_log(log_id, **updates):
 
 
 @_celery.task(name='webapp.tasks.run_external_sync')
-def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None, start_date=None, end_date=None):
+def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None, start_date=None, end_date=None, limit=None):
     """Run one external sync type in the background and update status log."""
     try:
         logger.info(
@@ -468,6 +586,7 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             summary = client.sync_teams(
                 year=season_year,
                 gender=gender,
+                limit=limit,
                 commit=True,
             )
             requested_count = summary['requested']
@@ -490,6 +609,7 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             summary = client.sync_riders(
                 year=season_year,
                 gender=gender,
+                limit=limit,
                 commit=True,
             )
             requested_count = summary['requested']
@@ -535,6 +655,8 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
         else:
             raise ValueError(f'Unsupported sync type: {sync_type}')
 
+        if limit is not None and sync_type in (SYNC_TYPE_TEAMS, SYNC_TYPE_RIDERS):
+            summary['limit'] = limit
         _update_sync_log(
             log_id,
             status=status,
@@ -569,6 +691,130 @@ def run_external_sync_task(log_id, sync_type, season_year, gender, api_path=None
             failed_count=1,
         )
         raise
+
+
+FC_RESULTS_SCHEDULE_LOCK = 812734905
+
+
+@_celery.task(name='webapp.tasks.run_rider_check_now')
+def run_rider_check_now(job, namespace_id, executed_by_id, settings, job_id=None):
+    """Queue a one-off rider check for the selected namespace."""
+    if job not in RIDER_CHECK_JOBS:
+        return []
+    if job_id is not None:
+        saved_job = db.session.get(ScheduledJob, job_id)
+        if saved_job is None or (saved_job.job_type, saved_job.namespace_id) != (job, namespace_id):
+            return []
+    namespace = db.session.get(Namespace, namespace_id)
+    if (namespace is None or not namespace.is_active or namespace.is_template
+            or db.session.get(User, executed_by_id) is None):
+        return []
+
+    try:
+        now = datetime.now(ZoneInfo(current_app.config['WORKER_TIMEZONE']))
+        group_ids = enqueue_rider_check(job, now, enqueue_group, namespace, settings,
+                                        job_id=job_id, executed_by_id=executed_by_id)
+    except Exception:
+        db.session.rollback()
+        logger.exception('Could not select riders for %s in namespace %s', job, namespace_id)
+        group_ids = []
+        status, message = 'failed', 'Could not select riders for this check.'
+    else:
+        status, message = 'success', 'No eligible riders matched these settings.'
+    if not group_ids:
+        db.session.add(ExternalCallTaskGroup(
+            namespace_id=namespace_id, executed_by_id=executed_by_id, sync_type=job,
+            scheduled_job_id=job_id, status=status, requested_count=0, message=f'{RIDER_CHECK_JOBS[job]}: {message}',
+        ))
+    db.session.commit()
+
+    for group_id in group_ids:
+        try:
+            submit_external_group(group_id)
+        except Exception:
+            logger.exception('Could not submit rider check group %s', group_id)
+            break  # Unsubmitted groups are recovered by the queue poller.
+    return group_ids
+
+
+def _queue_due_scheduled_job(job_id, now):
+    job = db.session.get(ScheduledJob, job_id, with_for_update=True)
+    today = now.date()
+    if (job is None or not job.enabled or now.time() < job.run_at
+            or (job.last_run_on is not None and job.last_run_on >= today)):
+        db.session.rollback()
+        return
+
+    if job.job_type == 'race_results':
+        settings = job.params
+        start = today - timedelta(days=settings['start_days_ago'])
+        end = today - timedelta(days=settings['end_days_ago'])
+        db.session.add(ExternalCallTaskGroup(
+            scheduled_job_id=job.id, provider='firstcycling', sync_type=SYNC_TYPE_RACE_RESULTS,
+            origin='scheduled', priority='low', season_year=settings['year'], gender=settings['gender'],
+            status='queued', message=f'Queued scheduled race results sync ({start} to {end})',
+            details_json=json.dumps({'start_date': start.isoformat(), 'end_date': end.isoformat()}),
+        ))
+    else:
+        try:
+            with db.session.begin_nested():
+                enqueue_rider_check(job.job_type, now, enqueue_group, job.namespace, job.params, job_id=job.id)
+        except ValueError as exc:
+            db.session.add(ExternalCallTaskGroup(
+                scheduled_job_id=job.id, namespace_id=job.namespace_id, sync_type=job.job_type,
+                origin='scheduled', priority='low', status='failed', failed_count=1, message=str(exc),
+            ))
+    job.last_run_on = today
+    db.session.commit()
+
+
+@_celery.task(name='webapp.tasks.poll_external_sync_schedules', acks_late=True, reject_on_worker_lost=True)
+def poll_external_sync_schedules():
+    """Claim each due job once per local day and process queued race result work."""
+    with db.engines['main'].connect() as connection:
+        acquired = connection.scalar(text('SELECT pg_try_advisory_lock(:key)'), {'key': FC_RESULTS_SCHEDULE_LOCK})
+        connection.commit()
+        if not acquired:
+            return None
+        try:
+            now = datetime.now(ZoneInfo(current_app.config['WORKER_TIMEZONE']))
+            job_ids = db.session.scalars(select(ScheduledJob.id).where(
+                ScheduledJob.enabled.is_(True), ScheduledJob.run_at <= now.time(),
+                (ScheduledJob.last_run_on.is_(None)) | (ScheduledJob.last_run_on < now.date()),
+            ).order_by(ScheduledJob.id)).all()
+            for job_id in job_ids:
+                try:
+                    _queue_due_scheduled_job(job_id, now)
+                except Exception:
+                    db.session.rollback()
+                    logger.exception('Could not enqueue scheduled job %s', job_id)
+
+            groups = ExternalCallTaskGroup.query.filter_by(
+                provider='firstcycling', sync_type=SYNC_TYPE_RACE_RESULTS, origin='scheduled', namespace_id=None,
+            )
+            groups.filter_by(status='running').update({
+                'status': 'failed', 'message': 'Worker interrupted during the scheduled race results sync.',
+                'failed_count': 1,
+            })
+            queued = groups.filter_by(status='queued').order_by(ExternalCallTaskGroup.id).all()
+            db.session.commit()
+            last_group_id = None
+            for group in queued:
+                last_group_id = group.id
+                try:
+                    dates = json.loads(group.details_json)
+                    run_external_sync_task.run(
+                        log_id=group.id, sync_type=group.sync_type, season_year=group.season_year,
+                        gender=group.gender, start_date=dates['start_date'], end_date=dates['end_date'],
+                    )
+                except Exception:
+                    db.session.rollback()
+                    logger.exception('Scheduled race results group %s failed', last_group_id)
+            return last_group_id
+        finally:
+            db.session.rollback()
+            connection.execute(text('SELECT pg_advisory_unlock(:key)'), {'key': FC_RESULTS_SCHEDULE_LOCK})
+            connection.commit()
 
 
 def __getattr__(name):

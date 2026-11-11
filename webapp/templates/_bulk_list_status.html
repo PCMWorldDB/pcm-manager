@@ -1,0 +1,2 @@
+{% set status_class = {'Approved': 'bg-success', 'Approval pending': 'bg-warning text-dark', 'Rejected': 'bg-danger'}.get(approval_status, 'bg-secondary') %}
+<span class="badge {{ status_class }}" title="{{ approval_status }}">{{ approval_status }}</span>

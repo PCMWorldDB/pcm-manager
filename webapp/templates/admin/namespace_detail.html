@@ -6,6 +6,7 @@
 <div class="container mt-4">
     <ul class="nav nav-tabs mb-3" role="tablist">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#namespace-details" type="button" role="tab">Details</button></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('web.admin_namespace_fields', namespace_id=namespace.id) }}">Object Fields</a></li>
         {% if current_user.is_superadmin or current_user.has_permission('namespaces', 'update') %}
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#cdb-import" type="button" role="tab">CDB Import</button></li>
         {% endif %}

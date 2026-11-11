@@ -41,9 +41,9 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
         engine = create_engine(db.engine.url, connect_args={'options': f'-csearch_path={schema}'})
         NamespaceBase.metadata.create_all(engine)
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO stat_lists (id,list_name,season_year,gender) VALUES (1,'Test list',2026,'Men'),(2,'Other list',2026,'Men')"))
+            conn.execute(text("INSERT INTO rider_list (id,list_name,season_year,gender) VALUES (1,'Test list',2026,'Men'),(2,'Other list',2026,'Men')"))
             conn.execute(text("INSERT INTO rider (id,first_cycling_id,stat_mo) VALUES (1,2,70),(2,1,70)"))
-            conn.execute(text('INSERT INTO stat_list_items (stat_list_id,rider_id) VALUES (1,1)'))
+            conn.execute(text('INSERT INTO rider_list_item (rider_list_id,rider_id) VALUES (1,1)'))
         user = User(username=uuid4().hex, is_active=True)
         user.roles.append(Role.query.filter_by(name=role).one())
         db.session.add(user)
@@ -69,14 +69,14 @@ def test_list_save_submit_resubmit_and_approve(app, client, monkeypatch, role):
             assert client.post(list_two + 'add-rider', data=data).status_code == 302
             with engine.connect() as conn:
                 assert conn.execute(text(
-                    'SELECT rider_id FROM stat_list_items WHERE stat_list_id=2 ORDER BY rider_id'
+                    'SELECT rider_id FROM rider_list_item WHERE rider_list_id=2 ORDER BY rider_id'
                 )).scalars().all() == expected
         for data, expected in (({'rider_id': 1, 'is_checked': 'false'}, [2]),
                                ({'first_cycling_id': 1, 'is_checked': 'false'}, [])):
             assert client.post(list_two + 'toggle-rider', data=data).status_code == 302
             with engine.connect() as conn:
                 assert conn.execute(text(
-                    'SELECT rider_id FROM stat_list_items WHERE stat_list_id=2 ORDER BY rider_id'
+                    'SELECT rider_id FROM rider_list_item WHERE rider_list_id=2 ORDER BY rider_id'
                 )).scalars().all() == expected
         assert client.post(base + 'submit-for-approval').status_code == 302
         assert not sent

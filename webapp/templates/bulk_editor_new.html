@@ -2,10 +2,51 @@
 {% block title %}New List - Bulk Editor - WDB{% endblock %}
 {% block content %}
 {% set bulk_tab = 'editor' %}{% include '_bulk_editor_tabs.html' %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>New List</h2>
-    <a class="btn btn-outline-secondary" href="{{ url_for('web.bulk_editor') }}">Back To Bulk Editor</a>
-</div>
-<p class="text-muted">Add the first rider to save a draft list automatically. You can name it later.</p>
+<section class="panel-card card mb-4" aria-labelledby="new-list-title">
+    <div class="card-body">
+        <h3 class="h5 mb-3" id="new-list-title">New List</h3>
+        <form id="new-list-form" class="row g-3" method="post" action="{{ url_for('web.stats_editor_create_list') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="list_search_rider" value="{{ list_search_rider }}">
+            <input type="hidden" name="list_search_team" value="{{ list_search_team }}">
+            <div class="col-12">
+                <label for="list-name" class="form-label">List name</label>
+                <input id="list-name" name="list_name" class="form-control" value="{{ draft_list_name }}" maxlength="120" required>
+            </div>
+            <div class="col-12">
+                <label for="list-type" class="form-label">List type</label>
+                <select id="list-type" name="list_type" class="form-select">
+                    {% if can_create_stat_list %}<option value="stat" {% if list_type == 'stat' %}selected{% endif %}>Stat List</option>{% endif %}
+                    {% if can_create_attribute_list %}
+                    <option value="attribute" {% if list_type == 'attribute' %}selected{% endif %}>Attribute List</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary" type="submit">Create List</button>
+            </div>
+        </form>
+        <p class="form-text mb-0">You can also add a rider below to save the list as a draft.</p>
+    </div>
+</section>
+{% set is_attribute_list = list_type == 'attribute' %}
 {% include '_stat_list_rider_search.html' %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const listForm = document.getElementById('new-list-form');
+    const riderSearch = document.getElementById('rider-search-form');
+
+    riderSearch.addEventListener('formdata', (event) => {
+        event.formData.set('list_name', listForm.elements.list_name.value);
+        event.formData.set('list_type', listForm.elements.list_type.value);
+    });
+    document.getElementById('clear-search-btn').addEventListener('click', (event) => {
+        const clearUrl = new URL(event.currentTarget.href);
+        clearUrl.searchParams.set('list_name', listForm.elements.list_name.value);
+        clearUrl.searchParams.set('list_type', listForm.elements.list_type.value);
+        event.currentTarget.href = clearUrl;
+    });
+</script>
 {% endblock %}

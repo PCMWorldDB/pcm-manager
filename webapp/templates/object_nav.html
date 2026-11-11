@@ -1,17 +1,22 @@
 {% set endpoint = request.endpoint or '' %}
-{% set is_rider = endpoint in ['web.riders', 'web.riders_review', 'web.riders_change_log', 'web.rider_detail', 'web.bulk_editor', 'web.bulk_editor_new', 'web.stat_edit_log'] or endpoint.startswith('web.stats_editor_list') %}
+{% set is_bulk_editor = endpoint in ['web.bulk_editor', 'web.bulk_editor_new'] or endpoint.startswith('web.stats_editor_list') %}
+{% set is_bulk_tasks = endpoint == 'web.rider_bulk_tasks' %}
+{% set is_rider = is_bulk_editor or is_bulk_tasks or endpoint in ['web.riders', 'web.riders_review', 'web.riders_change_log', 'web.rider_detail', 'web.stat_edit_log'] %}
 {% set is_team = endpoint in ['web.teams', 'web.teams_review', 'web.teams_change_log', 'web.team_detail'] %}
-{% set is_race = endpoint in ['web.races', 'web.races_review', 'web.races_change_log'] or endpoint.startswith('web.stats_editor_race') %}
+{% set is_race = endpoint in ['web.races', 'web.races_review', 'web.races_change_log', 'web.race_detail'] %}
 {% if is_team or is_rider or is_race %}
 <nav class="nav nav-tabs mb-3" aria-label="{{ 'Teams' if is_team else 'Riders' if is_rider else 'Races' }} sections">
     {% set section = 'teams' if is_team else 'riders' if is_rider else 'races' %}
     {% if current_user.is_superadmin or current_user.has_permission('teams' if is_team or is_rider else 'stats', 'read') %}
-    <a class="nav-link {{ 'active' if not endpoint.endswith('_review') and not endpoint.endswith('_change_log') and endpoint not in ['web.bulk_editor', 'web.bulk_editor_new', 'web.stat_edit_log'] and not endpoint.startswith('web.stats_editor_list') else '' }}" href="{{ url_for('web.' ~ section) }}">{{ section|title }}</a>
+    <a class="nav-link {{ 'active' if not endpoint.endswith('_review') and not endpoint.endswith('_change_log') and not is_bulk_editor and not is_bulk_tasks and endpoint != 'web.stat_edit_log' else '' }}" href="{{ url_for('web.' ~ section) }}">{{ section|title }}</a>
     <a class="nav-link {{ 'active' if endpoint.endswith('_review') else '' }}" href="{{ url_for('web.' ~ section ~ '_review') }}">Review</a>
     <a class="nav-link {{ 'active' if endpoint.endswith('_change_log') else '' }}" href="{{ url_for('web.' ~ section ~ '_change_log') }}">Change Log</a>
     {% endif %}
     {% if is_rider and (current_user.is_superadmin or current_user.has_permission('stats', 'read')) %}
-    <a class="nav-link {{ 'active' if endpoint in ['web.bulk_editor', 'web.bulk_editor_new'] or endpoint.startswith('web.stats_editor_list') else '' }}" href="{{ url_for('web.bulk_editor') }}">Bulk Editor</a>
+    <a class="nav-link {{ 'active' if is_bulk_editor else '' }}" href="{{ url_for('web.bulk_editor') }}">Bulk Editor</a>
+    {% endif %}
+    {% if is_rider and current_user.has_permission('teams', 'read') and (current_user.has_permission('integrations-external-calls', 'read') or current_user.has_permission('integrations-external-calls', 'download') or current_user.has_permission('integrations-firstcycling', 'download')) %}
+    <a class="nav-link{% if is_bulk_tasks %} active{% endif %}" href="{{ url_for('web.rider_bulk_tasks') }}"{% if is_bulk_tasks %} aria-current="page"{% endif %}>Bulk Tasks</a>
     {% endif %}
 </nav>
 {% endif %}

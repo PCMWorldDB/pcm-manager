@@ -38,6 +38,7 @@ assert worker.run_external_call.name == 'webapp.tasks.run_external_call'
 assert worker.run_external_group.name == 'webapp.tasks.run_external_group'
 assert worker.poll_external_calls.name == 'webapp.tasks.poll_external_calls'
 assert celery.conf.beat_schedule['poll-external-calls']['task'] == worker.poll_external_calls.name
+assert celery.conf.beat_schedule['poll-external-sync-schedules']['task'] == worker.poll_external_sync_schedules.name
 
 assert celery.conf.worker_concurrency == 1
 assert celery.conf.worker_prefetch_multiplier == 1

@@ -44,8 +44,8 @@
                 <h5 class="mb-0" id="integrations-heading">Integrations</h5>
             </div>
             <div class="list-group list-group-flush">
-                {{ settings_item('FirstCycling', 'Run synchronization tasks and review task status and history.', 'web.admin_integrations', provider_access.get('firstcycling'), 'firstcycling') }}
-                {{ settings_item('Discord', 'Configure namespace workflow channels and approver roles, and review integration activity.', 'web.admin_integrations', provider_access.get('discord'), 'discord') }}
+                {{ settings_item('External Data Integrations', 'Review external call task groups and start manual syncs.', 'web.admin_integrations_index', can_access_external_integrations) }}
+                {{ settings_item('Discord', 'Configure namespace workflow channels and approver roles, and review integration activity.', 'web.admin_integrations', can_access_discord_integrations, 'discord') }}
             </div>
         </section>
     </div>

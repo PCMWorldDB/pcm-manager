@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy_utils import database_exists, create_database
 from webapp.models.ns.schema import NamespaceBase
 from webapp.integrations.cdb import cdb_import
+from webapp.integrations.cdb.field_configuration import seed_fields
 from webapp.config import get_setting
 from datetime import datetime
 
@@ -54,7 +55,7 @@ class NamespaceProvisioner:
         admin_engine.dispose()
         return full_db_name
     
-    def create_namespace_schema(self, connection_string):
+    def create_namespace_schema(self, connection_string, pcm_version='PCM2025'):
         """Create tables in namespace database
         
         Args:
@@ -62,8 +63,12 @@ class NamespaceProvisioner:
         """
         engine = create_engine(connection_string)
         
-        # Create all tables
-        NamespaceBase.metadata.create_all(engine)
+        try:
+            with engine.begin() as conn:
+                NamespaceBase.metadata.create_all(conn)
+                seed_fields(conn, pcm_version)
+        finally:
+            engine.dispose()
     
     
     def build_connection_string(self, database_name, base_url=None):
@@ -89,7 +94,7 @@ class NamespaceProvisioner:
         
         raise ValueError(f"Invalid database URL format: {base_url}")
     
-    def provision_namespace(self, database_name):
+    def provision_namespace(self, database_name, pcm_version='PCM2025'):
         """Full provisioning: create database and schema
         
         Args:
@@ -105,7 +110,7 @@ class NamespaceProvisioner:
         connection_string = self.build_connection_string(full_db_name)
         
         # Create schema
-        self.create_namespace_schema(connection_string)
+        self.create_namespace_schema(connection_string, pcm_version)
         
         return {
             'database_name': full_db_name,

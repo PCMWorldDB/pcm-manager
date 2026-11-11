@@ -12,7 +12,7 @@ from flask import current_app, has_app_context
 
 from webapp.config import load_config
 from webapp.extensions import db
-from webapp.models.main.base import ExternalSyncAPICallLog
+from webapp.models.main.base import ExternalCallTask
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
     FirstCyclingRaceResult,
@@ -228,7 +228,7 @@ class FirstCyclingClient:
                 'error_message': error_message[:4000] if error_message else None,
             }
             with db.engines['main'].begin() as conn:
-                conn.execute(ExternalSyncAPICallLog.__table__.insert().values(**values))
+                conn.execute(ExternalCallTask.__table__.insert().values(**values))
         except Exception:
             logger.exception('Failed to record FirstCycling API call log for endpoint %s', endpoint_path)
 

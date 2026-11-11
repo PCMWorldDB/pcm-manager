@@ -23,12 +23,12 @@ from zoneinfo import ZoneInfo
 from flask import render_template, redirect, url_for, flash, request, abort, current_app, session, make_response, send_file, g, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import create_engine, text, Integer, func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException, NotFound
 
 from webapp.web import web_bp
-from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, activity_sql
+from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, RIDER_VIEWS, activity_sql
 from webapp.web.forms import (
     AdminPasswordResetForm,
     LoginForm,
@@ -38,7 +38,8 @@ from webapp.web.forms import (
     PasswordSetupForm,
     UserCreateForm,
 )
-from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, ExternalSyncLog, RaceResultMap
+from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, RaceResultMap
+from webapp.models import Action, ExternalCallTask, ExternalCallTaskGroup, RolePermission, ScheduledJob
 from webapp.integrations.cdb import apply_updates_to_sqlite as _apply_release_updates_to_sqlite
 from webapp.integrations.cdb.converter import convert_sqlite_to_cdb as _convert_release_sqlite_to_cdb
 from webapp.integrations.discord import (
@@ -51,16 +52,23 @@ from webapp.integrations.discord import (
 )
 from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
-from webapp.models.main.firstcycling import FirstCyclingRaceStage
+from webapp.models.main.firstcycling import FirstCyclingRaceResult, FirstCyclingRaceStage
 from webapp.integrations.cdb import get_field_mapping
 from webapp.integrations.cdb.editability import get_editable_fields
-from webapp.integrations.cdb import attribute_changes
-from webapp.integrations.cdb.rider_state import refresh_pending_flags
+from webapp.integrations.cdb import attribute_changes, field_configuration
+from webapp.models.ns.field_configuration import FieldConfigurationAudit
+from webapp.integrations.cdb.rider_state import pcs_dob_identity_status, refresh_pending_flags
+from webapp.integrations.rider_checks import (
+    ACTIVITY_CHECK, IDENTITY_CHECK, FC_RIDER_SYNC, PCS_RIDER_SYNC, PROFILE_ENDPOINT,
+    RIDER_CHECK_JOBS, rider_database, scheduled_rider, scheduled_rider_choices,
+)
+from webapp.integrations.pcs.slug import request_rider_slug, valid_rider_slug
 from webapp.extensions import db
 from webapp.models.main.user import TOKEN_INVITE, TOKEN_PASSWORD_RESET
 from webapp.security import validate_password_policy
-from webapp.worker import run_external_sync_task
+from webapp.worker import create_manual_external_group, run_external_sync_task, run_rider_check_now
 from webapp.worker import run_activity_monitor_run_task
+from webapp.worker import enqueue_group, replace_draft_requests, submit_external_group, cancel_external_group
 from webapp.integrations.activity_monitor_queue import (
     enqueue_activity_monitor_run,
     request_activity_monitor_run_stop,
@@ -427,16 +435,62 @@ STAT_MAX_VALUE = 85
 STAT_COLUMN_MAP = {stat_name: f'stat_{stat_name}' for stat_name in STAT_DELTA_FIELDS}
 
 
-def _require_editable_stat_changes(changes):
+def _stat_field_settings(conn, *, lock=False):
+    return field_configuration.stored_fields(conn, 'rider', lock=lock)
+
+
+def _editable_stat_fields(settings):
     editable = get_editable_fields('rider')
-    if any(isinstance(item, dict) and item.get('stat_name') in STAT_COLUMN_MAP
-           and STAT_COLUMN_MAP[item['stat_name']] not in editable for item in changes):
-        abort(403)
+    return {column for column in STAT_COLUMN_MAP.values()
+            if settings.get(('rider', column), {}).get('is_editable', column in editable)}
+
+
+def _require_editable_stat_changes(settings, changes):
+    editable = _editable_stat_fields(settings)
+    for item in changes:
+        if not isinstance(item, dict):
+            continue
+        stat = item.get('stat_name')
+        if isinstance(stat, str) and stat.strip().lower() in STAT_COLUMN_MAP:
+            if STAT_COLUMN_MAP[stat.strip().lower()] not in editable:
+                abort(403)
+
+
+def _stat_applies_immediately(settings, stat):
+    return not settings.get(('rider', STAT_COLUMN_MAP[stat]), {}).get('is_require_approval', True)
+
+
+def _require_unapplied_stat(conn, scope, params, rider_id, stat):
+    # Immediately applied edits remain available to releases.
+    conn.execute(text('SELECT id FROM rider WHERE id = :id FOR UPDATE'), {'id': rider_id}).all()
+    if conn.execute(text(f'''
+        SELECT 1 FROM stat_changes WHERE {scope} AND rider_id = :field_rider_id
+        AND stat_name = :field_stat AND is_approved = TRUE AND release_id IS NULL
+        AND (to_jsonb(stat_changes)->>'is_applied_immediately') = 'true' LIMIT 1
+    '''), {**params, 'field_rider_id': rider_id, 'field_stat': stat}).first():
+        abort(409, description='Applied stat edits are read-only in this scope.')
+
+
+def _apply_immediate_stats(conn, change_ids):
+    if not change_ids:
+        return
+    params = {'ids': change_ids}
+    conn.execute(text('''
+        SELECT id FROM rider WHERE id IN (SELECT rider_id FROM stat_changes WHERE id = ANY(:ids))
+        ORDER BY id FOR UPDATE
+    '''), params).all()
+    if _load_scope_stat_change_conflicts(conn, 'stat_changes.id = ANY(:ids)', params):
+        abort(409, description='Resolve stat conflicts before saving these changes.')
+    _apply_scope_stat_changes_to_cdb(conn, 'id = ANY(:ids)', params)
+    conn.execute(text('''
+        UPDATE stat_changes SET is_approved = TRUE, is_applied_immediately = TRUE WHERE id = ANY(:ids)
+    '''), params)
 
 
 @web_bp.app_context_processor
 def inject_cdb_editability():
     return {'editable_rider_fields': get_editable_fields('rider')}
+
 
 EXTERNAL_SYNC_TYPE_LABELS = {
     'all': 'All Syncs',
@@ -444,13 +498,20 @@ EXTERNAL_SYNC_TYPE_LABELS = {
     'fc_teams': 'Teams',
     'fc_riders': 'Riders',
     'fc_race_results': 'Race Results',
+    PCS_RIDER_SYNC: 'PCS Rider',
+    FC_RIDER_SYNC: 'FC Rider',
+    **RIDER_CHECK_JOBS,
 }
 
 EXTERNAL_SYNC_RUN_TYPES = ('fc_race_calendar', 'fc_teams', 'fc_riders', 'fc_race_results')
-INTEGRATION_PROVIDER_LABELS = {
-    'firstcycling': 'First Cycling',
-    'discord': 'Discord',
+RIDER_BULK_TASK_PROVIDERS = {
+    FC_RIDER_SYNC: ('firstcycling',),
+    PCS_RIDER_SYNC: ('pcs',),
+    IDENTITY_CHECK: ('pcs',),
+    ACTIVITY_CHECK: ('pcs', 'firstcycling'),
 }
+MAX_BULK_TASK_RIDERS = 250
+SCHEDULED_JOB_TYPES = {'race_results': 'Race Results', **RIDER_CHECK_JOBS}
 
 
 def _external_sync_type_display(sync_type):
@@ -470,12 +531,13 @@ def _record_external_sync_log(
     failed_count=None,
     message=None,
     details=None,
+    scheduled_job_id=None,
 ):
     details_json = None
     if details is not None:
         details_json = json.dumps(details)
 
-    row = ExternalSyncLog(
+    row = ExternalCallTaskGroup(
         provider=provider,
         sync_type=sync_type,
         season_year=season_year,
@@ -485,6 +547,7 @@ def _record_external_sync_log(
         synced_count=synced_count,
         failed_count=failed_count,
         executed_by_id=executed_by_id,
+        scheduled_job_id=scheduled_job_id,
         message=message,
         details_json=details_json,
     )
@@ -508,18 +571,14 @@ def _build_namespace_slug(name, gender):
     
 def _resolve_external_sync_season(seasons, year_value, gender_value):
     """Resolve selected season from params, falling back to configured default."""
-    if not seasons:
-        return None
+    return _find_external_sync_season(seasons, year_value, gender_value) or _resolve_default_season(seasons)
 
+
+def _find_external_sync_season(seasons, year_value, gender_value):
     selected_year = _safe_int(year_value)
     selected_gender = (gender_value or '').strip()
-
-    if selected_year is not None and selected_gender:
-        for season in seasons:
-            if season['year'] == selected_year and season['gender'] == selected_gender:
-                return season
-
-    return _resolve_default_season(seasons)
+    return next((season for season in seasons
+                 if season['year'] == selected_year and season['gender'] == selected_gender), None)
 
 
 def _user_resources():
@@ -589,7 +648,7 @@ def _can_access_panel(panel_name):
 
 
 def _can_approve_stats():
-    return current_user.is_superadmin or current_user.has_permission('stats', 'approve')
+    return current_user.has_permissions(('stats', 'approve'), ('rider:stat', 'approve'))
 
 
 def _can_create_stats():
@@ -597,7 +656,7 @@ def _can_create_stats():
 
 
 def _can_update_stats():
-    return current_user.is_superadmin or current_user.has_permission('stats', 'update')
+    return current_user.has_permissions(('stats', 'update'), ('rider:stat', 'update'))
 
 
 def _can_download_stats():
@@ -630,6 +689,19 @@ def _can_run_firstcycling_integrations():
     )
 
 
+def _can_read_external_call_groups():
+    return current_user.has_permission('integrations-external-calls', 'read')
+
+
+def _can_check_rider_identity():
+    return (_can_access_panel('team_manager')
+            and current_user.has_permission('integrations-external-calls', 'download'))
+
+
+def _valid_pcs_rider_slug(slug):
+    return valid_rider_slug(slug)
+
+
 def _can_update_discord_integrations():
     return (
         current_user.is_superadmin
@@ -642,21 +714,6 @@ def _can_access_discord_integrations():
         current_user.is_superadmin
         or current_user.has_permission('integrations-discord', 'read')
     )
-
-
-def _can_access_integrations_provider(provider):
-    if provider == 'firstcycling':
-        return _can_access_firstcycling_integrations()
-    if provider == 'discord':
-        return _can_access_discord_integrations()
-    return False
-
-
-def _integration_provider_access_map():
-    return {
-        'firstcycling': _can_access_firstcycling_integrations(),
-        'discord': _can_access_discord_integrations(),
-    }
 
 
 def _can_create_users():
@@ -1263,11 +1320,20 @@ def _namespace_roster_team_from_row(row):
 def _namespace_roster_rider_from_row(row):
     rider_id = row.get('cyclist_id')
     birth_date = row.get('birth_date')
+    pcs_birth_date = row.get('pcs_birth_date')
+    pcs_status = row.get('pcs_identity_status') or 'unknown'
+    if pcs_status in ('verified', 'review'):
+        pcs_status = pcs_dob_identity_status(birth_date, pcs_birth_date)
 
     return SimpleNamespace(
         cyclist_id=row.get('cyclist_id'),
         rider_id=rider_id,
         first_cycling_id=row.get('first_cycling_id'),
+        pcs_identity_status=pcs_status,
+        pcs_birth_date=pcs_birth_date,
+        pcs_identity_verified_override=row.get('pcs_identity_verified_override', False),
+        pcs_slug=row.get('pcs_slug'),
+        is_deleted=row.get('is_deleted', False),
         name=_cdb_rider_display_name(row),
         first_name=row.get('first_name'),
         last_name=row.get('last_name'),
@@ -1343,6 +1409,42 @@ def _enrich_namespace_roster_rider_with_firstcycling(rider):
     if rider.size_cm is None:
         rider.size_cm = firstcycling_rider.height
     return rider
+
+
+def _load_firstcycling_rider_results(first_cycling_id):
+    if not first_cycling_id:
+        return []
+    result_date = func.coalesce(
+        FirstCyclingRaceStage.stage_date, FirstCyclingRace.end_date, FirstCyclingRace.start_date
+    )
+    rows = (
+        FirstCyclingRaceResult.query
+        .join(FirstCyclingRaceResult.race)
+        .outerjoin(FirstCyclingRaceResult.stage)
+        .add_columns(FirstCyclingRace, FirstCyclingRaceStage, result_date)
+        .filter(FirstCyclingRaceResult.rider_id == first_cycling_id)
+        .order_by(FirstCyclingRace.season_year.desc(), result_date.desc().nulls_last(),
+                  FirstCyclingRaceStage.stage_number.desc().nulls_last(), FirstCyclingRaceResult.id.desc())
+        .all()
+    )
+    races = {}
+    for result, race, stage, result_date in rows:
+        entry = races.setdefault(race.id, {
+            'race': race,
+            'result': result,
+            'date': race.end_date or race.start_date or result_date,
+            'stages': [],
+        })
+        if stage is None:
+            entry['result'] = result
+        else:
+            entry['stages'].append({'stage': stage, 'result': result, 'date': result_date})
+    for entry in races.values():
+        entry['stages'].sort(key=lambda row: (
+            row['stage'].stage_number is None, row['stage'].stage_number or 0,
+            row['stage'].stage_date or date.min, row['stage'].id,
+        ))
+    return list(races.values())
 
 
 def _load_namespace_roster_teams(namespace, selected_division='', selected_country='', team_query=''):
@@ -1482,8 +1584,9 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
     team_query = (filters.get('team') or '').strip()
     selected_country = (filters.get('country') or '').strip()
     selected_division = (filters.get('division') or '').strip()
-    activity_view = filters.get('view') == 'activity'
-    if not activity_view and filters.get('stat_key') in STAT_COLUMN_MAP:
+    view = filters.get('view', 'stats')
+    activity_view = view == 'activity'
+    if view == 'stats' and filters.get('stat_key') in STAT_COLUMN_MAP:
         column = STAT_COLUMN_MAP[filters['stat_key']]
         for bound, operator in (('stat_min', '>='), ('stat_max', '<=')):
             if filters.get(bound) not in (None, ''):
@@ -1587,6 +1690,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         c.team_id,
                         c.size_cm,
                         c.weight_kg,
+                        COALESCE((to_jsonb(c)->>'is_deleted')::boolean, FALSE) AS is_deleted,
                         COALESCE(t.team_name, t.short_name) AS team_name,
                         COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
@@ -1719,12 +1823,18 @@ def _load_namespace_roster_rider(namespace, rider_id):
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
             row = conn.execute(
                 text(
                     f"""
                     SELECT
                         c.id AS cyclist_id,
                         c.first_cycling_id,
+                        to_jsonb(c)->>'pcs_identity_status' AS pcs_identity_status,
+                        (to_jsonb(c)->>'pcs_birth_date')::date AS pcs_birth_date,
+                        c.pcs_identity_verified_override,
+                        c.pcs_slug,
+                        c.is_deleted,
                         c.first_name,
                         c.last_name,
                         c.first_last_name,
@@ -1779,10 +1889,10 @@ def _race_result_source_info(mapped_result, race_map, stage_map):
             if stage is not None else f'Stage #{stage_id}'
         )
         label = f'{race_name} - {stage_label}'
-        url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id) if race_id is not None else None
+        url = url_for('web.race_detail', race_id=race_id, stage_id=stage_id) if race_id is not None else None
     else:
         label = race_name
-        url = url_for('web.stats_editor_race_detail', race_id=race_id) if race_id is not None else None
+        url = url_for('web.race_detail', race_id=race_id) if race_id is not None else None
 
     return {
         'type': 'Race Result',
@@ -1800,8 +1910,7 @@ def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offse
     engine = create_engine(connection_string)
     try:
         with engine.connect() as conn:
-            if rider_id is None:
-                _ensure_namespace_database_connection(conn, namespace)
+            _ensure_namespace_database_connection(conn, namespace)
             rows = conn.execute(
                 text(
                     """
@@ -1823,7 +1932,7 @@ def _load_namespace_rider_stat_edits(namespace, rider_id=None, limit=None, offse
                         rel.version AS release_version,
                         rel.release_name
                     FROM stat_changes sc
-                    LEFT JOIN stat_lists sl ON sl.id = sc.stat_list_id
+                    LEFT JOIN rider_list sl ON sl.id = sc.stat_list_id
                     LEFT JOIN rider c ON c.id = sc.rider_id
                     LEFT JOIN releases rel ON rel.id = sc.release_id
                     WHERE (CAST(:rider_id AS INTEGER) IS NULL OR sc.rider_id = :rider_id)
@@ -2022,7 +2131,9 @@ def _load_namespace_race_result_deltas(
                         stat_name,
                         original_value,
                         final_value,
-                        delta_value
+                        delta_value,
+                        COALESCE((to_jsonb(stat_changes)->>'is_applied_immediately')::boolean, FALSE)
+                            AS is_applied_immediately
                     FROM stat_changes
                     WHERE race_result_id = ANY(:race_result_ids)
                       AND stat_list_id IS NULL
@@ -2054,6 +2165,7 @@ def _load_namespace_race_result_deltas(
             'original_value': row['original_value'],
             'final_value': row['final_value'],
             'delta_value': row['delta_value'],
+            'is_applied_immediately': row['is_applied_immediately'],
         }
 
     return delta_map
@@ -2355,7 +2467,7 @@ def _load_namespace_approved_release_items(
             if list_ids:
                 list_query = """
                     SELECT id, list_name, season_year, gender, created_at
-                    FROM stat_lists
+                    FROM rider_list
                     WHERE id = ANY(:list_ids)
                 """
                 list_rows = conn.execute(
@@ -2468,7 +2580,7 @@ def _load_namespace_approved_release_items(
             item_date = stage_obj.stage_date if stage_obj is not None else (race_obj.start_date if race_obj is not None else '-')
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
-            detail_url = url_for('web.stats_editor_race_detail', race_id=race_id, stage_id=stage_id)
+            detail_url = url_for('web.race_detail', race_id=race_id, stage_id=stage_id)
         else:
             race_obj = race_map.get(race_id)
             if race_obj is None and not log_mode:
@@ -2478,7 +2590,7 @@ def _load_namespace_approved_release_items(
             item_date = race_obj.start_date if race_obj is not None else '-'
             category = race_obj.category if race_obj is not None else '-'
             classification_label = race_obj.classification_label if race_obj is not None else '-'
-            detail_url = url_for('web.stats_editor_race_detail', race_id=race_id)
+            detail_url = url_for('web.race_detail', race_id=race_id)
 
         if not list_id and not individual_rider_id and mapped_result is None and log_mode:
             display_name = f"Race Result #{row['race_result_id']}"
@@ -3923,7 +4035,7 @@ def _apply_scope_stat_changes_to_cdb(conn, where_clause, params):
     ).mappings().all()
 
     applied_count = 0
-    editable = get_editable_fields('rider')
+    editable = _editable_stat_fields(_stat_field_settings(conn, lock=True))
     for row in pending_rows:
         rider_id = _safe_int(row.get('rider_id'))
         final_value = _safe_int(row.get('final_value'))
@@ -3973,7 +4085,7 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                         SELECT column_name
                         FROM information_schema.columns
                         WHERE table_schema = 'public'
-                          AND table_name = 'stat_lists'
+                          AND table_name = 'rider_list'
                         """
                     )
                 ).all()
@@ -3983,6 +4095,8 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                 return []
 
             selected_columns = ['id', 'list_name']
+            if 'list_type' in stat_list_columns:
+                selected_columns.append('list_type')
             if 'season_year' in stat_list_columns:
                 selected_columns.append('season_year')
             if 'gender' in stat_list_columns:
@@ -3994,7 +4108,7 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
 
             query = """
                 SELECT {selected_columns}
-                FROM stat_lists
+                FROM rider_list
                 WHERE 1=1
             """.format(selected_columns=', '.join(selected_columns))
 
@@ -4027,16 +4141,16 @@ def _load_namespace_stat_lists(namespace, season_year=None, gender=None):
                 rider_counts = conn.execute(
                     text(
                         """
-                        SELECT stat_list_id, COUNT(*) AS riders_count
-                        FROM stat_list_items
-                        WHERE stat_list_id = ANY(:list_ids)
-                        GROUP BY stat_list_id
+                        SELECT rider_list_id, COUNT(*) AS riders_count
+                        FROM rider_list_item
+                        WHERE rider_list_id = ANY(:list_ids)
+                        GROUP BY rider_list_id
                         """
                     ),
                     {'list_ids': list_ids},
                 ).mappings().all()
 
-                rider_count_map = {int(r['stat_list_id']): int(r['riders_count'] or 0) for r in rider_counts}
+                rider_count_map = {int(r['rider_list_id']): int(r['riders_count'] or 0) for r in rider_counts}
 
                 # Stat changes aggregates per list
                 change_aggs = conn.execute(
@@ -4119,7 +4233,9 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, rider_ids):
                         stat_name,
                         original_value,
                         final_value,
-                        delta_value
+                        delta_value,
+                        COALESCE((to_jsonb(stat_changes)->>'is_applied_immediately')::boolean, FALSE)
+                            AS is_applied_immediately
                     FROM stat_changes
                     WHERE stat_list_id = :list_id
                       AND race_result_id IS NULL
@@ -4149,6 +4265,7 @@ def _load_namespace_list_result_deltas(namespace, stat_list_id, rider_ids):
             'original_value': row['original_value'],
             'final_value': row['final_value'],
             'delta_value': row['delta_value'],
+            'is_applied_immediately': row['is_applied_immediately'],
         }
 
     return delta_map
@@ -4686,7 +4803,7 @@ def _load_dashboard_tasks(namespace):
             if tasks['show_reviews'] and total > status.get('approved_changes', 0):
                 tasks['reviews'].append({
                     'label': race.name or f'Race #{race.race_id}',
-                    'url': url_for('web.stats_editor_race_detail', race_id=race.race_id),
+                    'url': url_for('web.race_detail', race_id=race.race_id),
                     'kind': 'Race result',
                 })
             if (tasks['show_editing'] and race.end_date and race.end_date < today and not total
@@ -7904,16 +8021,36 @@ def object_review(object_type=None):
 
 
 def _can_attribute_action(action):
-    return current_user.is_superadmin or current_user.has_permission('cdb_attributes', action)
+    return current_user.is_superadmin or any(
+        current_user.has_permission(slug, action)
+        for slug in field_configuration.field_slugs() if slug != 'rider:stat'
+    )
 
 
-def _load_attribute_review(namespace, entity_type, include_history=False):
+def _can_rider_list_action(list_type, action):
+    if list_type == 'attribute':
+        return _can_attribute_action('update')
+    return _can_create_stats() if action == 'create' else _can_update_stats()
+
+
+def _load_attribute_review(namespace, entity_type, include_history=False, applied_entity_id=None):
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, namespace)
-            loader = attribute_changes.history_events if include_history else attribute_changes.review_queue
-            changes = [dict(change) for change in loader(conn, entity_type)]
+            if include_history:
+                rows = attribute_changes.history_events(conn, entity_type, applied_entity_id=applied_entity_id)
+            else:
+                rows = attribute_changes.review_queue(conn, entity_type)
+            changes = [dict(change) for change in rows]
+            if not include_history:
+                configuration = field_configuration.stored_fields(conn, entity_type)
+                for change in changes:
+                    name = change['attribute_name']
+                    slug = configuration.get((entity_type, name), {}).get(
+                        'slug', field_configuration.field_slug(entity_type, name),
+                    )
+                    change['can_approve'] = current_user.has_permission(slug, 'approve')
             riders = {}
             if entity_type == 'rider' and changes:
                 rider_ids = list({change['entity_id'] for change in changes})
@@ -7938,8 +8075,8 @@ def _attribute_editor_context(namespace, entity_type, entity_id):
     try:
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, namespace)
-            fields = attribute_changes.editor_fields(conn, entity_type, entity_id)
-        pending = [dict(field['pending']) for field in fields if field['pending']]
+            fields = attribute_changes.editor_fields(conn, entity_type, entity_id, current_user.has_permission)
+        pending = [dict(field['pending'], can_approve=field['can_approve']) for field in fields if field['pending']]
         actor_ids = {change['created_by_id'] for change in pending if change['created_by_id'] is not None}
         actors = {user.id: user.username for user in User.query.filter(User.id.in_(actor_ids)).all()} if actor_ids else {}
         for change in pending:
@@ -7963,13 +8100,29 @@ def propose_attribute(entity_type, entity_id):
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     if namespace is None:
         abort(404)
+    list_id = request.form.get('list_id', type=int)
+    if 'list_id' in request.form and (list_id is None or list_id < 1 or entity_type != 'rider'):
+        abort(400)
+    if list_id is not None and not _can_access_panel('stat_editor'):
+        abort(403)
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.begin() as conn:
-            _ensure_namespace_database_connection(conn, namespace)
-            attribute_changes.propose(
+            if list_id is not None:
+                _lock_editable_stat_list(conn, namespace, list_id, required_type='attribute')
+                if conn.execute(text('''
+                    SELECT 1 FROM rider_list_item WHERE rider_list_id = :list_id AND rider_id = :rider_id
+                '''), {'list_id': list_id, 'rider_id': entity_id}).first() is None:
+                    abort(404)
+            else:
+                _ensure_namespace_database_connection(conn, namespace)
+            change_id = attribute_changes.propose(
                 conn, entity_type, entity_id, request.form.get('attribute_name', ''),
-                None if request.form.get('clear_value') == '1' else request.form.get('value', ''), current_user.id)
+                None if request.form.get('clear_value') == '1' else request.form.get('value', ''),
+                current_user.id, stat_list_id=list_id, authorize=current_user.has_permission,
+            )
+            applied = conn.execute(text('SELECT applied_at FROM cdb_changes WHERE id = :id'),
+                                   {'id': change_id}).scalar_one() is not None
     except PermissionError:
         abort(403)
     except LookupError:
@@ -7979,9 +8132,11 @@ def propose_attribute(entity_type, entity_id):
     except ValueError as exc:
         flash(str(exc), 'error')
     else:
-        flash('Change submitted for review. The current value has not changed.', 'success')
+        flash('Change applied.' if applied else 'Change submitted for review.', 'success')
     finally:
         engine.dispose()
+    if list_id is not None:
+        return redirect(url_for('web.bulk_editor', namespace_slug=namespace.slug, tab='editor', list_id=list_id))
     return redirect(url_for('web.' + entity_type + '_detail',
                             **{entity_type + '_id': entity_id}, namespace_slug=namespace.slug))
 
@@ -8000,7 +8155,8 @@ def review_attribute(entity_type, change_id, action):
     try:
         with engine.begin() as conn:
             _ensure_namespace_database_connection(conn, namespace)
-            attribute_changes.decide(conn, entity_type, change_id, action, current_user.id)
+            attribute_changes.decide(conn, entity_type, change_id, action, current_user.id,
+                                     authorize=current_user.has_permission)
     except PermissionError:
         abort(403)
     except LookupError:
@@ -8013,6 +8169,9 @@ def review_attribute(entity_type, change_id, action):
         flash('Change approved and applied.' if action == 'approve' else 'Change rejected.', 'success')
     finally:
         engine.dispose()
+    rider_id = request.form.get('return_to_rider_id', type=int)
+    if entity_type == 'rider' and rider_id is not None and rider_id >= 0:
+        return redirect(url_for('web.rider_detail', rider_id=rider_id, namespace_slug=namespace.slug))
     return redirect(url_for('web.' + entity_type + 's_review', namespace_slug=namespace.slug,
                             **({'tab': 'attributes'} if entity_type == 'rider' else {})))
 
@@ -8076,7 +8235,7 @@ def teams():
                 rider_filters = {**_default_riders_state(), 'view': rider_filters['view']}
             elif action == 'set_view':
                 view = request.form.get('view', '')
-                if view not in ('stats', 'activity'):
+                if view not in RIDER_VIEWS:
                     abort(400)
                 if view == 'activity' and not _can_access_panel('activity_monitor'):
                     abort(403)
@@ -8239,12 +8398,19 @@ def teams():
         rider_country_options=rider_country_options,
         rider_division_options=rider_division_options,
         rider_filters=rider_filters,
+        rider_views=RIDER_VIEWS,
         rider_pagination=rider_pagination,
         per_page_options=(50, 100, 150, 250),
         stat_fields=STAT_DELTA_FIELDS,
         rider_stats_map={rider.rider_id: _namespace_roster_stats_from_rider(rider) for rider in riders},
         can_view_activity=_can_access_panel('activity_monitor'),
         activity_filter_options=ACTIVITY_FILTERS,
+        can_create_rider_list=_can_access_panel('stat_editor') and (
+            _can_create_stats() or _can_attribute_action('update')),
+        can_start_stat_list=_can_access_panel('stat_editor') and _can_create_stats(),
+        can_bulk_edit_attributes=_can_attribute_action('update'),
+        rider_task_types=_rider_bulk_task_types(),
+        rider_selection_limit=MAX_BULK_TASK_RIDERS,
     )
 
 
@@ -8281,6 +8447,227 @@ def team_detail(team_id):
     )
 
 
+def _rider_bulk_task_types():
+    can_run_fc = _can_run_firstcycling_integrations()
+    can_run_pcs = _can_check_rider_identity()
+    run_permissions = {
+        FC_RIDER_SYNC: can_run_fc,
+        PCS_RIDER_SYNC: can_run_pcs,
+        IDENTITY_CHECK: can_run_pcs,
+        ACTIVITY_CHECK: can_run_fc and can_run_pcs and _can_access_panel('activity_monitor'),
+    }
+    return {
+        kind: _external_sync_type_display(kind) for kind, allowed in run_permissions.items() if allowed
+    }
+
+
+def _parse_bulk_rider_ids(value):
+    tokens = re.findall(r'[^,\s]+', value)
+    if not 1 <= len(tokens) <= MAX_BULK_TASK_RIDERS or any(
+        not re.fullmatch(r'[0-9]{1,10}', token) or not 0 < int(token) <= 2147483647
+        for token in tokens
+    ):
+        return []
+    return list(dict.fromkeys(map(int, tokens)))
+
+
+@web_bp.route('/riders/bulk-tasks', methods=['GET', 'POST'])
+@login_required
+def rider_bulk_tasks():
+    if not _can_access_panel('rider_manager'):
+        abort(403)
+    can_read = _can_read_external_call_groups()
+    runnable_types = _rider_bulk_task_types()
+    if not can_read and not runnable_types:
+        abort(403)
+
+    namespace = _get_selected_namespace()
+    tab = request.args.get('tab', 'groups' if can_read else 'editor')
+    if tab not in ('groups', 'editor'):
+        abort(404)
+    groups = ExternalCallTaskGroup.query.filter_by(namespace_id=namespace.id) if namespace else None
+    if groups is not None and not can_read:
+        groups = groups.filter_by(executed_by_id=current_user.id)
+    values = request.form if request.method == 'POST' else request.args
+    group_id = values.get('group_id', type=int)
+    if values.get('group_id') and group_id is None:
+        abort(400)
+    group = groups.filter_by(id=group_id).with_for_update().first_or_404() if group_id and groups is not None else None
+    if group_id and group is None:
+        abort(404)
+    if request.method == 'POST':
+        if namespace is None:
+            abort(404)
+        return _save_rider_task_group(namespace, group, runnable_types)
+
+    selected_type = request.args.get('sync_type', '').strip()
+    page = None
+    if groups is not None and tab == 'groups':
+        if selected_type:
+            groups = groups.filter_by(sync_type=selected_type)
+        page = groups.order_by(ExternalCallTaskGroup.timestamp.desc(), ExternalCallTaskGroup.id.desc()).paginate(per_page=50)
+    members = []
+    search_results = []
+    rider_term = request.args.get('rider_search', '').strip()[:120]
+    team_term = request.args.get('team_search', '').strip()[:120]
+    if groups is not None and tab == 'editor':
+        if group:
+            tasks = ExternalCallTask.query.filter_by(task_group_id=group.id).order_by(ExternalCallTask.id).all()
+            rider_ids = {task.related_to_id for task in tasks if task.related_to_table == 'rider'}
+            names = {}
+            if rider_ids:
+                try:
+                    with rider_database(namespace) as conn:
+                        names = {row.id: _cdb_rider_display_name(row._mapping) for row in conn.execute(text(
+                            'SELECT id, first_name, last_name FROM rider WHERE id = ANY(:ids)'
+                        ), {'ids': list(rider_ids)})}
+                except (ValueError, SQLAlchemyError):
+                    flash('Could not load riders from this namespace.', 'warning')
+            members = [dict(id=task.id, rider_id=task.related_to_id,
+                            name=names.get(task.related_to_id, f'Rider #{task.related_to_id}') if task.related_to_table == 'rider' else task.endpoint,
+                            provider=task.provider, status=task.status) for task in tasks]
+            if group.status == 'draft' and group.sync_type in runnable_types:
+                search_results = _search_stat_list_riders(namespace, rider_ids, rider_term, team_term)
+    editor_types = {kind: label for kind, label in runnable_types.items()
+                    if kind in (FC_RIDER_SYNC, PCS_RIDER_SYNC) or (group and kind == group.sync_type)}
+    response = make_response(render_template(
+        'rider_bulk_tasks.html', selected_namespace=namespace, page=page, runnable_types=runnable_types,
+        max_riders=MAX_BULK_TASK_RIDERS, sync_type_display=_external_sync_type_display,
+        tab=tab, group=group, members=members,
+        editor_types=editor_types, selected_type=selected_type, task_types=EXTERNAL_SYNC_TYPE_LABELS,
+        rider_search=rider_term, team_search=team_term, search_results=search_results,
+    ))
+    response.cache_control.no_store = True
+    return response
+
+
+def _rider_task_requests(namespace, rider_ids, sync_type):
+    with rider_database(namespace) as conn:
+        riders = conn.execute(text("""
+            SELECT id, first_name, last_name, first_cycling_id, pcs_slug
+            FROM rider WHERE id = ANY(:ids) AND is_deleted IS FALSE ORDER BY id
+        """), {'ids': rider_ids}).mappings().all()
+    if len(riders) != len(rider_ids):
+        raise ValueError('One or more riders are unavailable in this namespace.')
+    requests = []
+    for rider in riders:
+        for provider in RIDER_BULK_TASK_PROVIDERS[sync_type]:
+            if provider == 'pcs':
+                slug = request_rider_slug(rider['pcs_slug'], rider['first_name'], rider['last_name'])
+                params = {'rider_slug': slug} if slug else None
+                identifier = 'PCS slug or name'
+            else:
+                fc_id = rider['first_cycling_id']
+                params = {'rider_id': fc_id} if fc_id and fc_id > 0 else None
+                identifier = 'FirstCycling ID'
+            if params is None:
+                raise ValueError(f"Rider #{rider['id']} needs a valid {identifier}.")
+            requests.append(dict(provider=provider, endpoint=PROFILE_ENDPOINT, params=params,
+                                 related_to_table='rider', related_to_id=rider['id']))
+    return requests
+
+
+def _save_rider_task_group(namespace, group, runnable_types):
+    action = request.form.get('action', 'create')
+    if action not in ('create', 'save', 'add', 'remove', 'queue', 'cancel'):
+        abort(400)
+    if action != 'create' and group is None:
+        abort(400)
+    if action == 'create' and group is not None:
+        abort(400)
+    sync_type = request.form.get('sync_type', group.sync_type if group else None)
+    if sync_type not in RIDER_BULK_TASK_PROVIDERS:
+        abort(400)
+    if sync_type not in runnable_types or (group and group.sync_type not in runnable_types):
+        abort(403)
+    if group and group.status != 'draft' and action != 'cancel':
+        abort(409, description='Only draft groups can be edited or queued.')
+    return_url = url_for('web.rider_bulk_tasks', tab='editor', group_id=group.id if group else None)
+    try:
+        if action == 'cancel':
+            cancel_external_group(group.id)
+        elif action == 'remove':
+            rider_id = request.form.get('rider_id', type=int)
+            removed = ExternalCallTask.query.filter_by(
+                task_group_id=group.id, related_to_table='rider', related_to_id=rider_id,
+            ).delete()
+            if not removed:
+                abort(404)
+            group.requested_count = ExternalCallTask.query.filter_by(task_group_id=group.id).count()
+        else:
+            tasks = ExternalCallTask.query.filter_by(task_group_id=group.id).all() if group else []
+            rider_ids = list(dict.fromkeys(task.related_to_id for task in tasks if task.related_to_table == 'rider'))
+            if action in ('create', 'add'):
+                raw_ids = request.form.get('rider_ids', '').strip()
+                added = _parse_bulk_rider_ids(raw_ids) if raw_ids else []
+                if raw_ids and not added:
+                    raise ValueError(f'Enter between 1 and {MAX_BULK_TASK_RIDERS} valid rider IDs.')
+                rider_ids = list(dict.fromkeys(rider_ids + added))
+            if len(rider_ids) > MAX_BULK_TASK_RIDERS:
+                raise ValueError(f'A group can contain up to {MAX_BULK_TASK_RIDERS} riders.')
+            if action == 'queue' and not rider_ids:
+                raise ValueError('Add at least one rider before queuing this group.')
+            requests = _rider_task_requests(namespace, rider_ids, sync_type)
+            message = (request.form.get('name', group.message if group else '') or '').strip()
+            if len(message) > 255:
+                raise ValueError('Enter a group name of up to 255 characters.')
+            providers = RIDER_BULK_TASK_PROVIDERS[sync_type]
+            if group is None:
+                group = enqueue_group(requests, namespace_id=namespace.id, executed_by_id=current_user.id,
+                                      draft=True, sync_type=sync_type)
+            else:
+                replace_draft_requests(group, requests)
+            group.message = message or f'{_external_sync_type_display(sync_type)} bulk request'
+            group.sync_type = sync_type
+            group.provider = providers[0] if len(providers) == 1 else None
+            if action == 'queue':
+                group.status = 'queued'
+                ExternalCallTask.query.filter_by(task_group_id=group.id).update(
+                    dict(status='queued', available_at=datetime.utcnow()), synchronize_session='fetch')
+        group_id = group.id
+        db.session.commit()
+    except (ValueError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        message = str(exc) if isinstance(exc, ValueError) else 'Could not save this task group.'
+        flash(message, 'error')
+        return redirect(return_url)
+    if action == 'queue':
+        try:
+            submit_external_group(group_id)
+        except Exception:
+            db.session.rollback()
+            logger.exception('Could not submit rider task group %s', group_id)
+            flash('The group is queued and will be retried by the dispatcher.', 'warning')
+    flash('Task group cancelled.' if action == 'cancel' else 'Task group queued.' if action == 'queue' else 'Draft saved.', 'success')
+    return redirect(url_for('web.rider_bulk_tasks', tab='editor', group_id=group_id))
+
+
+@login_required
+def check_rider_identity(rider_id):
+    if not _can_check_rider_identity():
+        abort(403)
+
+    namespace = _get_selected_namespace()
+    rider = _load_namespace_roster_rider(namespace, rider_id)
+    if rider is None or rider.is_deleted:
+        abort(404)
+
+    return_url = url_for('web.rider_detail', namespace_slug=namespace.slug, rider_id=rider_id)
+    slug = request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name)
+    if not slug:
+        flash('Save a valid PCS slug before checking this rider’s identity.', 'error')
+        return redirect(return_url)
+
+    create_manual_external_group(
+        [dict(provider='pcs', endpoint=PROFILE_ENDPOINT, params={'rider_slug': slug},
+              related_to_table='rider', related_to_id=rider.cyclist_id)],
+        namespace_id=namespace.id, executed_by_id=current_user.id, provider='pcs',
+        sync_type=PCS_RIDER_SYNC, message=f'PCS rider profile for {slug}'[:255],
+    )
+    flash('PCS identity check queued.', 'info')
+    return redirect(return_url)
+
+
 @web_bp.route('/riders/<int:rider_id>')
 @login_required
 def rider_detail(rider_id):
@@ -8305,6 +8692,32 @@ def rider_detail(rider_id):
         'weight_kg': rider.weight_kg,
     }
     rider_stat_edits = _load_namespace_rider_stat_edits(selected_namespace, rider.cyclist_id)
+    rider_external_calls = None
+    if _can_read_external_call_groups():
+        rider_external_calls = ExternalCallTask.query.with_entities(
+            ExternalCallTask.id, ExternalCallTask.task_group_id, ExternalCallTask.created_at,
+            ExternalCallTask.provider, ExternalCallTask.endpoint, ExternalCallTask.request_url,
+            ExternalCallTask.status, ExternalCallTask.outcome, ExternalCallTask.http_status,
+        ).join(ExternalCallTask.task_group).filter(
+            ExternalCallTaskGroup.namespace_id == selected_namespace.id,
+            ExternalCallTask.related_to_table == 'rider',
+            ExternalCallTask.related_to_id == rider.cyclist_id,
+        ).order_by(ExternalCallTask.created_at.desc(), ExternalCallTask.id.desc()).all()
+    rider_history = _load_attribute_review(
+        selected_namespace, 'rider', include_history=True, applied_entity_id=rider.cyclist_id,
+    )
+    attribute_history_at_limit = len(rider_history) == 200
+    # Legacy stat edits record the applied values, without per-edit timestamps or actors.
+    rider_history.extend({
+        'event_type': 'applied',
+        'attribute_name': edit['stat'],
+        'before_value': edit['original_value'],
+        'after_value': edit['final_value'],
+        'source': edit['source']['type'] if edit['source']['type'] == 'Individual' else edit['source']['label'],
+        'source_url': edit['source']['url'] if edit['source']['type'] != 'Individual' else None,
+        'status': 'approved',
+        'release_status': edit['release_status'],
+    } for edit in rider_stat_edits if edit['is_approved'])
 
     back_team_id = request.args.get('team_id', type=int)
     if back_team_id is None and rider.team_id is not None:
@@ -8316,14 +8729,29 @@ def rider_detail(rider_id):
             referrer_path = parsed_referrer.path or ''
     came_from_riders = referrer_path.endswith('/riders')
 
+    attribute_context = _attribute_editor_context(selected_namespace, 'rider', rider_id)
+    pcs_slug_display = (rider.pcs_slug or '').strip()
+    if pcs_slug_display in ('', '0'):
+        pcs_slug_display, _ = _assumed_pcs_profile(rider.first_name, rider.last_name)
+        pcs_slug_field = attribute_context['attribute_field_map'].get('pcs_slug')
+        if pcs_slug_field is not None:
+            pcs_slug_field['value'] = pcs_slug_display
+
     profile_context = dict(
-        **_attribute_editor_context(selected_namespace, 'rider', rider_id),
+        **attribute_context,
         rider=rider,
+        pcs_slug_display=pcs_slug_display,
         team=team,
         rider_stats=rider_stats,
         rider_measurements=rider_measurements,
-        rider_stat_edits=rider_stat_edits,
+        pending_stats=[edit for edit in rider_stat_edits if not edit['is_approved']],
+        rider_results=_load_firstcycling_rider_results(getattr(rider, 'first_cycling_id', None)),
+        rider_external_calls=rider_external_calls,
+        rider_history=rider_history,
+        attribute_history_at_limit=attribute_history_at_limit,
         selected_namespace=selected_namespace,
+        can_check_identity=(_can_check_rider_identity() and not rider.is_deleted
+                            and bool(request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name))),
         stat_fields=STAT_DELTA_FIELDS,
         back_url=url_for('web.riders' if came_from_riders else 'web.teams'),
         back_label='Back to Riders' if came_from_riders else 'Back to Teams',
@@ -8338,9 +8766,11 @@ def rider_detail(rider_id):
         stat_list={'id': 0, 'list_name': rider.name},
         rows=[{'rider_id': rider.cyclist_id, 'rider_link_id': rider.cyclist_id,
                'rider_name': rider.name, 'rider_in_namespace': True,
+               'locked_stats': individual['locked_stats'],
                'stats': individual['stats'], 'original_stats': individual['original_stats']}],
         scope_delta_status=individual['status'],
         stat_conflicts=individual['conflicts'], is_submitted_for_approval=individual['submitted'],
+        editable_rider_fields=individual['editable_rider_fields'],
         can_update_stats=_can_update_stats(), can_approve_stats=_can_approve_stats(),
     )
 
@@ -8372,11 +8802,14 @@ def _load_individual_stat_editor(namespace, rider_id, current_stats):
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, namespace)
             edits = conn.execute(text(f'''
-                SELECT stat_name, original_value, final_value, is_approved
+                SELECT stat_name, original_value, final_value, is_approved,
+                    COALESCE((to_jsonb(stat_changes)->>'is_applied_immediately')::boolean, FALSE)
+                        AS is_applied_immediately
                 FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE} AND release_id IS NULL ORDER BY id
             '''), {'rider_id': rider_id}).mappings().all()
             conflicts = _load_scope_stat_change_conflicts(conn, INDIVIDUAL_STAT_SCOPE, {'rider_id': rider_id})
             fingerprint = _individual_pending_fingerprint(conn, rider_id)
+            editable = _editable_stat_fields(_stat_field_settings(conn))
         original = dict(current_stats)
         final = dict(current_stats)
         for edit in edits:
@@ -8384,6 +8817,8 @@ def _load_individual_stat_editor(namespace, rider_id, current_stats):
             final[edit['stat_name']] = edit['final_value']
         return {
             'original_stats': original, 'stats': final, 'conflicts': conflicts,
+            'editable_rider_fields': editable,
+            'locked_stats': {edit['stat_name'] for edit in edits if edit['is_applied_immediately']},
             'submitted': _individual_submission_matches(namespace, rider_id, fingerprint),
             'status': {'approved_changes': sum(bool(edit['is_approved']) for edit in edits),
                        'unapproved_changes': sum(not edit['is_approved'] for edit in edits)},
@@ -8417,9 +8852,9 @@ def rider_stats_action(rider_id, action):
                 abort(400)
         except (ValueError, TypeError):
             abort(400)
-        _require_editable_stat_changes(changes)
     engine = create_engine(namespace.build_connection_string())
     submission_fingerprint = None
+    immediate_ids = []
     try:
         with engine.begin() as conn:
             # Serialize individual saves and approvals for this rider within this namespace.
@@ -8427,6 +8862,8 @@ def rider_stats_action(rider_id, action):
             conn.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': -rider_id})
             params = {'rider_id': rider_id}
             if action == 'save':
+                settings = _stat_field_settings(conn, lock=True)
+                _require_editable_stat_changes(settings, changes)
                 if not conn.execute(text(f'SELECT 1 FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE} AND release_id IS NULL LIMIT 1'), params).first():
                     conn.execute(text(f'DELETE FROM stat_change_snapshot WHERE {INDIVIDUAL_STAT_SCOPE}'), params)
                 _ensure_scope_stat_snapshots(conn, rider_ids=[rider_id])
@@ -8438,17 +8875,22 @@ def rider_stats_action(rider_id, action):
                     stat = item['stat_name']
                     final = _safe_int(item['final_value'])
                     original = snapshot[STAT_COLUMN_MAP[stat]]
+                    _require_unapplied_stat(conn, INDIVIDUAL_STAT_SCOPE, params, rider_id, stat)
                     conn.execute(text(f'''
                         DELETE FROM stat_changes WHERE {INDIVIDUAL_STAT_SCOPE}
                         AND stat_name = :stat AND release_id IS NULL
                     '''), {**params, 'stat': stat})
                     if final != original or item.get('is_confilict_override'):
-                        conn.execute(text('''
+                        change_id = conn.execute(text('''
                             INSERT INTO stat_changes (rider_id, stat_name, original_value,
                                 final_value, delta_value, is_approved, is_confilict_override)
                             VALUES (:rider_id, :stat, :original, :final, :delta, FALSE, :override)
+                            RETURNING id
                         '''), {**params, 'stat': stat, 'original': original, 'final': final,
-                               'delta': final - original, 'override': bool(item.get('is_confilict_override'))})
+                               'delta': final - original, 'override': bool(item.get('is_confilict_override'))}).scalar_one()
+                        if _stat_applies_immediately(settings, stat):
+                            immediate_ids.append(change_id)
+                _apply_immediate_stats(conn, immediate_ids)
                 submission_fingerprint = _individual_pending_fingerprint(conn, rider_id)
                 refresh_pending_flags(conn, [rider_id])
                 if submission_fingerprint:
@@ -8492,7 +8934,9 @@ def rider_stats_action(rider_id, action):
                     flash('Approved stat changes.', 'success')
         if action == 'save':
             if submission_fingerprint:
-                flash('Saved and submitted stat changes for approval. Current stats are unchanged.', 'success')
+                flash('Saved and submitted pending stat changes for approval.', 'success')
+            elif immediate_ids:
+                flash('Stat changes applied.', 'success')
             else:
                 flash('No pending stat changes to submit.', 'info')
     finally:
@@ -8609,7 +9053,8 @@ def _load_riders_state(namespace):
     state = _default_riders_state()
     for key in ('q', 'country', 'division', 'team', 'stat_key', 'stat_min', 'stat_max', 'activity_status'):
         state[key] = (saved_state.get(key, state[key]) or '').strip()
-    state['view'] = 'activity' if saved_state.get('view') == 'activity' else 'stats'
+    if saved_state.get('view') in RIDER_VIEWS:
+        state['view'] = saved_state['view']
     state['page'] = max(_safe_int(saved_state.get('page')) or state['page'], 1)
     state['per_page'] = min(max(_safe_int(saved_state.get('per_page')) or state['per_page'], 25), 250)
     return state
@@ -8662,7 +9107,7 @@ def stats_editor():
                 if list_id is None or list_id < 1:
                     abort(404)
                 return stats_editor_list_detail(list_id)
-            if _can_create_stats():
+            if _can_create_stats() or _can_attribute_action('update'):
                 return bulk_editor_new()
             return render_template('bulk_editor_empty.html', selected_namespace=selected_namespace)
     editor_state = _load_stats_editor_state(selected_namespace)
@@ -8911,7 +9356,7 @@ def stats_editor():
         creator_ids = {item.get('created_by_id') for item in list_entries} - {None}
         creators = {user.id: user.username for user in User.query.filter(User.id.in_(creator_ids)).all()} if creator_ids else {}
         for item in list_entries:
-            item['list_type'] = 'stat'
+            item.setdefault('list_type', 'stat')
             item['creator_label'] = creators.get(item.get('created_by_id'), 'Unknown creator')
         creator_choices = sorted(
             {(str(item.get('created_by_id') or 'unknown'), item['creator_label']) for item in list_entries},
@@ -8926,6 +9371,25 @@ def stats_editor():
                         if (not name_filter or name_filter.casefold() in item['list_name'].casefold())
                         and (not creator_filter or str(item.get('created_by_id') or 'unknown') == creator_filter)
                         and (not type_filter or item['list_type'] == type_filter)]
+        pending_lists = [item for item in list_entries
+                         if item['list_type'] == 'stat'
+                         and item.get('total_changes', 0) > item.get('approved_changes', 0)]
+        attribute_lists = [item for item in list_entries if item['list_type'] == 'attribute']
+        if pending_lists or attribute_lists:
+            engine = create_engine(selected_namespace.build_connection_string())
+            try:
+                with engine.connect() as conn:
+                    _ensure_namespace_database_connection(conn, selected_namespace)
+                    for item in pending_lists:
+                        fingerprint = _list_pending_submission_fingerprint(conn, item['id'])
+                        item['status']['is_submitted'] = _list_submission_matches(
+                            selected_namespace, item['id'], fingerprint,
+                        )
+                    attribute_summaries = _attribute_list_summaries(conn, [item['id'] for item in attribute_lists])
+                    for item in attribute_lists:
+                        item['approval_status'], item['total_changes'] = attribute_summaries.get(item['id'], ('Draft', 0))
+            finally:
+                engine.dispose()
 
     log_page = max(1, request.args.get('log_page', 1, type=int))
     log_entries = []
@@ -8959,7 +9423,7 @@ def stats_editor():
         list_scope_status=list_scope_status,
         filter_choices=filter_choices,
         selected_filters=selected_filters,
-        can_create_stats=_can_create_stats(),
+        can_create_stats=_can_create_stats() or _can_attribute_action('update'),
     )
 
 
@@ -9001,16 +9465,22 @@ def _search_stat_list_riders(namespace, rider_ids, list_search_rider, list_searc
                         text(
                             f"""
                             SELECT
-                                c.id AS rider_id,
+                                c.id AS cyclist_id,
                                 c.first_cycling_id,
                                 c.first_name,
                                 c.last_name,
                                 c.first_last_name,
+                                c.birth_date,
+                                c.size_cm,
+                                c.weight_kg,
                                 c.team_id,
                                 COALESCE(t.team_name, t.short_name) AS team_name,
+                                COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                                 {_snapshot_stat_select_list('c')}
                             FROM rider c
                             LEFT JOIN team t ON t.id = c.team_id
+                            LEFT JOIN region region ON region.id = c.region_id
+                            LEFT JOIN country country ON country.id = region.country_id
                             WHERE {search_filter}
                               AND NOT (c.id = ANY(:selected_cdb_ids))
                             ORDER BY
@@ -9027,19 +9497,10 @@ def _search_stat_list_riders(namespace, rider_ids, list_search_rider, list_searc
                 logger.exception('Failed to search CDB cyclists for stat list in namespace %s', selected_namespace.slug)
                 search_rows = []
 
-            list_search_results = [
-                SimpleNamespace(
-                    rider_id=row.get('rider_id'),
-                    first_cycling_id=row.get('first_cycling_id'),
-                    name=_cdb_rider_display_name(row),
-                    first_name=row.get('first_name'),
-                    last_name=row.get('last_name'),
-                    team_id=row.get('team_id'),
-                    team_name=row.get('team_name'),
-                    stats=_snapshot_stats_from_row(row),
-                )
-                for row in search_rows
-            ]
+            for row in search_rows:
+                rider = _namespace_roster_rider_from_row(row)
+                rider.stats = _snapshot_stats_from_row(row)
+                list_search_results.append(rider)
 
     finally:
         engine.dispose()
@@ -9049,7 +9510,11 @@ def _search_stat_list_riders(namespace, rider_ids, list_search_rider, list_searc
 @web_bp.route('/riders/bulk-editor/new')
 @login_required
 def bulk_editor_new():
-    if not _can_create_stats():
+    list_type = request.args.get('list_type', 'stat' if _can_create_stats() else 'attribute')
+    if list_type not in ('stat', 'attribute'):
+        abort(400)
+    can_create_attribute_list = _can_attribute_action('update')
+    if not _can_rider_list_action(list_type, 'create'):
         abort(403)
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     year, gender = _resolve_namespace_season(namespace)
@@ -9060,6 +9525,9 @@ def bulk_editor_new():
     team_term = (request.args.get('list_search_team') or '').strip()
     return render_template(
         'bulk_editor_new.html', new_list=True, selected_namespace=namespace,
+        list_type=list_type, can_create_attribute_list=can_create_attribute_list,
+        can_create_stat_list=_can_create_stats(),
+        draft_list_name=request.args.get('list_name', '').strip()[:120],
         list_search_rider=rider_term, list_search_team=team_term,
         list_search_results=_search_stat_list_riders(namespace, [], rider_term, team_term),
         list_item_rider_ids=set(), stat_fields=STAT_DELTA_FIELDS,
@@ -9069,7 +9537,7 @@ def bulk_editor_new():
 @web_bp.route('/stats-editor/lists/<int:list_id>/rename', methods=['POST'])
 @login_required
 def stats_editor_rename_list(list_id):
-    if not _can_create_stats():
+    if not (_can_create_stats() or _can_attribute_action('update')):
         abort(403)
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     if namespace is None:
@@ -9081,9 +9549,11 @@ def stats_editor_rename_list(list_id):
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, namespace, list_id)
+            list_type = _lock_editable_stat_list(conn, namespace, list_id)
+            if not _can_rider_list_action(list_type, 'create'):
+                abort(403)
             _ensure_namespace_database_connection(conn, namespace)
-            row = conn.execute(text('UPDATE stat_lists SET list_name=:name WHERE id=:id RETURNING id'),
+            row = conn.execute(text('UPDATE rider_list SET list_name=:name WHERE id=:id RETURNING id'),
                                {'name': name, 'id': list_id}).first()
             if row is None:
                 abort(404)
@@ -9095,14 +9565,24 @@ def stats_editor_rename_list(list_id):
 @web_bp.route('/stats-editor/lists/create', methods=['POST'])
 @login_required
 def stats_editor_create_list():
-    if not _can_create_stats():
+    list_type = request.form.get('list_type', 'stat')
+    if list_type not in ('stat', 'attribute'):
+        abort(400)
+    if not _can_rider_list_action(list_type, 'create'):
         abort(403)
 
     list_name = (request.form.get('list_name', type=str) or '').strip()
     rider_id = request.form.get('rider_id', type=int)
-    if not list_name and rider_id is None:
+    bulk_selection = 'rider_ids' in request.form
+    if bulk_selection:
+        if not _can_access_panel('stat_editor'):
+            abort(403)
+        rider_ids = _parse_bulk_rider_ids(request.form['rider_ids'])
+    else:
+        rider_ids = [rider_id] if rider_id is not None else []
+    if not bulk_selection and not list_name and not rider_ids:
         flash('List Name is required.', 'warning')
-        return redirect(url_for('web.stats_editor'))
+        return redirect(url_for('web.bulk_editor', tab='editor', list_type=list_type))
 
     if len(list_name) > 120:
         flash('List names must be 120 characters or fewer.', 'warning')
@@ -9115,6 +9595,9 @@ def stats_editor_create_list():
     if selected_namespace is None:
         flash('Select a namespace before creating a stat list.', 'warning')
         return redirect(url_for('web.stats_editor'))
+    if bulk_selection and (not rider_ids or 'rider_id' in request.form):
+        flash(f'Select between 1 and {MAX_BULK_TASK_RIDERS} valid riders.', 'warning')
+        return redirect(url_for('web.riders'))
 
     season_year, gender = _resolve_namespace_season(selected_namespace)
     if season_year is None or not gender:
@@ -9126,7 +9609,15 @@ def stats_editor_create_list():
     try:
         with engine.begin() as conn:
             _ensure_namespace_database_connection(conn, selected_namespace)
-            if rider_id is not None:
+            if bulk_selection:
+                available_count = conn.scalar(text("""
+                    SELECT COUNT(*) FROM rider r WHERE id = ANY(:rider_ids)
+                    AND COALESCE((to_jsonb(r)->>'is_deleted')::boolean, FALSE) IS FALSE
+                """), {'rider_ids': rider_ids})
+                if available_count != len(rider_ids):
+                    flash('One or more selected riders are unavailable in this namespace.', 'warning')
+                    return redirect(url_for('web.riders'))
+            elif rider_id is not None:
                 rider_exists = conn.execute(text('SELECT id FROM rider WHERE id=:id'), {'id': rider_id}).first()
                 if rider_exists is None:
                     flash('That rider was not found in this namespace CDB.', 'warning')
@@ -9139,18 +9630,26 @@ def stats_editor_create_list():
                         SELECT column_name
                         FROM information_schema.columns
                         WHERE table_schema = 'public'
-                          AND table_name = 'stat_lists'
+                          AND table_name = 'rider_list'
                         """
                     )
                 ).all()
             }
 
             if not stat_list_columns:
-                raise RuntimeError('stat_lists table is missing in namespace database')
+                raise RuntimeError('rider_list table is missing in namespace database')
+            if list_type == 'attribute' and 'list_type' not in stat_list_columns:
+                flash('This namespace needs the Bulk Editor list type schema update before creating Attribute Lists.', 'error')
+                return redirect(url_for('web.bulk_editor_new', list_type=list_type))
 
             insert_columns = ['list_name']
             insert_values = [':list_name']
             insert_params = {'list_name': list_name}
+
+            if 'list_type' in stat_list_columns:
+                insert_columns.append('list_type')
+                insert_values.append(':list_type')
+                insert_params['list_type'] = list_type
 
             if 'season_year' in stat_list_columns:
                 insert_columns.append('season_year')
@@ -9173,16 +9672,16 @@ def stats_editor_create_list():
 
             row = conn.execute(
                 text(
-                    "INSERT INTO stat_lists ({columns}) VALUES ({values}) RETURNING id".format(
+                    "INSERT INTO rider_list ({columns}) VALUES ({values}) RETURNING id".format(
                         columns=', '.join(insert_columns),
                         values=', '.join(insert_values),
                     )
                 ),
                 insert_params,
             ).mappings().first()
-            if rider_id is not None:
-                conn.execute(text('INSERT INTO stat_list_items (stat_list_id, rider_id) VALUES (:list_id, :rider_id)'),
-                             {'list_id': row['id'], 'rider_id': rider_id})
+            if rider_ids:
+                conn.execute(text('INSERT INTO rider_list_item (rider_list_id, rider_id) VALUES (:list_id, :rider_id)'),
+                             [{'list_id': row['id'], 'rider_id': rider_id} for rider_id in rider_ids])
         new_list_id = row['id'] if row else None
     except Exception:
         logger.exception('Failed to create stat list in namespace %s', selected_namespace.slug)
@@ -9202,7 +9701,7 @@ def stats_editor_create_list():
 @web_bp.route('/stats-editor/lists/<int:list_id>/add-rider', methods=['POST'])
 @login_required
 def stats_editor_add_list_rider(list_id):
-    if not _can_update_stats():
+    if not (_can_update_stats() or _can_attribute_action('update')):
         abort(403)
 
     rider_id = request.form.get('rider_id', type=int)
@@ -9224,7 +9723,9 @@ def stats_editor_add_list_rider(list_id):
     engine = create_engine(connection_string)
     try:
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, selected_namespace, list_id)
+            list_type = _lock_editable_stat_list(conn, selected_namespace, list_id)
+            if not _can_rider_list_action(list_type, 'update'):
+                abort(403)
             rider_row = conn.execute(
                 text(
                     """
@@ -9247,9 +9748,9 @@ def stats_editor_add_list_rider(list_id):
             conn.execute(
                 text(
                     """
-                    INSERT INTO stat_list_items (stat_list_id, rider_id)
+                    INSERT INTO rider_list_item (rider_list_id, rider_id)
                     VALUES (:list_id, :rider_id)
-                    ON CONFLICT (stat_list_id, rider_id)
+                    ON CONFLICT (rider_list_id, rider_id)
                     DO NOTHING
                     """
                 ),
@@ -9272,7 +9773,7 @@ def stats_editor_add_list_rider(list_id):
 @web_bp.route('/stats-editor/lists/<int:list_id>/toggle-rider', methods=['POST'])
 @login_required
 def stats_editor_toggle_list_rider(list_id):
-    if not _can_update_stats():
+    if not (_can_update_stats() or _can_attribute_action('update')):
         abort(403)
 
     rider_id = request.form.get('rider_id', type=int)
@@ -9294,7 +9795,9 @@ def stats_editor_toggle_list_rider(list_id):
     engine = create_engine(connection_string)
     try:
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, selected_namespace, list_id)
+            list_type = _lock_editable_stat_list(conn, selected_namespace, list_id)
+            if not _can_rider_list_action(list_type, 'update'):
+                abort(403)
             rider_row = conn.execute(
                 text(
                     """
@@ -9319,9 +9822,9 @@ def stats_editor_toggle_list_rider(list_id):
                 conn.execute(
                     text(
                         """
-                        INSERT INTO stat_list_items (stat_list_id, rider_id)
+                        INSERT INTO rider_list_item (rider_list_id, rider_id)
                         VALUES (:list_id, :rider_id)
-                        ON CONFLICT (stat_list_id, rider_id)
+                        ON CONFLICT (rider_list_id, rider_id)
                         DO NOTHING
                         """
                     ),
@@ -9331,6 +9834,12 @@ def stats_editor_toggle_list_rider(list_id):
                     },
                 )
             else:
+                if list_type == 'attribute' and conn.execute(text('''
+                    SELECT 1 FROM cdb_changes
+                    WHERE stat_list_id = :list_id AND entity_type = 'rider' AND entity_id = :rider_id
+                      AND source = 'attribute_editor' AND status = 'pending'
+                '''), {'list_id': list_id, 'rider_id': rider_id}).first() is not None:
+                    abort(409, description='Review this rider\'s pending list changes before removing the rider.')
                 conn.execute(
                     text(
                         """
@@ -9338,6 +9847,7 @@ def stats_editor_toggle_list_rider(list_id):
                         WHERE stat_list_id = :list_id
                           AND race_result_id IS NULL
                           AND rider_id = :rider_id
+                          AND NOT is_approved
                         """
                     ),
                     {
@@ -9348,8 +9858,8 @@ def stats_editor_toggle_list_rider(list_id):
                 conn.execute(
                     text(
                         """
-                        DELETE FROM stat_list_items
-                        WHERE stat_list_id = :list_id
+                        DELETE FROM rider_list_item
+                        WHERE rider_list_id = :list_id
                           AND rider_id = :rider_id
                         """
                     ),
@@ -9384,49 +9894,51 @@ def stats_editor_list_detail(list_id):
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
-    list_row = None
-    list_items = []
     try:
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, selected_namespace)
-            list_is_approved = _stat_list_is_approved(conn, list_id)
             list_row = conn.execute(
                 text(
                     """
-                    SELECT id, list_name, season_year, gender
-                    FROM stat_lists
+                    SELECT id, list_name, season_year, gender,
+                           COALESCE(to_jsonb(l)->>'list_type', 'stat') AS list_type
+                    FROM rider_list l
                     WHERE id = :list_id
                     """
                 ),
                 {'list_id': list_id},
             ).mappings().first()
-            list_items = conn.execute(
+            if list_row is None:
+                abort(404)
+            is_attribute_list = list_row['list_type'] == 'attribute'
+            list_is_approved = not is_attribute_list and _stat_list_is_approved(conn, list_id)
+            rider_ids = conn.execute(
                 text(
                     """
-                    SELECT i.rider_id, c.first_cycling_id AS first_cycling_rider_id
-                    FROM stat_list_items i
-                    JOIN rider c ON c.id = i.rider_id
-                    WHERE i.stat_list_id = :list_id
-                    ORDER BY i.id ASC
+                    SELECT rider_id FROM rider_list_item WHERE rider_list_id = :list_id ORDER BY id
                     """
                 ),
                 {'list_id': list_id},
-            ).mappings().all()
+            ).scalars().all()
+            if is_attribute_list:
+                approval_status, _ = _attribute_list_summaries(conn, [list_id]).get(list_id, ('Draft', 0))
+                pending_attribute_changes = attribute_changes.pending_list_changes(conn, list_id)
+                attribute_configuration = field_configuration.stored_fields(conn, 'rider')
+                can_approve_attribute_list = bool(pending_attribute_changes) and all(
+                    current_user.has_permission(attribute_configuration.get(('rider', change['attribute_name']), {}).get(
+                        'slug', field_configuration.field_slug('rider', change['attribute_name']),
+                    ), 'approve') for change in pending_attribute_changes
+                )
+                attribute_fields = attribute_changes.editor_fields_by_id(conn, 'rider', rider_ids, current_user.has_permission)
+                attribute_names = attribute_changes.editable_attributes(
+                    'rider', field_configuration.stored_fields(conn, 'rider'),
+                )
+            editable_rider_fields = _editable_stat_fields(_stat_field_settings(conn))
     finally:
         engine.dispose()
 
-    if not list_row:
-        abort(404)
-
     list_search_rider = (request.args.get('list_search_rider', type=str) or '').strip()
     list_search_team = (request.args.get('list_search_team', type=str) or '').strip()
-    list_search_results = []
-
-    rider_ids = [
-        item['rider_id']
-        for item in list_items
-        if item.get('rider_id') is not None
-    ]
     list_item_rider_ids = set(rider_ids)
     rider_rows = []
     if rider_ids:
@@ -9456,6 +9968,8 @@ def stats_editor_list_detail(list_id):
         except Exception:
             logger.exception('Failed to load CDB cyclists for stat list %s in namespace %s', list_id, selected_namespace.slug)
             rider_rows = []
+        finally:
+            engine.dispose()
     rider_map = {
         row['rider_id']: row
         for row in rider_rows
@@ -9465,15 +9979,20 @@ def stats_editor_list_detail(list_id):
         selected_namespace, rider_ids, list_search_rider, list_search_team,
     )
 
-    rider_snapshot_map = _load_namespace_scope_snapshots(selected_namespace, stat_list_id=list_id, rider_ids=rider_ids)
-    rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, rider_ids)
-    scope_delta_status = _load_namespace_scope_delta_status(
-        selected_namespace,
-        first_cycling_race_id=None,
-        first_cycling_stage_id=None,
-        stat_list_id=list_id,
-    )
-    stat_conflicts = _load_namespace_scope_conflicts(selected_namespace, stat_list_id=list_id)
+    if is_attribute_list:
+        is_submitted_for_approval = False
+        scope_delta_status = stat_conflicts = None
+    else:
+        rider_snapshot_map = _load_namespace_scope_snapshots(selected_namespace, stat_list_id=list_id, rider_ids=rider_ids)
+        rider_delta_map = _load_namespace_list_result_deltas(selected_namespace, list_id, rider_ids)
+        scope_delta_status = _load_namespace_scope_delta_status(
+            selected_namespace, first_cycling_race_id=None, first_cycling_stage_id=None, stat_list_id=list_id,
+        )
+        stat_conflicts = _load_namespace_scope_conflicts(selected_namespace, stat_list_id=list_id)
+        is_submitted_for_approval = _list_is_submitted_for_approval(selected_namespace, list_id)
+        approval_status = 'Approved' if list_is_approved else (
+            'Approval pending' if is_submitted_for_approval else 'Draft'
+        )
 
     rows = []
     for rider_id in rider_ids:
@@ -9482,7 +10001,7 @@ def stats_editor_list_detail(list_id):
         rider_name = rider_name or f'Rider #{rider_id}'
 
         rider_in_namespace = rider is not None
-        if rider_in_namespace:
+        if rider_in_namespace and not is_attribute_list:
             base_stats = _snapshot_stats_from_row(rider)
             snapshot_stats = rider_snapshot_map.get(rider_id) or {}
             original_stats = dict(snapshot_stats or base_stats)
@@ -9510,15 +10029,27 @@ def stats_editor_list_detail(list_id):
             'rider_in_namespace': rider_in_namespace,
             'stats': final_stats,
             'original_stats': original_stats,
+            'locked_stats': {name for name, change in (rider_delta_map.get(rider_id) or {}).items()
+                             if change.get('is_applied_immediately')} if not is_attribute_list else set(),
         })
 
     return render_template(
         'stat_list_detail.html',
         stat_list=list_row,
+        approval_status=approval_status,
+        is_attribute_list=is_attribute_list,
+        attribute_names=attribute_names if is_attribute_list else [],
+        editable_rider_fields=editable_rider_fields,
+        attribute_fields={rider_id: {field['name']: field for field in fields}
+                          for rider_id, fields in attribute_fields.items()} if is_attribute_list else {},
+        can_edit_attributes=is_attribute_list and _can_attribute_action('update'),
+        can_approve_attributes=is_attribute_list and _can_attribute_action('approve'),
+        can_approve_attribute_list=is_attribute_list and can_approve_attribute_list,
         list_is_approved=list_is_approved,
-        can_manage_list=_can_update_stats() and not list_is_approved,
-        can_create_stats=_can_create_stats() and not list_is_approved,
-        is_submitted_for_approval=_list_is_submitted_for_approval(selected_namespace, list_id),
+        can_manage_list=_can_rider_list_action(list_row['list_type'], 'update') and not list_is_approved,
+        can_start_list=_can_create_stats() or _can_attribute_action('update'),
+        can_create_stats=_can_rider_list_action(list_row['list_type'], 'create') and not list_is_approved,
+        is_submitted_for_approval=is_submitted_for_approval,
         rows=rows,
         list_search_rider=list_search_rider,
         list_search_team=list_search_team,
@@ -9528,8 +10059,8 @@ def stats_editor_list_detail(list_id):
         scope_delta_status=scope_delta_status,
         stat_conflicts=stat_conflicts,
         stat_fields=STAT_DELTA_FIELDS,
-        can_approve_stats=_can_approve_stats() and not list_is_approved,
-        can_update_stats=_can_update_stats() and not list_is_approved,
+        can_approve_stats=not is_attribute_list and _can_approve_stats() and not list_is_approved,
+        can_update_stats=not is_attribute_list and _can_update_stats() and not list_is_approved,
     )
 
 
@@ -9554,7 +10085,6 @@ def stats_editor_save_list_stat_deltas(list_id):
         flash('Invalid stat changes format.', 'error')
         return redirect(url_for('web.bulk_editor', tab='editor', list_id=list_id))
 
-    _require_editable_stat_changes(parsed_changes)
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
@@ -9575,13 +10105,16 @@ def stats_editor_save_list_stat_deltas(list_id):
         saved_count = 0
         skipped_count = 0
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, selected_namespace, list_id)
+            _lock_editable_stat_list(conn, selected_namespace, list_id, required_type='stat')
+            settings = _stat_field_settings(conn, lock=True)
+            _require_editable_stat_changes(settings, parsed_changes)
+            immediate_ids = []
             snapshot_rider_rows = conn.execute(
                 text(
                     """
                     SELECT rider_id
-                    FROM stat_list_items
-                    WHERE stat_list_id = :list_id
+                    FROM rider_list_item
+                    WHERE rider_list_id = :list_id
                     """
                 ),
                 {'list_id': list_id},
@@ -9631,6 +10164,8 @@ def stats_editor_save_list_stat_deltas(list_id):
                     skipped_count += 1
                     continue
 
+                _require_unapplied_stat(conn, 'race_result_id IS NULL AND stat_list_id = :list_id',
+                                        {'list_id': list_id}, rider_id, stat_name)
                 delta_value = final_value - original_value
                 if delta_value == 0 and not is_confilict_override:
                     conn.execute(
@@ -9668,7 +10203,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                     },
                 )
 
-                conn.execute(
+                change_id = conn.execute(
                     text(
                         """
                         INSERT INTO stat_changes (
@@ -9693,6 +10228,7 @@ def stats_editor_save_list_stat_deltas(list_id):
                             :is_confilict_override,
                             FALSE
                         )
+                        RETURNING id
                         """
                     ),
                     {
@@ -9704,8 +10240,11 @@ def stats_editor_save_list_stat_deltas(list_id):
                         'delta_value': delta_value,
                         'is_confilict_override': is_confilict_override,
                     },
-                )
+                ).scalar_one()
+                if _stat_applies_immediately(settings, stat_name):
+                    immediate_ids.append(change_id)
                 saved_count += 1
+            _apply_immediate_stats(conn, immediate_ids)
             refresh_pending_flags(conn, rider_ids)
 
         if saved_count > 0:
@@ -9729,17 +10268,40 @@ def stats_editor_save_list_stat_deltas(list_id):
 def _stat_list_is_approved(conn, list_id):
     return bool(conn.execute(text('''
         SELECT EXISTS (SELECT 1 FROM stat_changes
-                       WHERE stat_list_id=:id AND is_approved=TRUE)
+                       WHERE stat_list_id=:id AND is_approved=TRUE
+                         AND (to_jsonb(stat_changes)->>'is_applied_immediately') IS DISTINCT FROM 'true')
     '''), {'id': list_id}).scalar_one())
 
 
-def _lock_editable_stat_list(conn, namespace, list_id):
+def _lock_editable_stat_list(conn, namespace, list_id, required_type=None):
     """Serialize edits with approval, and reject edits once any batch was approved."""
     _ensure_namespace_database_connection(conn, namespace)
-    if conn.execute(text('SELECT id FROM stat_lists WHERE id=:id FOR UPDATE'), {'id': list_id}).first() is None:
+    list_type = conn.execute(text("""
+        SELECT COALESCE(to_jsonb(l)->>'list_type', 'stat') FROM rider_list l WHERE id=:id FOR UPDATE
+    """), {'id': list_id}).scalar_one_or_none()
+    if list_type is None:
         abort(404)
-    if _stat_list_is_approved(conn, list_id):
+    if required_type is not None and list_type != required_type:
+        abort(409, description='This action is unavailable for this list type.')
+    if list_type == 'stat' and _stat_list_is_approved(conn, list_id):
         abort(409, description='Approved lists are read-only.')
+    return list_type
+
+
+def _attribute_list_summaries(conn, list_ids):
+    if not list_ids:
+        return {}
+    rows = conn.execute(text("""
+        SELECT stat_list_id, COUNT(*) AS total,
+               CASE WHEN BOOL_OR(status = 'pending') THEN 'Approval pending'
+                    WHEN BOOL_AND(status = 'approved') THEN 'Approved'
+                    WHEN BOOL_AND(status = 'rejected') THEN 'Rejected'
+                    ELSE 'Reviewed' END AS approval_status
+        FROM cdb_changes
+        WHERE stat_list_id = ANY(:list_ids) AND source = 'attribute_editor' AND entity_type = 'rider'
+        GROUP BY stat_list_id
+    """), {'list_ids': list_ids}).mappings()
+    return {row['stat_list_id']: (row['approval_status'], row['total']) for row in rows}
 
 
 def _list_pending_submission_fingerprint(conn, list_id):
@@ -9791,8 +10353,8 @@ def stats_editor_submit_list_for_approval(list_id):
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, namespace, list_id)
-            list_name = conn.execute(text('SELECT list_name FROM stat_lists WHERE id = :list_id'),
+            _lock_editable_stat_list(conn, namespace, list_id, required_type='stat')
+            list_name = conn.execute(text('SELECT list_name FROM rider_list WHERE id = :list_id'),
                                      {'list_id': list_id}).scalar_one_or_none()
             if list_name is None:
                 abort(404)
@@ -9828,6 +10390,40 @@ def stats_editor_submit_list_for_approval(list_id):
     return redirect(target)
 
 
+@web_bp.route('/stats-editor/lists/<int:list_id>/approve-attributes', methods=['POST'])
+@login_required
+def stats_editor_approve_list_attributes(list_id):
+    if not _can_access_panel('stat_editor') or not _can_attribute_action('approve'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _lock_editable_stat_list(conn, namespace, list_id, required_type='attribute')
+            approved_count = attribute_changes.approve_list(
+                conn, list_id, current_user.id, authorize=current_user.has_permission,
+            )
+    except HTTPException:
+        raise
+    except PermissionError:
+        abort(403)
+    except (LookupError, ValueError) as error:
+        flash(f'The list could not be approved. {error}', 'error')
+    except Exception:
+        logger.exception('Failed to approve attribute list %s in namespace %s', list_id, namespace.slug)
+        flash('The list could not be approved. Try again.', 'error')
+    else:
+        if approved_count:
+            flash(f'Approved and applied {approved_count} attribute change(s) in this list.', 'success')
+        else:
+            flash('This list has no pending attribute changes to approve.', 'info')
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.bulk_editor', namespace_slug=namespace.slug, tab='editor', list_id=list_id))
+
+
 @web_bp.route('/stats-editor/lists/<int:list_id>/approve-stat-deltas', methods=['POST'])
 @login_required
 def stats_editor_approve_list_stat_deltas(list_id):
@@ -9846,7 +10442,7 @@ def stats_editor_approve_list_stat_deltas(list_id):
     applied_count = 0
     try:
         with engine.begin() as conn:
-            _lock_editable_stat_list(conn, selected_namespace, list_id)
+            _lock_editable_stat_list(conn, selected_namespace, list_id, required_type='stat')
             if not _list_submission_matches(
                 selected_namespace, list_id, _list_pending_submission_fingerprint(conn, list_id),
             ):
@@ -10268,7 +10864,21 @@ def release_file_download(release_id, file_id):
 @web_bp.route('/stats-editor/races/<int:race_id>')
 @web_bp.route('/stats-editor/races/<int:race_id>/<int:stage_id>')
 @login_required
-def stats_editor_race_detail(race_id, stage_id=None):
+def legacy_race_detail(race_id, stage_id=None):
+    """Keep bookmarked race URLs pointing at the first-party race pages."""
+    if not _can_access_panel('stat_editor'):
+        abort(403)
+    _get_selected_namespace(_get_accessible_namespaces())
+    target = url_for('web.race_detail', race_id=race_id, stage_id=stage_id)
+    if request.query_string:
+        target += '?' + request.query_string.decode('latin-1')
+    return redirect(target, code=301)
+
+
+@web_bp.route('/races/<int:race_id>')
+@web_bp.route('/races/<int:race_id>/<int:stage_id>')
+@login_required
+def race_detail(race_id, stage_id=None):
     """Race detail page with optional stage-specific view."""
     if not _can_access_panel('stat_editor'):
         abort(403)
@@ -10362,6 +10972,13 @@ def stats_editor_race_detail(race_id, stage_id=None):
             }
 
     rider_stats_map = _load_namespace_cyclist_stats(selected_namespace, first_cycling_ids)
+    field_engine = create_engine(selected_namespace.build_connection_string())
+    try:
+        with field_engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, selected_namespace)
+            editable_rider_fields = _editable_stat_fields(_stat_field_settings(conn))
+    finally:
+        field_engine.dispose()
     rider_link_map = _load_namespace_cyclist_link_map(selected_namespace, first_cycling_ids)
     fc_to_cdb_id = {
         rider_id: (rider_link_map.get(rider_id) or {}).get('cyclist_id')
@@ -10450,6 +11067,9 @@ def stats_editor_race_detail(race_id, stage_id=None):
             'team_name': rider_link.get('team_name') or (team.team_name if team is not None else (rider.team_name if rider is not None and rider.team_name else '-')),
             'stats': final_stats,
             'original_stats': original_stats,
+            'locked_stats': {name for name, change in
+                             (rider_delta_map.get(fc_to_cdb_id.get(result.rider_id)) or {}).items()
+                             if change.get('is_applied_immediately')},
         })
 
     if selected_stage is not None:
@@ -10475,6 +11095,7 @@ def stats_editor_race_detail(race_id, stage_id=None):
         stage_rows=stage_rows,
         selected_stage=selected_stage,
         result_rows=display_rows,
+        editable_rider_fields=editable_rider_fields,
         result_title=result_title,
         result_state=result_state,
         delta_change_count=delta_change_count,
@@ -10522,9 +11143,10 @@ def select_namespace():
     return redirect(_with_namespace_slug_in_url(next_url, selected_namespace))
 
 
-@web_bp.route('/stats-editor/races/<int:race_id>/get-result', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/get-result', methods=['POST'], endpoint='legacy_race_get_result')
+@web_bp.route('/races/<int:race_id>/get-result', methods=['POST'])
 @login_required
-def stats_editor_get_result(race_id):
+def race_get_result(race_id):
     """Fetch and persist race results for one race from FirstCycling."""
     if not _can_download_stats():
         abort(403)
@@ -10552,20 +11174,21 @@ def stats_editor_get_result(race_id):
 
     if stage_id is not None:
         return redirect(url_for(
-            'web.stats_editor_race_detail',
+            'web.race_detail',
             race_id=race.race_id,
             stage_id=stage_id,
         ))
 
     return redirect(url_for(
-        'web.stats_editor_race_detail',
+        'web.race_detail',
         race_id=race.race_id,
     ))
 
 
-@web_bp.route('/stats-editor/races/<int:race_id>/save-stat-deltas', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/save-stat-deltas', methods=['POST'], endpoint='legacy_race_save_stat_deltas')
+@web_bp.route('/races/<int:race_id>/save-stat-deltas', methods=['POST'])
 @login_required
-def stats_editor_save_stat_deltas(race_id):
+def race_save_stat_deltas(race_id):
     """Persist edited stat deltas for this race into the selected namespace database."""
     if not _can_update_stats():
         abort(403)
@@ -10585,24 +11208,23 @@ def stats_editor_save_stat_deltas(race_id):
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before saving stat changes.', 'warning')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     raw_changes = request.form.get('changes_json', type=str) or ''
     if not raw_changes.strip():
         flash('No stat changes detected.', 'info')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     try:
         parsed_changes = json.loads(raw_changes)
     except json.JSONDecodeError:
         flash('Invalid stat changes payload.', 'error')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     if not isinstance(parsed_changes, list):
         flash('Invalid stat changes format.', 'error')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
-    _require_editable_stat_changes(parsed_changes)
 
     rider_ids = {
         _safe_int(item.get('first_cycling_rider_id'))
@@ -10619,7 +11241,7 @@ def stats_editor_save_stat_deltas(race_id):
         db.session.commit()
         if race_result_map is None:
             flash('Could not create race result map for this race.', 'error')
-            return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+            return redirect(url_for('web.race_detail', **redirect_target))
         race_result_map_id = race_result_map.race_result_id
 
         rider_to_cdb_id = {}
@@ -10645,6 +11267,10 @@ def stats_editor_save_stat_deltas(race_id):
         saved_changes = []
 
         with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, selected_namespace)
+            settings = _stat_field_settings(conn, lock=True)
+            _require_editable_stat_changes(settings, parsed_changes)
+            immediate_ids = []
             snapshot_rider_ids = {
                 rider_to_cdb_id.get(_safe_int(result.rider_id))
                 for result in race.race_results
@@ -10695,6 +11321,8 @@ def stats_editor_save_stat_deltas(race_id):
                     skipped_count += 1
                     continue
 
+                _require_unapplied_stat(conn, 'stat_list_id IS NULL AND race_result_id = :race_result_id',
+                                        {'race_result_id': race_result_map_id}, rider_id, stat_name)
                 delta_value = final_value - original_value
                 saved_changes.append({
                     'rider_id': rider_id, 'stat_name': stat_name,
@@ -10737,7 +11365,7 @@ def stats_editor_save_stat_deltas(race_id):
                     },
                 )
 
-                conn.execute(
+                change_id = conn.execute(
                     text(
                         """
                         INSERT INTO stat_changes (
@@ -10762,6 +11390,7 @@ def stats_editor_save_stat_deltas(race_id):
                             :is_confilict_override,
                             FALSE
                         )
+                        RETURNING id
                         """
                     ),
                     {
@@ -10773,9 +11402,12 @@ def stats_editor_save_stat_deltas(race_id):
                         'delta_value': delta_value,
                         'is_confilict_override': is_confilict_override,
                     },
-                )
+                ).scalar_one()
+                if _stat_applies_immediately(settings, stat_name):
+                    immediate_ids.append(change_id)
                 saved_count += 1
-            refresh_pending_flags(conn, rider_ids)
+            _apply_immediate_stats(conn, immediate_ids)
+            refresh_pending_flags(conn, rider_to_cdb_id.values())
 
         if saved_changes:
             AuditLog.log_action(
@@ -10802,7 +11434,7 @@ def stats_editor_save_stat_deltas(race_id):
     finally:
         engine.dispose()
 
-    return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+    return redirect(url_for('web.race_detail', **redirect_target))
 
 
 def _race_pending_submission_fingerprint(conn, race_result_ids):
@@ -10845,9 +11477,10 @@ def _race_is_submitted_for_approval(namespace, race_id):
         engine.dispose()
 
 
-@web_bp.route('/stats-editor/races/<int:race_id>/submit-for-approval', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/submit-for-approval', methods=['POST'], endpoint='legacy_race_submit_for_approval')
+@web_bp.route('/races/<int:race_id>/submit-for-approval', methods=['POST'])
 @login_required
-def stats_editor_submit_for_approval(race_id):
+def race_submit_for_approval(race_id):
     """Request review of saved overall and stage edits in the selected namespace."""
     if not _can_update_stats():
         abort(403)
@@ -10855,7 +11488,7 @@ def stats_editor_submit_for_approval(race_id):
         abort(400)
 
     race = FirstCyclingRace.query.filter_by(race_id=race_id).first_or_404()
-    target = url_for('web.stats_editor_race_detail', race_id=race_id)
+    target = url_for('web.race_detail', race_id=race_id)
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     if namespace is None:
         flash('Select a namespace before submitting stat changes.', 'warning')
@@ -10886,7 +11519,7 @@ def stats_editor_submit_for_approval(race_id):
         db.session.commit()
         if notify_discord_race_stat_saved(
             namespace, race_id, race.name, race.start_date, None,
-            url_for('web.stats_editor_race_detail', race_id=race_id, _external=True),
+            url_for('web.race_detail', race_id=race_id, _external=True),
             pending_count, saved_by=current_user.username,
         ):
             flash('Submitted for approval. Discord approval thread notified.', 'success')
@@ -10900,9 +11533,10 @@ def stats_editor_submit_for_approval(race_id):
     return redirect(target)
 
 
-@web_bp.route('/stats-editor/races/<int:race_id>/approve-stat-deltas', methods=['POST'])
+@web_bp.route('/stats-editor/races/<int:race_id>/approve-stat-deltas', methods=['POST'], endpoint='legacy_race_approve_stat_deltas')
+@web_bp.route('/races/<int:race_id>/approve-stat-deltas', methods=['POST'])
 @login_required
-def stats_editor_approve_stat_deltas(race_id):
+def race_approve_stat_deltas(race_id):
     """Mark saved stat deltas as approved for this race or selected stage scope."""
     if not _can_approve_stats():
         abort(403)
@@ -10922,16 +11556,16 @@ def stats_editor_approve_stat_deltas(race_id):
     selected_namespace = _get_selected_namespace(available_namespaces)
     if selected_namespace is None:
         flash('Select a namespace before approving stat changes.', 'warning')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     result_state = _build_race_result_state(race)
     if result_state['is_stage_race'] and stage_scope_id is not None:
         flash('Stage races can only be approved from the overall race result.', 'warning')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     if result_state['is_stage_race'] and (not result_state['is_completed'] or not result_state['has_overall_result']):
         flash('Stage races can only be approved once the race is completed and the overall result is saved.', 'warning')
-        return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+        return redirect(url_for('web.race_detail', **redirect_target))
 
     connection_string = selected_namespace.build_connection_string()
     engine = create_engine(connection_string)
@@ -10962,19 +11596,19 @@ def stats_editor_approve_stat_deltas(race_id):
 
             if not race_result_ids:
                 flash('No saved stat changes were found for this race.', 'info')
-                return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+                return redirect(url_for('web.race_detail', **redirect_target))
 
             if not _race_submission_matches(
                 selected_namespace, race.race_id,
                 _race_pending_submission_fingerprint(conn, race_result_ids),
             ):
                 flash('Submit the current saved changes for approval before approving this race.', 'warning')
-                return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+                return redirect(url_for('web.race_detail', **redirect_target))
 
             conflicts = _load_scope_stat_change_conflicts(conn, approval_where_clause, approval_params)
             if conflicts:
                 flash(f'Resolve {len(conflicts)} stat conflict(s) before approving this race.', 'warning')
-                return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+                return redirect(url_for('web.race_detail', **redirect_target))
 
             applied_count = _apply_scope_stat_changes_to_cdb(
                 conn,
@@ -11031,7 +11665,7 @@ def stats_editor_approve_stat_deltas(race_id):
     else:
         flash('No pending stat edit to approve.', 'info')
 
-    return redirect(url_for('web.stats_editor_race_detail', **redirect_target))
+    return redirect(url_for('web.race_detail', **redirect_target))
 
 
 # ==================== Admin Panel Routes ====================
@@ -11045,7 +11679,12 @@ def settings():
         can_manage_users=_can_access_user_management(),
         can_manage_namespaces=_can_access_namespace_management(),
         can_read_audit_logs=current_user.has_permission('audit_logs', 'read'),
-        provider_access=_integration_provider_access_map(),
+        can_access_external_integrations=(
+            _can_read_external_call_groups() or _can_access_firstcycling_integrations()
+            or _can_run_firstcycling_integrations()
+            or current_user.has_permission('integrations-external-calls', 'download')
+        ),
+        can_access_discord_integrations=_can_access_discord_integrations(),
     )
 
 
@@ -11101,7 +11740,7 @@ def _audit_resource_links(entries):
         if resource_id is not None:
             if namespace and not namespace.is_deleted:
                 if kind == 'race':
-                    endpoint, values = 'web.stats_editor_race_detail', {'race_id': resource_id}
+                    endpoint, values = 'web.race_detail', {'race_id': resource_id}
                 elif kind == 'release':
                     endpoint, values = 'web.releases', {'tab': 'overview', 'release_id': resource_id}
                 elif kind == 'stat_list':
@@ -11126,6 +11765,12 @@ def admin_audit_log():
     """Read shared audit history with action and recorded-username filters."""
     if not current_user.has_permission('audit_logs', 'read'):
         abort(403)
+
+    for namespace in Namespace.query.filter_by(is_deleted=False).all():
+        try:
+            field_configuration.forward_audits(namespace)
+        except Exception:
+            logger.exception('Could not project field configuration audit for namespace %s', namespace.slug)
 
     selected_action = request.args.get('action', '').strip()
     selected_user = request.args.get('user', '').strip()
@@ -11207,8 +11852,39 @@ def admin_role_detail(role_id):
         role=role,
         assigned_users=assigned_users,
         permission_groups=permission_groups,
+        field_slugs=field_configuration.field_slugs(),
+        field_grants={(p.resource.name, p.action.name) for p in role.permissions},
         active_section='users',
     )
+
+
+@web_bp.route('/admin/roles/<int:role_id>/field-permissions', methods=['POST'])
+@login_required
+def admin_update_field_permission(role_id):
+    if not current_user.has_permission('roles', 'update'):
+        abort(403)
+    slug = request.form.get('slug')
+    action = request.form.get('action')
+    decision = request.form.get('decision')
+    if slug not in field_configuration.field_slugs() or action not in ('update', 'approve') or decision not in ('grant', 'revoke'):
+        abort(400)
+    role = Role.query.filter_by(id=role_id).with_for_update().first_or_404()
+    resource = Resource.query.filter_by(name=slug).first_or_404()
+    permission_action = Action.query.filter_by(name=action).first_or_404()
+    permission = RolePermission.query.filter_by(role_id=role.id, resource_id=resource.id, action_id=permission_action.id).first()
+    grant = decision == 'grant'
+    if grant != (permission is not None):
+        if grant:
+            db.session.add(RolePermission(role_id=role.id, resource_id=resource.id, action_id=permission_action.id))
+        else:
+            db.session.delete(permission)
+        AuditLog.log_action(
+            AuditAction.FIELD_PERMISSION_UPDATED, current_user,
+            resource_type='role', resource_id=role.id, resource_name=role.display_name,
+            details={'permission': f'{slug}:{action}', 'granted': grant}, ip_address=request.remote_addr,
+        )
+        db.session.commit()
+    return redirect(url_for('web.admin_role_detail', role_id=role.id) + '#field-permissions')
 
 
 @web_bp.route('/admin/namespaces')
@@ -11223,47 +11899,367 @@ def admin_namespaces():
 @web_bp.route('/admin/integrations')
 @login_required
 def admin_integrations_index():
-    """Redirect integrations index to the default provider view."""
-    query_params = request.args.to_dict()
-    provider_access = _integration_provider_access_map()
-    if provider_access.get('firstcycling'):
-        return redirect(url_for('web.admin_integrations', provider='firstcycling', **query_params))
-    if provider_access.get('discord'):
-        return redirect(url_for('web.admin_integrations', provider='discord', **query_params))
-    abort(403)
+    """Show external call history, manual sync controls, or scheduler settings."""
+    can_view_groups = _can_read_external_call_groups() or _can_access_firstcycling_integrations()
+    can_run_fc = _can_run_firstcycling_integrations()
+    can_view_fc = _can_access_firstcycling_integrations() or can_run_fc
+    can_run_pcs = current_user.has_permission('integrations-external-calls', 'download')
+    can_view_scheduler = _can_read_external_call_groups()
+    can_view_manual = can_view_fc or can_run_pcs
+    if not can_view_groups and not can_view_manual:
+        abort(403)
+
+    selected_namespace = _get_selected_namespace()
+    tab = request.args.get('tab') or ('groups' if can_view_groups else 'manual')
+    if tab not in ('groups', 'manual', 'scheduler'):
+        abort(404)
+    context = {
+        'tab': tab,
+        'can_view_groups': can_view_groups,
+        'can_view_manual': can_view_manual,
+        'can_view_scheduler': can_view_scheduler,
+        'sync_type_display': _external_sync_type_display,
+        'sync_views': EXTERNAL_SYNC_TYPE_LABELS,
+    }
+    if tab == 'manual':
+        if not can_view_manual:
+            abort(403)
+        manual_types = {key: f'FC {EXTERNAL_SYNC_TYPE_LABELS[key]}' for key in EXTERNAL_SYNC_RUN_TYPES} if can_view_fc else {}
+        if can_run_pcs:
+            manual_types[PCS_RIDER_SYNC] = 'PCS Rider'
+        configured_seasons = _load_config_seasons()
+        sync_view = request.args.get('sync_view')
+        if sync_view not in manual_types:
+            sync_view = next(iter(manual_types))
+        context.update(
+            manual_types=manual_types,
+            can_run_firstcycling_integrations=can_run_fc,
+            configured_seasons=configured_seasons,
+            selected_season=_resolve_external_sync_season(
+                configured_seasons, request.args.get('year'), request.args.get('gender'),
+            ),
+            active_sync_view=sync_view,
+            selected_start_date=request.args.get('start_date', ''),
+            selected_end_date=request.args.get('end_date', ''),
+            selected_limit=request.args.get('limit', ''),
+            rider_slug=request.args.get('rider_slug', ''),
+        )
+    elif tab == 'scheduler':
+        if not can_view_scheduler:
+            abort(403)
+        namespaces = _get_accessible_namespaces()
+        jobs = _visible_scheduled_jobs(namespaces)
+        job_id = request.args.get('job_id', type=int)
+        editing = jobs.filter_by(id=job_id).first_or_404() if job_id else None
+        job_type = editing.job_type if editing else request.args.get('job_type', 'race_results')
+        if job_type not in SCHEDULED_JOB_TYPES:
+            abort(400)
+        namespace_id = editing.namespace_id if editing else request.args.get('namespace_id', type=int)
+        namespace = next((ns for ns in namespaces if ns.id == namespace_id), None)
+        params = editing.params if editing else {}
+        search = request.args.get('rider_search', '').strip()[:120]
+        riders = []
+        if job_type == ACTIVITY_CHECK and namespace and (editing or request.args.get('new')):
+            try:
+                riders = scheduled_rider_choices(namespace, search, params.get('rider_id'))
+            except (ValueError, SQLAlchemyError):
+                logger.warning('Could not load linked riders for namespace %s', namespace.id)
+                flash('Could not load riders for this namespace.', 'warning')
+        seasons = _load_config_seasons()
+        editable_job_types = {kind for kind in SCHEDULED_JOB_TYPES if _can_configure_scheduled_job(kind)}
+        context.update(
+            jobs=jobs.order_by(ScheduledJob.name, ScheduledJob.id).all(),
+            job_types=SCHEDULED_JOB_TYPES, editing=editing, job_type=job_type,
+            show_job_form=bool(editing or request.args.get('new')), job_params=params,
+            job_namespace=namespace, namespaces=namespaces, rider_choices=riders, rider_search=search,
+            configured_seasons=seasons, selected_season=_resolve_external_sync_season(
+                seasons, params.get('year'), params.get('gender'),
+            ),
+            scheduler_timezone=current_app.config['WORKER_TIMEZONE'],
+            can_update_schedule=job_type in editable_job_types,
+            editable_job_types=editable_job_types,
+        )
+    else:
+        if not can_view_groups:
+            abort(403)
+        groups = _visible_external_call_groups(selected_namespace)
+        filters = {
+            name: request.args.get(name, '').strip()
+            for name in ('provider', 'status', 'origin', 'priority', 'sync_view', 'year', 'gender')
+        }
+        for name, column in (
+            ('status', ExternalCallTaskGroup.status),
+            ('origin', ExternalCallTaskGroup.origin),
+            ('priority', ExternalCallTaskGroup.priority),
+            ('gender', ExternalCallTaskGroup.gender),
+        ):
+            if filters[name]:
+                groups = groups.filter(column == filters[name])
+        if filters['sync_view'] and filters['sync_view'] != 'all':
+            groups = groups.filter_by(sync_type=filters['sync_view'])
+        if filters['year']:
+            year = request.args.get('year', type=int)
+            if year is None or not 1 <= year <= 9999:
+                abort(400)
+            groups = groups.filter_by(season_year=year)
+        if filters['provider']:
+            provider = filters['provider']
+            groups = groups.filter(or_(
+                ExternalCallTaskGroup.provider == provider,
+                ExternalCallTask.query.filter(
+                    ExternalCallTask.task_group_id == ExternalCallTaskGroup.id,
+                    ExternalCallTask.provider == provider,
+                ).exists(),
+            ))
+
+        page = groups.order_by(
+            ExternalCallTaskGroup.timestamp.desc(), ExternalCallTaskGroup.id.desc(),
+        ).paginate(per_page=50)
+        providers_by_group = {group.id: set() for group in page.items}
+        if providers_by_group:
+            for group_id, provider in db.session.query(
+                ExternalCallTask.task_group_id, ExternalCallTask.provider,
+            ).filter(ExternalCallTask.task_group_id.in_(providers_by_group)).distinct():
+                providers_by_group[group_id].add(provider)
+        for group in page.items:
+            if group.provider:
+                providers_by_group[group.id].add(group.provider)
+        context.update(
+            page=page,
+            filters=filters,
+            providers_by_group=providers_by_group,
+            selected_namespace=selected_namespace,
+        )
+
+    response = make_response(render_template('admin/external_data_integrations.html', **context))
+    response.cache_control.no_store = True
+    return response
+
+
+def _visible_scheduled_jobs(namespaces):
+    return ScheduledJob.query.filter(or_(
+        ScheduledJob.namespace_id.is_(None), ScheduledJob.namespace_id.in_([ns.id for ns in namespaces]),
+    ))
+
+
+def _can_configure_scheduled_job(job_type):
+    return (
+        current_user.has_permission('integrations-external-calls', 'update')
+        and _can_run_firstcycling_integrations()
+        and (job_type not in RIDER_CHECK_JOBS
+             or current_user.has_permission('integrations-external-calls', 'download'))
+    )
+
+
+@web_bp.route('/admin/integrations/scheduler', methods=['POST'])
+@login_required
+def save_external_sync_schedule():
+    if not _can_read_external_call_groups():
+        abort(403)
+    namespaces = _get_accessible_namespaces()
+    _get_selected_namespace(namespaces)
+    action = request.form.get('action', 'save')
+    job_type = request.form.get('job_type')
+    if action not in ('save', 'run_now', 'disable') or job_type not in SCHEDULED_JOB_TYPES:
+        abort(400)
+    if not _can_configure_scheduled_job(job_type):
+        abort(403)
+
+    job_id = request.form.get('job_id', type=int)
+    job = _visible_scheduled_jobs(namespaces).filter_by(id=job_id).with_for_update().first_or_404() if job_id else None
+    namespace_id = request.form.get('namespace_id', type=int) if job_type in RIDER_CHECK_JOBS else None
+    if job and (job.job_type != job_type or job.namespace_id != namespace_id):
+        abort(400, description='The job type and namespace are fixed after creation.')
+    return_url = url_for('web.admin_integrations_index', tab='scheduler')
+    if action == 'disable':
+        if job is None:
+            abort(400)
+        job.enabled = False
+        db.session.commit()
+        flash('Scheduled job disabled.', 'success')
+        return redirect(return_url)
+
+    name = request.form.get('name', '').strip()
+    if not name or len(name) > 120:
+        abort(400, description='Enter a job name of up to 120 characters.')
+    enabled = request.form.get('enabled') == '1'
+    try:
+        run_at = datetime.strptime(request.form.get('run_at', ''), '%H:%M').time()
+    except ValueError:
+        abort(400, description='Enter a valid daily run time.')
+
+    if job_type == 'race_results':
+        season = _find_external_sync_season(_load_config_seasons(), request.form.get('year'), request.form.get('gender'))
+        start_days_ago = request.form.get('start_days_ago', type=int)
+        end_days_ago = request.form.get('end_days_ago', type=int)
+        if season is None:
+            abort(400, description='Select a configured FirstCycling season and gender.')
+        if start_days_ago is None or end_days_ago is None or not 0 <= end_days_ago <= start_days_ago <= 30:
+            abort(400, description='Choose a relative start date on or before the end date.')
+        params = dict(year=season['year'], gender=season['gender'],
+                      start_days_ago=start_days_ago, end_days_ago=end_days_ago)
+    else:
+        namespace = next((ns for ns in namespaces if ns.id == namespace_id), None)
+        if namespace is None:
+            abort(400, description='Select a namespace.')
+        if job_type == IDENTITY_CHECK:
+            riders_per_run = request.form.get('riders_per_run', type=int)
+            if riders_per_run is None or not 1 <= riders_per_run <= 1000:
+                abort(400, description='Choose between 1 and 1000 riders per run.')
+            params = {'riders_per_run': riders_per_run}
+        else:
+            rider_id = request.form.get('rider_id', type=int)
+            if rider_id is None or not 1 <= rider_id <= 2147483647:
+                abort(400, description='Select a linked rider.')
+            try:
+                rider = scheduled_rider(namespace, rider_id)
+            except (ValueError, SQLAlchemyError):
+                abort(400, description='Could not load the selected namespace rider.')
+            if rider is None:
+                abort(400, description='Select a rider with valid PCS and FirstCycling links in this namespace.')
+            params = {'rider_id': rider_id}
+        fields = ('min_days_since_check', 'recent_activity_days') if job_type == ACTIVITY_CHECK else ('min_days_since_check',)
+        for field in fields:
+            days = request.form.get(field, 0, type=int)
+            if not 0 <= days <= 365:
+                abort(400, description='Enter a lookback from 0 to 365 days.')
+            params[field] = days
+
+    if action == 'run_now':
+        # Release the edit lock before notifying the worker. Run Now never saves the form.
+        db.session.rollback()
+        if job_type == 'race_results':
+            today = datetime.now(ZoneInfo(current_app.config['WORKER_TIMEZONE'])).date()
+            _queue_manual_fc_sync(
+                'fc_race_results', params,
+                today - timedelta(days=params['start_days_ago']),
+                today - timedelta(days=params['end_days_ago']), scheduled_job_id=job_id,
+            )
+        else:
+            try:
+                run_rider_check_now.delay(job_type, namespace_id, current_user.id, params, job_id=job_id)
+            except Exception:
+                logger.exception('Could not queue one-off rider check')
+                flash('Could not queue the rider check.', 'error')
+            else:
+                flash('Rider check requested. Check History for the outcome.', 'info')
+        return redirect(return_url)
+
+    if job is None:
+        job = ScheduledJob(job_type=job_type, namespace_id=namespace_id)
+        db.session.add(job)
+    job.name, job.params, job.run_at, job.enabled = name, params, run_at, enabled
+    db.session.commit()
+    flash('Scheduled job saved.', 'success')
+    return redirect(return_url)
+
+
+def _visible_external_call_groups(namespace):
+    global_groups = ExternalCallTaskGroup.namespace_id.is_(None)
+    if _can_read_external_call_groups():
+        if namespace is None:
+            return ExternalCallTaskGroup.query.filter(global_groups)
+        return ExternalCallTaskGroup.query.filter(or_(
+            global_groups, ExternalCallTaskGroup.namespace_id == namespace.id,
+        ))
+    return ExternalCallTaskGroup.query.filter(global_groups, ExternalCallTaskGroup.provider == 'firstcycling')
+
+
+@web_bp.route('/admin/integrations/task-groups/<int:group_id>')
+@login_required
+def external_call_group_detail(group_id):
+    if not (_can_read_external_call_groups() or _can_access_firstcycling_integrations()):
+        abort(403)
+
+    namespace = _get_selected_namespace()
+    group = _visible_external_call_groups(namespace).filter_by(id=group_id).first_or_404()
+    tasks = ExternalCallTask.query.filter_by(task_group_id=group.id).order_by(ExternalCallTask.id).all()
+    try:
+        details = json.loads(group.details_json or '{}')
+    except ValueError:
+        details = {}
+
+    response = make_response(render_template(
+        'admin/external_call_group.html',
+        group=group,
+        tasks=tasks,
+        sync_type_label=_external_sync_type_display(group.sync_type),
+        details=details if isinstance(details, dict) else {},
+    ))
+    response.cache_control.no_store = True
+    return response
+
+
+@web_bp.route('/admin/integrations/task-groups/<int:group_id>/tasks/<int:task_id>')
+@login_required
+def external_call_task_detail(group_id, task_id):
+    if not (_can_read_external_call_groups() or _can_access_firstcycling_integrations()):
+        abort(403)
+    namespace = _get_selected_namespace()
+    group = _visible_external_call_groups(namespace).filter_by(id=group_id).first_or_404()
+    task = ExternalCallTask.query.filter_by(id=task_id, task_group_id=group.id).first_or_404()
+
+    related_record_url = related_record_name = None
+    if (task.related_to_table == 'rider' and task.related_to_id is not None
+            and namespace is not None and group.namespace_id == namespace.id
+            and _can_access_panel('team_manager')):
+        related_record_url = url_for('web.rider_detail', namespace_slug=namespace.slug, rider_id=task.related_to_id)
+        rider = _load_namespace_roster_rider(namespace, task.related_to_id)
+        if rider is not None:
+            first_name = (rider.first_name or '').strip()
+            last_name = (rider.last_name or '').strip()
+            related_record_name = f'{first_name} {last_name}'.strip() or rider.name
+
+    def formatted_json(raw):
+        if not raw:
+            return None
+        try:
+            return json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return raw
+
+    response = make_response(render_template(
+        'admin/external_call_task.html', group=group, task=task, related_record_url=related_record_url,
+        related_record_name=related_record_name,
+        request_params=formatted_json(task.request_params_json),
+        result=formatted_json(task.result_json),
+    ))
+    response.cache_control.no_store = True
+    return response
 
 
 @web_bp.route('/admin/integrations/<provider>', methods=['GET', 'POST'])
 @login_required
 def admin_integrations(provider='firstcycling'):
-    """Admin panel - integration controls and history."""
+    """Handle Discord settings and redirect legacy FirstCycling links."""
     requested_provider = (request.args.get('provider') or '').strip().lower()
     if requested_provider:
         provider = requested_provider
 
     provider = (provider or 'firstcycling').strip().lower()
-    if provider not in INTEGRATION_PROVIDER_LABELS:
+    if provider not in ('firstcycling', 'discord'):
         abort(404)
-    if not _can_access_integrations_provider(provider):
+    if provider == 'firstcycling':
+        if not (_can_read_external_call_groups() or _can_access_firstcycling_integrations()
+                or _can_run_firstcycling_integrations()):
+            abort(403)
+        _get_selected_namespace()
+        filters = {key: request.args.get(key) for key in ('sync_view', 'year', 'gender', 'start_date', 'end_date')}
+        if _can_read_external_call_groups() or _can_access_firstcycling_integrations():
+            return redirect(url_for('web.admin_integrations_index', provider=provider, **filters))
+        return redirect(url_for('web.admin_integrations_index', tab='manual', **filters))
+    if not _can_access_discord_integrations():
         abort(403)
-
-    sync_view = (request.args.get('sync_view') or 'all').strip()
-
-    if sync_view not in EXTERNAL_SYNC_TYPE_LABELS:
-        abort(404)
-
-    # Ensure this request reads current values written by background workers.
-    db.session.expire_all()
 
     available_namespaces = _get_accessible_namespaces()
     selected_namespace = _get_selected_namespace(available_namespaces)
     discord_settings = (
         DiscordSettings.query.filter_by(namespace_id=selected_namespace.id).order_by(DiscordSettings.id.asc()).all()
-        if provider == 'discord' and selected_namespace is not None
+        if selected_namespace is not None
         else []
     )
 
-    if request.method == 'POST' and provider == 'discord':
+    if request.method == 'POST':
         if not _can_update_discord_integrations():
             abort(403)
 
@@ -11327,65 +12323,15 @@ def admin_integrations(provider='firstcycling'):
         flash('Discord workflow target saved.', 'success')
         return redirect(url_for('web.admin_integrations', provider='discord'))
 
-    configured_seasons = _load_config_seasons()
-    selected_season = _resolve_external_sync_season(
-        configured_seasons,
-        request.args.get('year'),
-        request.args.get('gender'),
-    )
-
-    sync_history = []
-    has_running_sync = False
-    if provider == 'firstcycling':
-        history_query = ExternalSyncLog.query.filter_by(provider=provider)
-        if selected_season is not None:
-            history_query = history_query.filter_by(
-                season_year=selected_season['year'],
-                gender=selected_season['gender'],
-            )
-        if sync_view != 'all':
-            history_query = history_query.filter_by(sync_type=sync_view)
-
-        sync_history = history_query.order_by(ExternalSyncLog.timestamp.desc()).limit(200).all()
-        for log in sync_history:
-            details = None
-            if log.details_json:
-                try:
-                    details = json.loads(log.details_json)
-                except (TypeError, ValueError):
-                    details = None
-            log.details = details or {}
-        has_running_sync = any(log.status in ('queued', 'running') for log in sync_history)
-
-    selected_start_date = (request.args.get('start_date') or '').strip()
-    selected_end_date = (request.args.get('end_date') or '').strip()
-
     response = make_response(render_template(
         'admin/integrations.html',
-        active_section='integrations',
-        active_provider=provider,
-        integration_providers=INTEGRATION_PROVIDER_LABELS,
-        integration_provider_access=_integration_provider_access_map(),
-        active_sync_view=sync_view,
-        sync_views=EXTERNAL_SYNC_TYPE_LABELS,
-        run_sync_types=EXTERNAL_SYNC_RUN_TYPES,
-        can_run_firstcycling_integrations=_can_run_firstcycling_integrations(),
-        can_update_discord_integrations=_can_update_discord_integrations(),
-        sync_history=sync_history,
-        configured_seasons=configured_seasons,
-        selected_season=selected_season,
-        selected_start_date=selected_start_date,
-        selected_end_date=selected_end_date,
-        sync_type_display=_external_sync_type_display,
-        has_running_sync=has_running_sync,
         selected_namespace=selected_namespace,
         discord_settings=discord_settings,
+        can_update_discord_integrations=_can_update_discord_integrations(),
         discord_workflow_choices=DISCORD_WORKFLOW_CHOICES,
         discord_bot_configured=bool(current_app.config.get('DISCORD_BOT_TOKEN')),
     ))
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
+    response.cache_control.no_store = True
     return response
 
 
@@ -11394,204 +12340,112 @@ def admin_integrations(provider='firstcycling'):
 @login_required
 def admin_external_sync_redirect(provider='firstcycling'):
     """Redirect legacy external sync URLs to integrations URLs."""
+    _get_selected_namespace()
     query_params = request.args.to_dict()
-    return redirect(url_for('web.admin_integrations', provider=provider, **query_params), code=302)
+    query_params['provider'] = provider
+    return redirect(url_for('web.admin_integrations', **query_params))
 
 
 @web_bp.route('/admin/integrations/run', methods=['POST'])
 @web_bp.route('/admin/external-sync/run', methods=['POST'])
 @login_required
 def admin_integrations_run():
-    """Queue one external sync type job and write execution history."""
+    """Queue a supported integration from its manual form."""
     provider = (request.form.get('provider') or 'firstcycling').strip().lower()
+    sync_type = request.form.get('sync_type', '').strip()
+    if provider == 'pcs' and sync_type == PCS_RIDER_SYNC:
+        if not current_user.has_permission('integrations-external-calls', 'download'):
+            abort(403)
+        namespace = _get_selected_namespace()
+        slug = request.form.get('rider_slug', '').strip()
+        return_url = url_for('web.admin_integrations_index', tab='manual', sync_view=PCS_RIDER_SYNC)
+        if not _valid_pcs_rider_slug(slug):
+            flash('Enter the PCS rider slug, such as jane-doe.', 'error')
+            return redirect(return_url)
+        create_manual_external_group(
+            [{'provider': 'pcs', 'endpoint': PROFILE_ENDPOINT, 'params': {'rider_slug': slug}}],
+            namespace_id=namespace.id if namespace else None, executed_by_id=current_user.id,
+            message=f'PCS rider profile for {slug}'[:255], provider='pcs', sync_type=PCS_RIDER_SYNC,
+        )
+        flash('PCS rider check queued. Progress will appear in History.', 'info')
+        return redirect(return_url)
     if provider != 'firstcycling':
-        flash('This integration provider is scaffolded but not runnable yet.', 'info')
-        return redirect(url_for('web.admin_integrations', provider=provider))
+        abort(400)
     if not _can_run_firstcycling_integrations():
         abort(403)
 
-    sync_type = (request.form.get('sync_type') or '').strip()
+    _get_selected_namespace()
     if sync_type not in EXTERNAL_SYNC_RUN_TYPES:
-        flash('Invalid sync type selected.', 'error')
-        return redirect(url_for('web.admin_integrations', provider=provider, sync_view='all'))
-    sync_log = None
-    sync_log_id = None
+        abort(400)
+    fields = {
+        name: (request.form.get(name) or '').strip()
+        for name in ('year', 'gender', 'start_date', 'end_date', 'limit')
+    }
+    return_url = url_for('web.admin_integrations_index', tab='manual', sync_view=sync_type, **fields)
+    season = _find_external_sync_season(_load_config_seasons(), fields['year'], fields['gender'])
+    if season is None:
+        flash('Select a configured FirstCycling season and gender.', 'error')
+        return redirect(return_url)
 
-    seasons = _load_config_seasons()
-    if not seasons:
-        _record_external_sync_log(
-            provider='firstcycling',
-            sync_type=sync_type,
-            status='failed',
-            executed_by_id=current_user.id,
-            message='No valid seasons configured in SEASONS',
-        )
-        db.session.commit()
-        flash('No valid SEASONS entries are configured; sync was not started.', 'error')
-        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
-
-    selected_season = _resolve_external_sync_season(
-        seasons,
-        request.form.get('year'),
-        request.form.get('gender'),
-    )
-    if selected_season is None:
-        flash('No season selected for sync execution.', 'error')
-        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
-
-    selected_year = selected_season['year']
-    selected_gender = selected_season['gender']
-    selected_start_date = (request.form.get('start_date') or '').strip()
-    selected_end_date = (request.form.get('end_date') or '').strip()
-
+    start_date = end_date = None
+    limit = None
     if sync_type == 'fc_race_results':
-        if not selected_start_date or not selected_end_date:
-            flash('Start date and end date are required for race results sync.', 'error')
-            return redirect(
-                url_for(
-                    'web.admin_integrations',
-                    provider=provider,
-                    sync_view=sync_type,
-                    year=selected_year,
-                    gender=selected_gender,
-                    start_date=selected_start_date or None,
-                    end_date=selected_end_date or None,
-                )
-            )
-
         try:
-            parsed_start_date = datetime.strptime(selected_start_date, '%Y-%m-%d').date()
-            parsed_end_date = datetime.strptime(selected_end_date, '%Y-%m-%d').date()
+            start_date = date.fromisoformat(fields['start_date'])
+            end_date = date.fromisoformat(fields['end_date'])
+            if start_date > end_date:
+                raise ValueError
         except ValueError:
-            flash('Invalid date format. Use YYYY-MM-DD for start and end date.', 'error')
-            return redirect(
-                url_for(
-                    'web.admin_integrations',
-                    provider=provider,
-                    sync_view=sync_type,
-                    year=selected_year,
-                    gender=selected_gender,
-                    start_date=selected_start_date,
-                    end_date=selected_end_date,
-                )
-            )
+            flash('Enter valid race result dates with the start on or before the end.', 'error')
+            return redirect(return_url)
+    elif sync_type in ('fc_teams', 'fc_riders') and fields['limit']:
+        limit = request.form.get('limit', type=int)
+        if limit is None or not 1 <= limit <= 2147483647:
+            flash('Enter a positive record limit or leave it blank.', 'error')
+            return redirect(return_url)
 
-        if parsed_start_date > parsed_end_date:
-            flash('Start date must be on or before end date.', 'error')
-            return redirect(
-                url_for(
-                    'web.admin_integrations',
-                    provider=provider,
-                    sync_view=sync_type,
-                    year=selected_year,
-                    gender=selected_gender,
-                    start_date=selected_start_date,
-                    end_date=selected_end_date,
-                )
-            )
+    _queue_manual_fc_sync(sync_type, season, start_date, end_date, limit)
+    return redirect(return_url)
 
+
+def _queue_manual_fc_sync(sync_type, season, start_date=None, end_date=None, limit=None, scheduled_job_id=None):
     api_path = current_app.config.get('FIRST_CYCLING_API_PATH')
+    label = _external_sync_type_display(sync_type)
+    message = f'Queued {label} for {season["year"]} [{season["gender"]}]'
+    if start_date is not None:
+        message += f' ({start_date} to {end_date})'
+    if limit is not None:
+        message += f' (limit {limit})'
     if not api_path:
-        _record_external_sync_log(
-            provider='firstcycling',
-            sync_type=sync_type,
-            status='failed',
-            executed_by_id=current_user.id,
-            message='FIRST_CYCLING_API_PATH is not configured',
-        )
-        db.session.commit()
-        flash('FIRST_CYCLING_API_PATH is not configured.', 'error')
-        return redirect(url_for('web.admin_integrations', provider=provider, sync_view=sync_type))
-
-    sync_log = _record_external_sync_log(
-        provider='firstcycling',
-        sync_type=sync_type,
-        status='queued',
-        executed_by_id=current_user.id,
-        season_year=selected_year,
-        gender=selected_gender,
-        message=(
-            f'Queued {_external_sync_type_display(sync_type)} for {selected_year} [{selected_gender}]'
-            + (
-                f' ({selected_start_date} to {selected_end_date})'
-                if sync_type == 'fc_race_results'
-                else ''
-            )
-        ),
+        message = 'FIRST_CYCLING_API_PATH is not configured'
+    group = _record_external_sync_log(
+        provider='firstcycling', sync_type=sync_type, status='queued' if api_path else 'failed',
+        executed_by_id=current_user.id, season_year=season['year'], gender=season['gender'],
+        message=message, scheduled_job_id=scheduled_job_id,
     )
     db.session.commit()
-    sync_log_id = sync_log.id
+    if not api_path:
+        flash(message, 'error')
+        return
 
+    group_id = group.id
     try:
         run_external_sync_task.delay(
-            log_id=sync_log_id,
-            sync_type=sync_type,
-            season_year=selected_year,
-            gender=selected_gender,
-            api_path=api_path,
-            start_date=selected_start_date or None,
-            end_date=selected_end_date or None,
+            log_id=group_id, sync_type=sync_type, season_year=season['year'], gender=season['gender'],
+            api_path=api_path, start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None, limit=limit,
         )
-    except Exception as exc:
-        db.session.rollback()
-        logger.exception(
-            'External sync failed for type=%s season=%s gender=%s',
-            sync_type,
-            selected_year,
-            selected_gender,
-        )
-
-        if sync_log_id is not None:
-            failed_log = ExternalSyncLog.query.get(sync_log_id)
-            if failed_log is not None:
-                failed_log.status = 'failed'
-                failed_log.message = str(exc)
-                failed_log.failed_count = 1
-        else:
-            _record_external_sync_log(
-                provider='firstcycling',
-                sync_type=sync_type,
-                status='failed',
-                executed_by_id=current_user.id,
-                season_year=selected_year,
-                gender=selected_gender,
-                message=str(exc),
-            )
+    except Exception:
+        logger.exception('Could not queue external sync group %s', group_id)
+        failed_group = db.session.get(ExternalCallTaskGroup, group_id, with_for_update=True)
+        if failed_group.status == 'queued':
+            failed_group.status = 'failed'
+            failed_group.message = 'Could not send the sync to the worker.'
+            failed_group.failed_count = 1
         db.session.commit()
-        flash(
-            f"{_external_sync_type_display(sync_type)} failed for {selected_year} [{selected_gender}].",
-            'error',
-        )
-        return redirect(
-            url_for(
-                'web.admin_integrations',
-                provider=provider,
-                sync_view=sync_type,
-                year=selected_year,
-                gender=selected_gender,
-                start_date=selected_start_date or None,
-                end_date=selected_end_date or None,
-            )
-        )
-
-    db.session.commit()
-
-    flash(
-        f"{_external_sync_type_display(sync_type)} queued for {selected_year} [{selected_gender}]. "
-        'Progress will appear in sync history.',
-        'info',
-    )
-    return redirect(
-        url_for(
-            'web.admin_integrations',
-            provider=provider,
-            sync_view=sync_type,
-            year=selected_year,
-            gender=selected_gender,
-            start_date=selected_start_date or None,
-            end_date=selected_end_date or None,
-        )
-    )
+        flash(f'Could not confirm that {label} was queued. Check History for its status.', 'error')
+    else:
+        flash(f'{label} queued. Progress will appear in History.', 'info')
 
 
 @web_bp.route('/admin/namespaces/<int:namespace_id>')
@@ -11607,6 +12461,63 @@ def admin_namespace_detail(namespace_id):
                          namespace=namespace,
                          metadata_form=metadata_form,
                          active_section='namespaces')
+
+
+@web_bp.route('/admin/namespaces/<int:namespace_id>/fields', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_namespace_fields(namespace_id):
+    namespace = Namespace.query.get_or_404(namespace_id)
+    can_update = _can_update_namespaces()
+    if request.method == 'POST' and not can_update:
+        abort(403)
+    object_name = request.values.get('object', 'rider')
+    if object_name not in field_configuration.OBJECTS:
+        abort(404)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        if namespace.database_name == (db.engines.get('main') or db.engine).url.database:
+            abort(400)
+        with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            fields = field_configuration.stored_fields(conn, object_name)
+            if request.method == 'POST':
+                name = request.form.get('name')
+                table = field_configuration.TABLE
+                if name == 'id':
+                    abort(400, description='The CDB identity mapping is fixed.')
+                if (object_name, name) not in fields or name not in field_configuration.configurable_columns(object_name):
+                    abort(404)
+                key = (table.c.object == object_name, table.c.name == name)
+                before = conn.execute(table.select().where(*key).with_for_update()).mappings().one()
+                values = field_configuration.form_values(object_name, name, request.form)
+                changed = {key: value for key, value in values.items() if before[key] != value}
+                if changed:
+                    conn.execute(table.update().where(*key).values(**changed))
+                    conn.execute(FieldConfigurationAudit.__table__.insert().values(
+                        actor_id=current_user.id, username=current_user.username,
+                        details={'object': object_name, 'name': name, 'slug': before['slug'],
+                                 'before': {key: before[key] for key in changed}, 'after': changed},
+                        ip_address=request.remote_addr,
+                    ))
+    except ValueError as error:
+        flash(str(error), 'error')
+    finally:
+        engine.dispose()
+    try:
+        field_configuration.forward_audits(namespace)
+    except Exception:
+        logger.exception('Could not project field configuration audit for namespace %s', namespace.slug)
+        flash('Field configuration audit history is retained in the namespace. Delivery to the Audit Log will be retried.', 'warning')
+    if request.method == 'POST':
+        return redirect(url_for('web.admin_namespace_fields', namespace_id=namespace.id, object=object_name))
+    return render_template(
+        'admin/namespace_fields.html', namespace=namespace, active_section='namespaces',
+        object_name=object_name, objects=field_configuration.OBJECTS, can_update=can_update,
+        fields=sorted(fields.values(), key=lambda field: field['name']),
+        import_policies=field_configuration.IMPORT_POLICIES, null_policies=field_configuration.NULL_POLICIES,
+        can_edit_column=field_configuration.can_edit_column,
+    )
 
 
 @web_bp.route('/admin/namespaces/create', methods=['GET', 'POST'])
@@ -11764,19 +12675,14 @@ def admin_namespace_create():
             ip_address=request.remote_addr
         )
         db.session.commit()
-        
-        flash(f'Namespace "{namespace.name}" created successfully', 'success')
-        
+
         # Automatically provision the namespace database
         from webapp.namespace.setup import NamespaceProvisioner, CDBImporter
-        
-        
+
         try:
             # Provision database
-            flash('Provisioning namespace database...', 'info')
-            
             provisioner = NamespaceProvisioner()
-            result = provisioner.provision_namespace(namespace.database_name)
+            result = provisioner.provision_namespace(namespace.database_name, namespace.pcm_version)
             
             # Log namespace provisioning
             AuditLog.log_action(
@@ -11790,13 +12696,9 @@ def admin_namespace_create():
             )
             
             db.session.commit()
-            
-            flash(f'✓ Database provisioned: {result["database_name"]}', 'success')
-            
+
             # Import CDB data if file was uploaded
             if sqlite_file_path:
-                flash('Importing CDB data...', 'info')
-                
                 # Build full path to CDB file
                 cdb_filename = os.path.basename(sqlite_file_path)
                 cdb_path = os.path.join(get_cdb_import_path(namespace.slug), cdb_filename)
@@ -11806,11 +12708,7 @@ def admin_namespace_create():
                     with CDBImporter(cdb_path, namespace.build_connection_string(), namespace.pcm_version, expected_database=namespace.database_name) as importer:
                         stats = importer.import_all_tables(expected_fingerprint=initial_fingerprint)
                     session.pop('namespace_creation_review', None)
-                    
-                    # Show import statistics
-                    for table, count in stats.items():
-                        flash(f'✓ Imported {count} {table}', 'success')
-                    
+
                     # Log CDB import
                     AuditLog.log_action(
                         action=AuditAction.NAMESPACE_CDB_IMPORTED,
@@ -11822,12 +12720,10 @@ def admin_namespace_create():
                         ip_address=request.remote_addr
                     )
                     db.session.commit()
-                    
-                    flash('CDB import completed successfully!', 'success')
                 else:
                     error_msg = f'CDB file not found at {cdb_path}'
                     logger.error(error_msg)
-                    flash(f'Warning: {error_msg}', 'warning')
+                    flash(error_msg, 'error')
             
         except Exception as e:
             error_msg = f'Error during provisioning/import: {str(e)}'
@@ -12000,10 +12896,6 @@ def admin_namespace_update_cdb(namespace_id):
             )
         return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
-    flash(
-        f"CDB updated for {namespace.name}. Processed {stats.get('rider', 0):,} riders; Activity Monitor history was kept.",
-        'success',
-    )
     return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
 
 
@@ -12373,9 +13265,11 @@ def _register_namespace_scoped_routes():
         ('/races', 'races', stats_editor, ['GET', 'POST']),
         ('/riders/bulk-editor', 'bulk_editor', stats_editor, ['GET', 'POST']),
         ('/riders/bulk-editor/new', 'bulk_editor_new', bulk_editor_new, ['GET']),
+        ('/riders/bulk-tasks', 'rider_bulk_tasks', rider_bulk_tasks, ['GET', 'POST']),
         ('/stats-editor/lists/<int:list_id>/rename', 'stats_editor_rename_list', stats_editor_rename_list, ['POST']),
         ('/riders/stat-edit-log', 'stat_edit_log', stats_editor, ['GET', 'POST']),
         ('/riders/<int:rider_id>', 'rider_detail', rider_detail, ['GET']),
+        ('/riders/<int:rider_id>/check-identity', 'check_rider_identity', check_rider_identity, ['POST']),
         ('/attributes/<entity_type>/<int:entity_id>/propose', 'propose_attribute', propose_attribute, ['POST']),
         ('/attributes/<entity_type>/review/<int:change_id>/<action>', 'review_attribute', review_attribute, ['POST']),
         ('/riders/<int:rider_id>/stats/<action>', 'rider_stats_action', rider_stats_action, ['POST']),
@@ -12385,17 +13279,29 @@ def _register_namespace_scoped_routes():
         ('/stats-editor/lists/<int:list_id>/toggle-rider', 'stats_editor_toggle_list_rider', stats_editor_toggle_list_rider, ['POST']),
         ('/stats-editor/lists/<int:list_id>', 'stats_editor_list_detail', stats_editor_list_detail, ['GET']),
         ('/stats-editor/lists/<int:list_id>/save-stat-deltas', 'stats_editor_save_list_stat_deltas', stats_editor_save_list_stat_deltas, ['POST']),
+        ('/stats-editor/lists/<int:list_id>/submit-for-approval', 'stats_editor_submit_list_for_approval', stats_editor_submit_list_for_approval, ['POST']),
         ('/stats-editor/lists/<int:list_id>/approve-stat-deltas', 'stats_editor_approve_list_stat_deltas', stats_editor_approve_list_stat_deltas, ['POST']),
-        ('/stats-editor/races/<int:race_id>', 'stats_editor_race_detail', stats_editor_race_detail, ['GET']),
-        ('/stats-editor/races/<int:race_id>/<int:stage_id>', 'stats_editor_race_detail', stats_editor_race_detail, ['GET']),
-        ('/stats-editor/races/<int:race_id>/get-result', 'stats_editor_get_result', stats_editor_get_result, ['POST']),
-        ('/stats-editor/races/<int:race_id>/save-stat-deltas', 'stats_editor_save_stat_deltas', stats_editor_save_stat_deltas, ['POST']),
-        ('/stats-editor/races/<int:race_id>/approve-stat-deltas', 'stats_editor_approve_stat_deltas', stats_editor_approve_stat_deltas, ['POST']),
+        ('/stats-editor/lists/<int:list_id>/approve-attributes', 'stats_editor_approve_list_attributes', stats_editor_approve_list_attributes, ['POST']),
+        ('/stats-editor/races/<int:race_id>', 'legacy_race_detail', legacy_race_detail, ['GET']),
+        ('/stats-editor/races/<int:race_id>/<int:stage_id>', 'legacy_race_detail', legacy_race_detail, ['GET']),
+        ('/stats-editor/races/<int:race_id>/get-result', 'legacy_race_get_result', race_get_result, ['POST']),
+        ('/stats-editor/races/<int:race_id>/save-stat-deltas', 'legacy_race_save_stat_deltas', race_save_stat_deltas, ['POST']),
+        ('/stats-editor/races/<int:race_id>/submit-for-approval', 'legacy_race_submit_for_approval', race_submit_for_approval, ['POST']),
+        ('/stats-editor/races/<int:race_id>/approve-stat-deltas', 'legacy_race_approve_stat_deltas', race_approve_stat_deltas, ['POST']),
+        ('/races/<int:race_id>', 'race_detail', race_detail, ['GET']),
+        ('/races/<int:race_id>/<int:stage_id>', 'race_detail', race_detail, ['GET']),
+        ('/races/<int:race_id>/get-result', 'race_get_result', race_get_result, ['POST']),
+        ('/races/<int:race_id>/save-stat-deltas', 'race_save_stat_deltas', race_save_stat_deltas, ['POST']),
+        ('/races/<int:race_id>/submit-for-approval', 'race_submit_for_approval', race_submit_for_approval, ['POST']),
+        ('/races/<int:race_id>/approve-stat-deltas', 'race_approve_stat_deltas', race_approve_stat_deltas, ['POST']),
         ('/releases', 'releases', releases, ['GET', 'POST']),
         ('/releases/<int:release_id>/files/<int:file_id>/download', 'release_file_download', release_file_download, ['GET']),
         ('/namespace/select', 'select_namespace', select_namespace, ['POST']),
         ('/admin/integrations', 'admin_integrations_index', admin_integrations_index, ['GET']),
         ('/admin/integrations/<provider>', 'admin_integrations', admin_integrations, ['GET', 'POST']),
+        ('/admin/integrations/task-groups/<int:group_id>', 'external_call_group_detail', external_call_group_detail, ['GET']),
+        ('/admin/integrations/task-groups/<int:group_id>/tasks/<int:task_id>', 'external_call_task_detail', external_call_task_detail, ['GET']),
+        ('/admin/integrations/scheduler', 'save_external_sync_schedule', save_external_sync_schedule, ['POST']),
         ('/admin/external-sync', 'admin_external_sync_redirect', admin_external_sync_redirect, ['GET']),
         ('/admin/external-sync/<provider>', 'admin_external_sync_redirect', admin_external_sync_redirect, ['GET']),
         ('/admin/integrations/run', 'admin_integrations_run', admin_integrations_run, ['POST']),

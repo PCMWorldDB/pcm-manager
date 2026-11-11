@@ -89,6 +89,19 @@ Use the **Test** action in the Discord integration settings to confirm the bot c
 
 ## External call queue
 
+Under **Riders → Bulk Tasks**, use **Groups** to view namespace task groups and
+filter by type. Use **Editor** to create a draft, select FC Rider or PCS Rider,
+and add or remove namespace riders. The rider selection actions also create
+drafts. **Queue group** validates the current rider links and submits the saved
+group. Only drafts can be edited. **Cancel** stops pending requests in draft,
+queued, or running rider groups. An HTTP request already in progress may finish
+and save its result, while the group retains its cancelled status.
+
+The existing group and task status columns store draft and cancelled states.
+This lifecycle change requires no database schema migration. Drafts are excluded
+from dispatch. Group row locks serialize membership edits, queueing, task claims,
+completion, and cancellation.
+
 `ExternalCallTaskGroup` and `ExternalCallTask` use the **main** database. A group
 may mix providers and optionally references a Namespace through `namespace_id`.
 Deleting a Namespace clears that reference and preserves the group and requests.
@@ -157,9 +170,12 @@ state to allow one active request across all workers. Starts are spaced by at
 least `PCS_REQUEST_DELAY_SECONDS` (Flask config, default 5, minimum 1 second).
 PCS 403/429/5xx responses impose a provider-wide cooldown of at least 60 seconds,
 honoring both forms of Retry-After even when the last attempt fails. FC requests
-have no spacing delay and use their own retry policy. Each task makes at most
-three attempts. The group worker waits for retries while retaining ownership of
-its group. Interrupted group deliveries can resume through Celery redelivery;
+have no spacing delay and use their own retry policy. PCS tasks make at most
+two attempts (one retry), while FC tasks make at most three attempts. PCS HTTP 200
+responses are not fetched again when parsing or saving the results fails. These
+processing failures finish the task with an error. The group worker waits for
+retries while retaining ownership of its group. Interrupted group deliveries can
+resume through Celery redelivery;
 requests left `running` are marked failed for review rather than fetched again.
 
 `enqueue_group` defaults to `origin="manual"` and `priority="high"`. Future
@@ -251,3 +267,71 @@ To roll back, stop services and export new queue records/results first. Restore
 the pre-change main backup and matching application version together. Renaming
 back and dropping columns alone would lose queue data and cannot safely restore
 mixed-provider groups to the old non-null provider schema.
+
+### External sync scheduler
+
+For an existing deployment, back up and verify the **main** database, then have
+an operator review and apply [scheduled_jobs_main.sql](tools/scheduled_jobs_main.sql):
+
+```text
+psql -v ON_ERROR_STOP=1 -d <main-database> -f webapp/tools/scheduled_jobs_main.sql
+```
+
+PCS rider storage must already be installed in **main** via
+[pcs_rider_tables_main.sql](tools/pcs_rider_tables_main.sql). Back up each
+**namespace** database and pause writes before applying
+[rider_checks_namespace.sql](../migrations/rider_checks_namespace.sql).
+Apply the preceding rider PCS slug migration first if required. Then apply
+[rider_pcs_birth_date_namespace.sql](../migrations/rider_pcs_birth_date_namespace.sql)
+once per existing namespace to add the PCS date and drop the old match flag.
+New namespaces get the date column during provisioning.
+
+To recover existing dates before dropping the flag, pause web and worker
+writes. In a separate `psql` session connected to **main**, export the stored
+PCS facts to a local file:
+
+```sql
+\copy (SELECT rider_slug, birth_date, last_synced_at FROM pcs_riders WHERE birth_date IS NOT NULL) TO 'pcs-birth-dates.csv' WITH (FORMAT csv)
+```
+
+In a `psql` session explicitly connected to the **namespace**, run the following
+from the repository root after the preceding namespace migrations. Keep the
+temporary table and migration in the same session.
+
+```sql
+\set ON_ERROR_STOP on
+CREATE TEMP TABLE pcs_birth_date_backfill (
+    rider_slug TEXT PRIMARY KEY, birth_date DATE NOT NULL, last_synced_at TIMESTAMP NOT NULL
+);
+\copy pcs_birth_date_backfill FROM 'pcs-birth-dates.csv' WITH (FORMAT csv)
+\i migrations/rider_pcs_birth_date_namespace.sql
+```
+
+The backfill uses the slug and exact check timestamp to tie each date to its
+namespace rider. You can run the migration without the temporary table if the
+export is unavailable. Existing verified or review records without a recovered
+date return to Unknown so an identity check can fetch the date again. Remove
+the local CSV after migrating all namespaces. Deploy the matching code and
+restart web and the Celery worker with Beat.
+
+Create named jobs under **Settings → External Data Integrations → Scheduler**.
+Each enabled job runs at most once per day at or after its configured time in
+`WORKER_TIMEZONE`. The previous `external_sync_schedules` table is retained
+for reference. Recreate any schedules you want to keep as named jobs.
+
+- **Race Results** queues a global FirstCycling race results group.
+- **Rider Identity Check** selects up to the configured number of riders from
+  one namespace whose PCS identity is unknown. It queues one PCS task group
+  using the riders' current slugs.
+- **Rider Activity Check** checks one selected rider through separate PCS and
+  FirstCycling groups and can skip recent FirstCycling race results.
+- Both rider jobs can use a minimum time since the last check. **Run Now**
+  uses the current form settings.
+
+Successful PCS requests save shared PCS profile and result data. A linked
+rider gets `verified` for matching birth dates, `review` for missing or
+different dates, or `failed` on a terminal fetch failure. The DOB match is
+unknown when either date is missing. The override stays separate from the
+fetch result and is editable through rider attribute approval. A changed
+slug clears the old identity evidence and override. FC Rider tasks refresh
+the shared FirstCycling profile linked by `first_cycling_id`.

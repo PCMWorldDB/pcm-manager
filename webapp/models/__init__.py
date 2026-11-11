@@ -6,10 +6,9 @@ from webapp.models.main.base import (
     SoftDeleteMixin,
     AuditLog,
     AuditAction,
-    ExternalSyncLog,
-    ExternalSyncAPICallLog,
     ExternalCallTaskGroup,
     ExternalCallTask,
+    ScheduledJob,
 )
 from webapp.models.main.role import Role, Resource, Action, RolePermission
 from webapp.models.main.namespace import Namespace
@@ -34,10 +33,9 @@ __all__ = [
     'NamespaceModel',
     'TimestampMixin',
     'SoftDeleteMixin',
-    'ExternalSyncLog',
-    'ExternalSyncAPICallLog',
     'ExternalCallTaskGroup',
     'ExternalCallTask',
+    'ScheduledJob',
     'Role',
     'Resource',
     'Action',

@@ -5,7 +5,9 @@ This integration handles SQLite inspection, release stat updates, and PCM versio
 field mappings. The one-to-one namespace PostgreSQL models (`Rider`, `Team`,
 `Country`, `Division`, `Region`) live in
 [cdb.py](../../models/ns/cdb.py), using the tables `rider`, `team`, `country`,
-`division`, and `region`. Workflow models remain in
+`division`, and `region`. Race definitions also use the namespace tables
+`race`, `stage`, and `race_class` (models `Race`, `Stage`, and `RaceClass`).
+Workflow models remain in
 [schema.py](../../models/ns/schema.py). Workflow references use `rider_id`.
 Existing namespace databases require the manual
 [soft-delete migration](../../../migrations/cdb_import_soft_delete.sql).
@@ -19,8 +21,13 @@ the original upload, and records the converted SQLite file as the namespace's
 release baseline. The web image supplies Node.js 22 and the pinned converter.
 SQLite uploads are checked read-only before a namespace is created.
 
-Cyclist imports deliberately ignore `DYN_cyclist.CONSTANT`; PCS profile links
-are managed by Activity Monitor and are never sourced from an uploaded CDB.
+Cyclist imports use a nonblank `DYN_cyclist.CONSTANT` to set or overwrite the
+rider's `pcs_slug`. The legacy value `0` counts as blank. If the column is absent or blank, the import keeps an
+existing slug or, if the rider has none, generates one from the rider's name and
+sets `pcs_identity_status` to `unknown`. Editors can propose changes to `pcs_slug`
+from the rider's attribute layout. Replacing the slug clears the old identity
+status, check timestamp, stored PCS date of birth, and override. Correcting
+the CDB birth date preserves the PCS date and compares it with the new value.
 The rider mapping's `export_fields` section identifies `CONSTANT` as the PCS
 slug output field. During release generation, only confirmed or explicitly
 accepted/manual PCS profile links may be written there. The updated SQLite
@@ -31,7 +38,8 @@ working copy is converted back to PCM's packed `.cdb` format for download.
 Manual object edits use the shared [editable-field allowlist](editable_fields.yaml).
 Only listed logical model attributes are editable; omitted objects and fields are
 read-only. The initial policy enables rider stats and leaves teams and races
-read-only. Race fields cannot be enabled until a namespace CDB race model exists.
+read-only. Race, stage, and race-class fields support import configuration;
+the current manual editors support riders and teams.
 Primary keys and `is_deleted` cannot be enabled. This policy is separate from
 import preservation rules and does not grant user permissions. The stats save
 and application handlers enforce it on the server, and editor inputs reflect it.
@@ -42,7 +50,7 @@ this config does not itself create a team editing endpoint.
 
 ## Attribute proposals and review
 
-Rider workflow state is stored in `identity_pcs_status` (unknown, verified,
+Rider workflow state is stored in `pcs_identity_status` (unknown, verified,
 review, failed) and the derived `has_pending_stat_changes` and
 `has_pending_attribute_changes` flags. The flags are refreshed transactionally
 by edit/approval workflows across all scopes, so approving one proposal cannot
@@ -51,9 +59,12 @@ to the manual field editor and are not mapped into the external CDB. Identity
 defaults to unknown; this schema change does not infer or change PCS verification.
 For existing namespace databases, pause writes, back up, and manually run
 [rider_state_namespace.sql](../../tools/rider_state_namespace.sql) after the history
-schema and before deploying this code. It backfills pending flags from existing
-changes; run it against each namespace, never main. New namespaces receive the
-columns through normal schema creation.
+schema if rider workflow columns are absent. It backfills pending flags from
+existing changes. Before deploying, manually run
+[rider_pcs_slug_namespace.sql](../../../migrations/rider_pcs_slug_namespace.sql)
+to add `pcs_slug` and rename the identity status column while preserving its
+values. Run these scripts against each namespace database, never main.
+New namespaces receive the columns through normal schema creation.
 
 Rider and team detail pages show proposal forms for configured non-stat fields.
 Editable values have a pencil icon that opens an inline input and save icon.
@@ -65,8 +76,8 @@ the object. Each object's Review tab lists its pending proposals. Approval locks
 the proposal and object, checks the current value against the recorded baseline,
 and applies the value and approval/application events in one transaction.
 Conflicting proposals must be rejected and resubmitted against the current value.
-Stats never enter this workflow. Race proposals require a future namespace race
-model and mapping; the race Review tab is ready to display proposals when added.
+Stats never enter this workflow. Race definitions are imported separately from
+race results and do not enable race proposal endpoints.
 
 Deployment: first review and manually run
 [the history schema SQL](../../tools/cdb_change_history_namespace.sql) against each
@@ -86,6 +97,32 @@ migrations. Back up databases before schema changes.
   `import` is a reserved keyword. `CDBImporter` remains available from namespace
   setup for compatibility.
 - `cli.py`: command-line arguments and output for table inspection and rider lookup.
+
+## Race definitions
+
+PCM2024, PCM2025, and PCM2026 use v1 mappings for all columns of `STA_race`,
+`STA_stage`, and `STA_race_class`. Non-identity fields default to preserve on
+reimport and allow NULL, matching the existing CDB objects. Missing records are
+soft-deleted. CDB integer-list fields (`team_ids` and `objective_info`) retain
+their original serialized text, including parentheses and ordering.
+Race/stage references remain integer IDs, like existing CDB references, so
+sentinel values and the circular first/last-stage links can be imported intact.
+`race_type_id` refers to the CDB's `STA_race_type`, which is not imported.
+
+For existing namespaces, back up each namespace database and pause web and worker
+writes. Review and manually run
+[`cdb_races_namespace.sql`](../../../migrations/cdb_races_namespace.sql)
+against that namespace database only, never `main`, before using the new importer.
+If field configuration is installed, fill missing defaults with:
+
+```sh
+docker compose run --rm web flask namespace seed-field-configuration NAMESPACE_SLUG --yes
+```
+
+Resume web and worker processes, then review and confirm a CDB reimport to populate
+the new tables. Seeding preserves existing field settings. New namespaces create
+and seed the tables during normal provisioning. This change does not run a
+migration or change release artifact formats.
 
 ## Mapping and inspection usage
 
@@ -145,8 +182,9 @@ changed values), and `identity` (primary key matching, only on `id`). All mapped
 values populate new records. Current non-ID fields default to `preserve`.
 Null modes are `allow`, `ignore`, and `reject`; null handling precedes update
 policy, so `allow` still respects `preserve`. An ignored null on insert uses the
-model default/NULL. IDs must reject nulls. Missing columns and duplicate IDs fail
-the import. `fields` is a generated column-only projection for release consumers;
+model default/NULL. IDs must reject nulls. Missing required columns and duplicate
+IDs fail the import. A column marked `required: false` is treated as NULL when
+absent. `fields` is a generated column-only projection for release consumers;
 the YAML uses only `mappings`.
 
 Initial creation and subsequent imports use the same atomic upsert engine.

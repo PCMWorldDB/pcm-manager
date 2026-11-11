@@ -27,7 +27,7 @@ def test_submit_and_save_permissions(app, client, role, expected):
             session['_user_id'] = str(user_id)
             session['_fresh'] = True
         for action in ('submit-for-approval', 'save-stat-deltas'):
-            assert client.post(f'/stats-editor/races/999999999/{action}').status_code == expected
+            assert client.post(f'/races/999999999/{action}').status_code == expected
     finally:
         with app.app_context():
             db.session.delete(db.session.get(User, user_id))
@@ -67,8 +67,8 @@ def test_submit_counts_stage_edits_only_in_selected_namespace(app, client, monke
         with client.session_transaction() as session:
             session['_user_id'] = str(user_id)
             session['_fresh'] = True
-        path = '/stats-editor/races/987654321/submit-for-approval'
-        approve_path = '/stats-editor/races/987654321/approve-stat-deltas'
+        path = '/races/987654321/submit-for-approval'
+        approve_path = '/races/987654321/approve-stat-deltas'
         assert client.post(approve_path).status_code == 302
         assert not applied
         assert client.post(path, data={'stage_id': '12'}).status_code == 400

@@ -16,7 +16,7 @@ from webapp.namespace.setup import CDBImporter
 def _make_cdb(path, rider_id, *, omit_cyclist=False):
     mappings = {
         name: get_field_mapping("PCM2026", name)
-        for name in ("country", "division", "region", "team", "rider")
+        for name in ("country", "division", "region", "team", "race_class", "race", "stage", "rider")
     }
     with sqlite3.connect(path) as connection:
         for kind, mapping in mappings.items():
@@ -63,7 +63,7 @@ def test_cdb_update_soft_deletes_missing_data_and_rolls_back_invalid_import(app,
             importer.import_all_tables(replace_existing=True)
         with engine.begin() as connection:
             connection.execute(text(
-                "INSERT INTO stat_list_items (stat_list_id, rider_id) VALUES (1, 101)"
+                "INSERT INTO rider_list_item (rider_list_id, rider_id) VALUES (1, 101)"
             ))
         with CDBImporter(str(second_cdb), url.render_as_string(hide_password=False), "PCM2026") as importer:
             importer.import_all_tables(replace_existing=True)
@@ -73,10 +73,10 @@ def test_cdb_update_soft_deletes_missing_data_and_rolls_back_invalid_import(app,
             )).all()
             assert rows == [(101, "Updated"), (202, "Updated")]
             assert connection.execute(text('SELECT id FROM rider WHERE is_deleted')).scalars().all() == [101]
-            for table in ('team', 'country', 'division', 'region'):
+            for table in ('team', 'country', 'division', 'region', 'race_class', 'race', 'stage'):
                 assert connection.execute(text(f'SELECT id FROM {table} WHERE NOT is_deleted')).scalars().all() == [202]
             assert connection.execute(text(
-                'SELECT rider_id FROM stat_list_items'
+                'SELECT rider_id FROM rider_list_item'
             )).scalars().all() == [101]
 
         with pytest.raises(sqlite3.OperationalError):
@@ -87,7 +87,7 @@ def test_cdb_update_soft_deletes_missing_data_and_rolls_back_invalid_import(app,
                 "SELECT id, first_name FROM rider ORDER BY id"
             )).all()
             assert rows == [(101, "Updated"), (202, "Updated")]
-            for table in ('team', 'country', 'division', 'region'):
+            for table in ('team', 'country', 'division', 'region', 'race_class', 'race', 'stage'):
                 assert connection.execute(text(f'SELECT id FROM {table} WHERE NOT is_deleted')).scalars().all() == [202]
     finally:
         engine.dispose()
@@ -113,12 +113,146 @@ def test_initial_plan_contains_only_counts_and_matches_empty_namespace(import_da
     path = tmp_path / 'initial.sqlite'
     _make_cdb(path, 42)
     analysis = cdb_import.analyze_initial(str(path), 'PCM2026')
-    assert analysis['tables'] == {'country': 1, 'division': 1, 'region': 1, 'team': 1, 'rider': 1}
+    assert analysis['tables'] == {
+        'country': 1, 'division': 1, 'region': 1, 'team': 1, 'rider': 1,
+        'race_class': 1, 'race': 1, 'stage': 1,
+    }
     assert analysis['errors'] == []
     assert 'changes' not in analysis
     with CDBImporter(str(path), url, 'PCM2026') as importer:
         assert importer.analyze()['fingerprint'] == analysis['fingerprint']
         importer.import_all_tables(expected_fingerprint=analysis['fingerprint'])
+
+
+@pytest.mark.parametrize('version', ['PCM2024', 'PCM2025', 'PCM2026'])
+def test_race_definition_import_preserves_types_lists_and_source(import_database, tmp_path, version):
+    engine, url = import_database
+    path = tmp_path / 'races.sqlite'
+    _make_cdb(path, 1)
+    with sqlite3.connect(path) as source:
+        source.execute("""UPDATE STA_race SET gene_sz_race_name='Example Tour',
+            fkIDrace_class=1, fkIDcountry=1, fkIDfirst_stage=1, fkIDlast_stage=1,
+            gene_i_number_stages=1, gene_f_popularity=95.5,
+            gene_b_national_tour=1, gene_b_aso=0, gene_b_selected=1,
+            gene_ilist_fkIDteam='(12,3,99)', gene_ilist_objectif_info='()'""")
+        source.execute("""UPDATE STA_stage SET fkIDrace=1, gene_i_day=14,
+            gene_i_month=7, gene_i_stage_number=1, gene_b_selected=1,
+            gene_sz_variant='example_2026'""")
+        source.execute("""UPDATE STA_race_class SET CONSTANT='GrandTour',
+            gene_i_max_team=23, gene_i_min_riders=8, gene_i_max_riders=8,
+            fkIDdivision=1, gene_b_is_stagerace=1""")
+    original = path.read_bytes()
+    with CDBImporter(str(path), url, version) as importer:
+        counts = importer.import_all_tables()
+        assert {kind: counts[kind] for kind in ('race', 'stage', 'race_class')} == {
+            'race': 1, 'stage': 1, 'race_class': 1,
+        }
+    with engine.connect() as conn:
+        row = conn.execute(text('SELECT * FROM race WHERE id=1')).mappings().one()
+        assert row['race_name'] == 'Example Tour'
+        assert row['popularity'] == 95.5
+        assert row['is_national_tour'] is True
+        assert row['is_aso'] is False
+        assert row['team_ids'] == '(12,3,99)'
+        assert row['objective_info'] == '()'
+        assert row['organizer_email'] is None
+        assert conn.execute(text("""SELECT s.day, s.month, s.variant, c.max_teams, c.is_stage_race
+            FROM stage s JOIN race r ON r.id=s.race_id
+            JOIN race_class c ON c.id=r.race_class_id
+            WHERE r.first_stage_id=s.id AND r.last_stage_id=s.id""")).one() == (
+                14, 7, 'example_2026', 23, True,
+            )
+    assert path.read_bytes() == original
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE STA_race SET gene_sz_race_name='External change'")
+        source.execute("UPDATE STA_stage SET gene_i_day=15")
+        source.execute("UPDATE STA_race_class SET gene_i_max_team=25")
+    with CDBImporter(str(path), url, version) as importer:
+        plan = importer.analyze()
+        assert all(plan['tables'][kind]['preserved'] == 1 for kind in ('race', 'stage', 'race_class'))
+        importer.import_all_tables()
+    with engine.connect() as conn:
+        assert conn.scalar(text('SELECT race_name FROM race')) == 'Example Tour'
+        assert conn.scalar(text('SELECT day FROM stage')) == 14
+        assert conn.scalar(text('SELECT max_teams FROM race_class')) == 23
+
+
+def test_invalid_stage_rolls_back_all_race_tables(import_database, tmp_path):
+    engine, url = import_database
+    path = tmp_path / 'invalid-stage.sqlite'
+    _make_cdb(path, 1)
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE STA_stage SET gene_i_day='invalid'")
+    with CDBImporter(str(path), url, 'PCM2026') as importer:
+        with pytest.raises(ValueError):
+            importer.import_all_tables()
+    with engine.connect() as conn:
+        for table in ('race', 'race_class', 'stage', 'country'):
+            assert conn.scalar(text(f'SELECT count(*) FROM {table}')) == 0
+
+
+def test_pcs_slug_import_overwrites_only_with_a_constant_or_fills_a_blank(import_database, tmp_path):
+    engine, url = import_database
+    path = tmp_path / 'pcs.sqlite'
+    _make_cdb(path, 1)
+
+    def import_file():
+        with CDBImporter(str(path), url, 'PCM2026') as importer:
+            review = importer.analyze()
+            importer.import_all_tables(expected_fingerprint=review['fingerprint'])
+            return review['changes']
+
+    def rider_identity():
+        with engine.connect() as conn:
+            return tuple(conn.execute(text('SELECT pcs_slug, pcs_identity_status FROM rider')).one())
+
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET CONSTANT = '  existing-pcs-slug  '")
+    import_file()
+    assert rider_identity() == ('existing-pcs-slug', 'unknown')
+
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET CONSTANT = '0'")
+    assert import_file() == []
+    assert rider_identity() == ('existing-pcs-slug', 'unknown')
+
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE rider SET pcs_slug='0'"))
+    import_file()
+    assert rider_identity() == ('updated-rider', 'unknown')
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE rider SET pcs_slug='manual-slug', pcs_identity_status='verified', pcs_birth_date='2000-01-01'
+        """))
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET CONSTANT = '  '")
+    assert import_file() == []
+    assert rider_identity() == ('manual-slug', 'verified')
+    with engine.connect() as conn:
+        assert conn.scalar(text('SELECT pcs_birth_date::text FROM rider')) == '2000-01-01'
+
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET CONSTANT = 'updated-pcs-slug'")
+    assert any(change['field'] == 'pcs_slug' and change['action'] == 'overwrite' for change in import_file())
+    assert rider_identity() == ('updated-pcs-slug', 'unknown')
+    with engine.connect() as conn:
+        assert conn.scalar(text('SELECT pcs_birth_date FROM rider')) is None
+
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE rider SET pcs_slug=NULL, pcs_identity_status='verified', "
+                          "first_name='Łukasz', last_name='D’Ávila'"))
+    with sqlite3.connect(path) as source:
+        source.execute('ALTER TABLE DYN_cyclist DROP COLUMN CONSTANT')
+    import_file()
+    assert rider_identity() == ('lukasz-d-avila', 'unknown')
+
+    with engine.begin() as conn:
+        conn.execute(text('DELETE FROM rider'))
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET gene_sz_firstname='Søren', gene_sz_lastname='de  L’Église'")
+    import_file()
+    assert rider_identity() == ('soren-de-l-eglise', 'unknown')
 
 
 def test_creation_upload_previews_counts_before_creating_namespace(app, client, tmp_path, monkeypatch):
@@ -232,10 +366,20 @@ def test_import_namespace_boundary_with_overlapping_ids(import_database, tmp_pat
                 importer.import_all_tables()
         with first_engine.begin() as connection:
             connection.execute(text("UPDATE rider SET first_name = 'First namespace' WHERE id = 1"))
+            connection.execute(text("UPDATE race SET race_name = 'First race' WHERE id = 1"))
+            connection.execute(text("UPDATE stage SET day = 12 WHERE id = 1"))
+            connection.execute(text("UPDATE race_class SET max_teams = 22 WHERE id = 1"))
         with CDBImporter(str(path), second_string, 'PCM2026', expected_database=second_url.database) as importer:
             importer.import_all_tables()
         with first_engine.connect() as connection:
             assert connection.execute(text('SELECT first_name FROM rider WHERE id = 1')).scalar_one() == 'First namespace'
+            assert connection.scalar(text('SELECT race_name FROM race WHERE id = 1')) == 'First race'
+            assert connection.scalar(text('SELECT day FROM stage WHERE id = 1')) == 12
+            assert connection.scalar(text('SELECT max_teams FROM race_class WHERE id = 1')) == 22
+        with second_engine.connect() as connection:
+            assert connection.scalar(text('SELECT race_name FROM race WHERE id = 1')) is None
+            assert connection.scalar(text('SELECT day FROM stage WHERE id = 1')) is None
+            assert connection.scalar(text('SELECT max_teams FROM race_class WHERE id = 1')) is None
         with pytest.raises(ValueError, match='selected namespace'):
             with CDBImporter(str(path), first_url, 'PCM2026', expected_database=second_url.database):
                 pass
@@ -299,10 +443,14 @@ def test_import_ui_analyzes_before_confirmation(app, client, import_database, tm
         assert b'CDB Import' in response.data
         with engine.connect() as connection:
             assert connection.execute(text('SELECT count(*) FROM rider')).scalar_one() == 0
-        assert client.post(endpoint, data={'confirm': 'yes'}).status_code == 302
+        response = client.post(endpoint, data={'confirm': 'yes'}, follow_redirects=True)
+        assert response.status_code == 200
+        assert b'class="flash-messages"' not in response.data
         with engine.connect() as connection:
             assert connection.execute(text('SELECT id FROM rider')).scalar_one() == 7
         assert client.post(endpoint, data={'confirm': 'yes'}).status_code == 400
+        response = client.post(endpoint, follow_redirects=True)
+        assert b'class="flash error">Choose a .cdb or .sqlite file' in response.data
     finally:
         with app.app_context():
             AuditLog.query.filter_by(user_id=user_id).delete()

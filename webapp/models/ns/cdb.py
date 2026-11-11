@@ -1,6 +1,6 @@
 """Namespace CDB objects and their shared change history."""
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey,
     Index, Integer, String, Text, false, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -23,16 +23,20 @@ class Rider(CDBRecord, NamespaceBase):
     # IDs
     id = Column(Integer, primary_key=True)
     first_cycling_id = Column(Integer, index=True)
+    pcs_slug = Column(String(500))
     region_id = Column(Integer)
     team_id = Column(Integer)
 
-    identity_pcs_status = Column(String(20), nullable=False, default='unknown', server_default='unknown')
+    pcs_identity_status = Column(String(20), nullable=False, default='unknown', server_default='unknown')
+    pcs_identity_verified_override = Column(Boolean, nullable=False, default=False, server_default=false())
+    pcs_birth_date = Column(Date)
+    pcs_latest_updated_at = Column(DateTime)
     has_pending_stat_changes = Column(Boolean, nullable=False, default=False, server_default=false())
     has_pending_attribute_changes = Column(Boolean, nullable=False, default=False, server_default=false())
 
     __table_args__ = (
-        CheckConstraint("identity_pcs_status IN ('unknown', 'verified', 'review', 'failed')",
-                        name='ck_rider_identity_pcs_status'),
+        CheckConstraint("pcs_identity_status IN ('unknown', 'verified', 'review', 'failed')",
+                        name='ck_rider_pcs_identity_status'),
     )
 
     # Basic info
@@ -146,6 +150,74 @@ class Region(CDBRecord, NamespaceBase):
         return f'<Region {self.constant or self.id}>'
 
 
+class RaceClass(CDBRecord, NamespaceBase):
+    """Race class data imported from the CDB."""
+
+    __tablename__ = 'race_class'
+
+    id = Column(Integer, primary_key=True)
+    name_string_id = Column(Integer)
+    constant = Column(String(100))
+    max_teams = Column(Integer)
+    min_riders = Column(Integer)
+    max_riders = Column(Integer)
+    sort_order = Column(Integer)
+    procyclist_pass = Column(Integer)
+    calendar_color = Column(String(255))
+    division_id = Column(Integer, index=True)
+    cost = Column(Integer)
+    material = Column(String(500))
+    is_stage_race = Column(Boolean)
+
+
+class Race(CDBRecord, NamespaceBase):
+    """Race data imported from the CDB."""
+
+    __tablename__ = 'race'
+
+    id = Column(Integer, primary_key=True)
+    race_name = Column(String(500))
+    abbreviation = Column(String(255))
+    filename = Column(String(500))
+    country_id = Column(Integer, index=True)
+    race_class_id = Column(Integer, index=True)
+    first_stage_id = Column(Integer)
+    last_stage_id = Column(Integer)
+    popularity = Column(Float)
+    number_stages = Column(Integer)
+    organizer_email = Column(String(500))
+    team_ids = Column(Text)
+    objective_info = Column(Text)
+    constant = Column(String(255))
+    classification_xml = Column(String(500))
+    organizer_coefficient = Column(Float)
+    race_type_id = Column(Integer)
+    is_national_tour = Column(Boolean)
+    iconic_region_id = Column(Integer)
+    comfort = Column(Integer)
+    is_aso = Column(Boolean)
+    current_variant = Column(String(500))
+    prize = Column(Integer)
+    is_selected = Column(Boolean)
+    leap_year_offset = Column(Integer)
+
+
+class Stage(CDBRecord, NamespaceBase):
+    """Stage data imported from the CDB."""
+
+    __tablename__ = 'stage'
+
+    id = Column(Integer, primary_key=True)
+    race_id = Column(Integer, index=True)
+    day = Column(Integer)
+    month = Column(Integer)
+    computed_date = Column(Integer)
+    stage_number = Column(Integer)
+    is_selected = Column(Boolean)
+    constant = Column(String(255))
+    variant = Column(String(500))
+
+
 class CDBChange(NamespaceBase):
     """One proposed or applied attribute change; frozen after approval.
 
@@ -191,15 +263,18 @@ class CDBChange(NamespaceBase):
 class CDBChangeEvent(NamespaceBase):
     """Append-only lifecycle action referencing a change without copying its payload.
 
-    Event types include created, approved, rejected, approval_revoked, applied,
-    conflict_overridden, and released. release_id identifies the release for a release event, allowing
-    the same change to appear in multiple releases. No cascade deletes history.
+    Attribute proposals record submitted, then approved or rejected. Approval
+    applies the change in the same transaction and records actual_before_value
+    in context. Older proposals may have created and applied events.
+    Other event types include approval_revoked, conflict_overridden, and released.
+    release_id identifies the release for a release event, allowing the same
+    change to appear in multiple releases. No cascade deletes history.
 
     conflict_overridden context stores reviewed_current_value (string or null)
-    and an optional reason; actor_id/occurred_at identify the decision. An applied
-    event records actual_before_value in context. Services must recheck the
-    reviewed value transactionally before applying; a later value needs a fresh
-    override. These context contracts and append-only writes are service rules.
+    and an optional reason; actor_id/occurred_at identify the decision. Services
+    must recheck the reviewed value transactionally before applying; a later value
+    needs a fresh override. These context contracts and append-only writes are
+    service rules.
     """
 
     __tablename__ = 'cdb_change_events'
@@ -218,7 +293,7 @@ class CDBChangeEvent(NamespaceBase):
 
 
 # Only mapped objects belong here: import/export iterates this collection.
-CDB_TABLES = [Country, Division, Region, Team, Rider]
+CDB_TABLES = [Country, Division, Region, Team, RaceClass, Race, Stage, Rider]
 CDB_HISTORY_TABLES = [CDBChange, CDBChangeEvent]
 
 

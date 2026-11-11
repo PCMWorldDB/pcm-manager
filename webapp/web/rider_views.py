@@ -1,5 +1,12 @@
-"""Read-only activity columns for the namespace CDB rider roster."""
+"""Read-only views for the namespace CDB rider roster."""
 from sqlalchemy import text
+
+
+RIDER_VIEWS = {
+    'stats': 'Stats',
+    'activity': 'Activity',
+    'attributes': 'Attribute',
+}
 
 
 ACTIVITY_FILTERS = {

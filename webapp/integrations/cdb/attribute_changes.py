@@ -3,14 +3,17 @@
 User permissions are enforced by routes. This module never opens a connection
 or commits, so proposal/event writes and approval/application remain atomic.
 """
+from collections import defaultdict
 from datetime import date, datetime, timezone
 import math
 
 from sqlalchemy import Boolean, Float, Integer, String, insert, select, update
 
 from webapp.integrations.cdb.editability import get_editable_fields
-from webapp.integrations.cdb.rider_state import refresh_pending_flags
+from webapp.integrations.cdb.field_configuration import can_edit_column, field_slug, stored_fields
+from webapp.integrations.cdb.rider_state import PCS_IDENTITY_RESET, pcs_dob_identity_status, refresh_pending_flags
 from webapp.models.ns.cdb import CDB_TABLES, CDBChange, CDBChangeEvent
+from webapp.models.ns.schema import RiderListItem
 
 
 class AttributeConflict(ValueError):
@@ -24,8 +27,14 @@ def object_table(entity_type):
     raise LookupError('This object has no mapped CDB table.')
 
 
-def editable_attributes(entity_type):
-    return sorted(field for field in get_editable_fields(entity_type) if not field.startswith('stat_'))
+def editable_attributes(entity_type, configuration=None):
+    fields = set(get_editable_fields(entity_type))
+    for (kind, name), config in (configuration or {}).items():
+        if kind == entity_type:
+            fields.discard(name)
+            if config['is_editable'] and can_edit_column(entity_type, name):
+                fields.add(name)
+    return sorted(field for field in fields if not field.startswith('stat_'))
 
 
 def serialize(value):
@@ -74,42 +83,68 @@ def parse_value(column, raw):
     raise ValueError('Unsupported attribute type.')
 
 
-def _column(entity_type, attribute):
+def _column(entity_type, attribute, configuration):
     table = object_table(entity_type)
-    if attribute not in editable_attributes(entity_type):
+    if attribute not in editable_attributes(entity_type, configuration):
         raise PermissionError('This attribute is read-only or belongs to the stats workflow.')
     return table, table.c[attribute]
 
 
-def editor_fields(conn, entity_type, entity_id):
-    table = object_table(entity_type)
-    row = conn.execute(select(table).where(table.c.id == entity_id, table.c.is_deleted.is_(False))).mappings().first()
-    if row is None:
+def editor_fields(conn, entity_type, entity_id, authorize=None):
+    fields = editor_fields_by_id(conn, entity_type, [entity_id], authorize)
+    if entity_id not in fields:
         raise LookupError('Object not found.')
+    return fields[entity_id]
+
+
+def editor_fields_by_id(conn, entity_type, entity_ids, authorize=None):
+    if not entity_ids:
+        return {}
+    table = object_table(entity_type)
+    rows = conn.execute(select(table).where(table.c.id.in_(entity_ids), table.c.is_deleted.is_(False))).mappings()
     changes = CDBChange.__table__
-    pending = {change['attribute_name']: change for change in conn.execute(select(changes).where(
-        changes.c.entity_type == entity_type, changes.c.entity_id == entity_id,
+    pending_by_id = defaultdict(dict)
+    for change in conn.execute(select(changes).where(
+        changes.c.entity_type == entity_type, changes.c.entity_id.in_(entity_ids),
         changes.c.status == 'pending', changes.c.source == 'attribute_editor',
-    )).mappings()}
-    fields = []
-    editable = editable_attributes(entity_type)
-    for name in sorted(set(editable) | (set(pending) & set(table.c.keys()))):
-        if name.startswith('stat_'):
-            continue
-        value = serialize(row[name])
-        if name == 'birth_date' and value:
-            try:
-                value = datetime.strptime(value, '%Y%m%d').strftime('%Y-%m-%d')
-            except ValueError:
-                value = ''
-        fields.append({'name': name, 'label': name.replace('_', ' ').title(),
-                       'value': value, 'type': 'date' if name == 'birth_date' else 'text',
-                       'editable': name in editable, 'pending': pending.get(name)})
-    return fields
+    )).mappings():
+        pending_by_id[change['entity_id']][change['attribute_name']] = change
+    configuration = stored_fields(conn, entity_type)
+    editable = editable_attributes(entity_type, configuration)
+    fields_by_id = {}
+    for row in rows:
+        pending = pending_by_id[row['id']]
+        fields = []
+        for name in sorted(set(editable) | (set(pending) & set(table.c.keys()))):
+            if name.startswith('stat_'):
+                continue
+            value = serialize(row[name])
+            if name == 'birth_date' and value:
+                try:
+                    value = datetime.strptime(value, '%Y%m%d').strftime('%Y-%m-%d')
+                except ValueError:
+                    value = ''
+            label = name.replace('_', ' ').title()
+            if name.startswith('pcs_'):
+                label = 'PCS ' + label[4:]
+            policy = configuration.get((entity_type, name), {})
+            slug = policy.get('slug', field_slug(entity_type, name))
+            fields.append({'name': name, 'label': label,
+                           'value': value, 'type': 'date' if name == 'birth_date' else 'text',
+                           'editable': name in editable and (authorize is None or authorize(slug, 'update')),
+                           'requires_approval': policy.get('is_require_approval', True),
+                           'can_approve': authorize is None or authorize(slug, 'approve'),
+                           'pending': pending.get(name)})
+        fields_by_id[row['id']] = fields
+    return fields_by_id
 
 
-def propose(conn, entity_type, entity_id, attribute, raw_value, actor_id):
-    table, column = _column(entity_type, attribute)
+def propose(conn, entity_type, entity_id, attribute, raw_value, actor_id, *, stat_list_id=None, authorize=None):
+    configuration = stored_fields(conn, entity_type, lock=True)
+    table, column = _column(entity_type, attribute, configuration)
+    policy = configuration.get((entity_type, attribute), {})
+    if authorize is not None and not authorize(policy.get('slug', field_slug(entity_type, attribute)), 'update'):
+        raise PermissionError('Field update permission required.')
     row = conn.execute(select(table).where(table.c.id == entity_id, table.c.is_deleted.is_(False))
                        .with_for_update()).mappings().first()
     if row is None:
@@ -128,10 +163,12 @@ def propose(conn, entity_type, entity_id, attribute, raw_value, actor_id):
     change_id = conn.execute(insert(changes).values(
         entity_type=entity_type, entity_id=entity_id, attribute_name=attribute,
         operation='update', before_value=before, after_value=after,
-        source='attribute_editor', created_by_id=actor_id).returning(changes.c.id)).scalar_one()
+        source='attribute_editor', created_by_id=actor_id, stat_list_id=stat_list_id).returning(changes.c.id)).scalar_one()
     conn.execute(insert(CDBChangeEvent.__table__).values(
-        change_id=change_id, event_type='created', actor_id=actor_id))
-    if entity_type == 'rider':
+        change_id=change_id, event_type='submitted', actor_id=actor_id))
+    if not policy.get('is_require_approval', True):
+        decide(conn, entity_type, change_id, 'approve', actor_id, immediate=True)
+    elif entity_type == 'rider':
         refresh_pending_flags(conn, [entity_id])
     return change_id
 
@@ -144,18 +181,55 @@ def review_queue(conn, entity_type):
     ).order_by(changes.c.created_at, changes.c.id).limit(200)).mappings().all()
 
 
-def history_events(conn, entity_type):
+def history_events(conn, entity_type, applied_entity_id=None):
     changes, events = CDBChange.__table__, CDBChangeEvent.__table__
-    return conn.execute(select(
+    query = select(
         changes.c.entity_type, changes.c.entity_id, changes.c.attribute_name,
         changes.c.before_value, changes.c.after_value, changes.c.source, changes.c.status,
         events.c.id, events.c.event_type, events.c.actor_id, events.c.occurred_at,
     ).select_from(events.join(changes, events.c.change_id == changes.c.id)).where(
         changes.c.entity_type == entity_type, ~changes.c.attribute_name.startswith('stat_'),
-    ).order_by(events.c.occurred_at.desc(), events.c.id.desc()).limit(200)).mappings().all()
+    )
+    if applied_entity_id is not None:
+        query = query.where(changes.c.entity_id == applied_entity_id, changes.c.applied_at.is_not(None))
+    return conn.execute(
+        query.order_by(events.c.occurred_at.desc(), events.c.id.desc()).limit(200)
+    ).mappings().all()
 
 
-def decide(conn, entity_type, change_id, action, actor_id):
+def pending_list_changes(conn, list_id, *, lock=False):
+    changes = CDBChange.__table__
+    query = select(changes).where(
+        changes.c.stat_list_id == list_id, changes.c.entity_type == 'rider',
+        changes.c.source == 'attribute_editor', changes.c.status == 'pending',
+    ).order_by(changes.c.entity_id, changes.c.id)
+    if lock:
+        query = query.with_for_update()
+    return conn.execute(query).mappings().all()
+
+
+def approve_list(conn, list_id, actor_id, *, authorize):
+    """Apply a list's pending proposals in the caller's locked list transaction."""
+    pending = pending_list_changes(conn, list_id, lock=True)
+    if not pending:
+        return 0
+    members = set(conn.execute(select(RiderListItem.rider_id).where(
+        RiderListItem.rider_list_id == list_id,
+    )).scalars())
+    rider_ids = {change['entity_id'] for change in pending}
+    if not rider_ids <= members:
+        raise AttributeConflict('A rider with pending changes was removed from this list. Add the rider back before approving.')
+    # Lock shared riders in a stable order before applying any proposal.
+    riders = object_table('rider')
+    conn.execute(select(riders.c.id).where(riders.c.id.in_(rider_ids))
+                 .order_by(riders.c.id).with_for_update()).all()
+    for change in pending:
+        decide(conn, 'rider', change['id'], 'approve', actor_id,
+               authorize=authorize, stat_list_id=list_id)
+    return len(pending)
+
+
+def decide(conn, entity_type, change_id, action, actor_id, *, authorize=None, immediate=False, stat_list_id=None):
     if action not in ('approve', 'reject'):
         raise ValueError('Invalid review action.')
     changes = CDBChange.__table__
@@ -164,8 +238,16 @@ def decide(conn, entity_type, change_id, action, actor_id):
         changes.c.source == 'attribute_editor').with_for_update()).mappings().first()
     if change is None:
         raise LookupError('Proposal not found.')
+    configuration = stored_fields(conn, entity_type, lock=True)
+    name = change['attribute_name']
+    policy = configuration.get((entity_type, name), {})
+    if authorize is not None and not authorize(policy.get('slug', field_slug(entity_type, name)), 'approve'):
+        raise PermissionError('Field approval permission required.')
     if change['status'] != 'pending' or change['applied_at'] is not None:
         raise AttributeConflict('This proposal has already been reviewed.')
+    if (action == 'approve' and not immediate and change['stat_list_id'] is not None
+            and change['stat_list_id'] != stat_list_id):
+        raise AttributeConflict('Approve this change together with its Attribute List in the Bulk Editor.')
     if change['attribute_name'].startswith('stat_') or change['operation'] != 'update':
         raise PermissionError('This change belongs to a different workflow.')
     now = datetime.now(timezone.utc)
@@ -176,7 +258,7 @@ def decide(conn, entity_type, change_id, action, actor_id):
         if entity_type == 'rider':
             refresh_pending_flags(conn, [change['entity_id']])
         return
-    table, column = _column(entity_type, change['attribute_name'])
+    table, column = _column(entity_type, name, configuration)
     row = conn.execute(select(table).where(table.c.id == change['entity_id'], table.c.is_deleted.is_(False))
                        .with_for_update()).mappings().first()
     if row is None:
@@ -185,13 +267,21 @@ def decide(conn, entity_type, change_id, action, actor_id):
     if current not in (change['before_value'], change['after_value']):
         raise AttributeConflict('The current value changed. Reject this proposal and submit a fresh one.')
     value = parse_value(column, change['after_value'])
-    conn.execute(update(table).where(table.c.id == change['entity_id']).values({column.name: value}))
+    values = {column.name: value}
+    if entity_type == 'rider' and current != change['after_value']:
+        if column.name == 'pcs_slug':
+            values.update(PCS_IDENTITY_RESET, pcs_identity_verified_override=False)
+        elif column.name == 'birth_date':
+            if row['pcs_birth_date'] is None:
+                values['pcs_identity_status'] = 'unknown'
+            elif row['pcs_identity_status'] in ('verified', 'review'):
+                values['pcs_identity_status'] = pcs_dob_identity_status(value, row['pcs_birth_date'])
+    conn.execute(update(table).where(table.c.id == change['entity_id']).values(values))
     conn.execute(update(changes).where(changes.c.id == change_id).values(
-        status='approved', approved_by_id=actor_id, approved_at=now, applied_at=now))
-    conn.execute(insert(events), [
-        {'change_id': change_id, 'event_type': 'approved', 'actor_id': actor_id, 'context': {}},
-        {'change_id': change_id, 'event_type': 'applied', 'actor_id': actor_id,
-         'context': {'actual_before_value': current}},
-    ])
+        status='approved', approved_by_id=None if immediate else actor_id,
+        approved_at=None if immediate else now, applied_at=now))
+    conn.execute(insert(events).values(
+        change_id=change_id, event_type='applied' if immediate else 'approved', actor_id=actor_id,
+        context={'actual_before_value': current}))
     if entity_type == 'rider':
         refresh_pending_flags(conn, [change['entity_id']])

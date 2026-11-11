@@ -47,12 +47,14 @@
 {% endblock %}
 
 {% block content %}
+{% if active_method != 'by_list' %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">{{ 'Races' if active_method == 'by_race' else 'Bulk Editor' if active_method == 'by_list' else 'Stat Edit Log' }}</h2>
+        <h2 class="mb-1">{{ 'Races' if active_method == 'by_race' else 'Stat Edit Log' }}</h2>
         <p class="text-muted mb-0">Make changes to rider stats</p>
     </div>
 </div>
+{% endif %}
 
 
 {% if active_method == 'log' %}
@@ -177,7 +179,7 @@
                             {% endif %}
                         </td>
                         <td class="race-name-cell" data-sort-value="{{ (race.name or '')|lower }}">
-                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}">
+                            <a href="{{ url_for('web.race_detail', race_id=race.race_id) }}">
                                 {{ race.name or '-' }}
                             </a>
                         </td>
@@ -202,7 +204,7 @@
                         </td>
                         <td class="text-end">↳</td>
                         <td class="race-name-cell">
-                            <a href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id) }}">
+                            <a href="{{ url_for('web.race_detail', race_id=race.race_id, stage_id=stage.id) }}">
                                 Stage {{ stage.stage_number or '?' }} - {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
                             </a>
                         </td>
@@ -228,15 +230,6 @@
     <div class="card-body">
         {% if season_selected %}
         <div class="row g-3">
-            <div class="col-12">
-                <div class="section-block h-100">
-                    <h5 class="section-title">Start a List</h5>
-                    <p>Search for riders and add them to a list. Your list is saved automatically when you add the first rider.</p>
-                    {% if can_create_stats %}
-                    <a class="btn btn-primary" href="{{ url_for('web.bulk_editor', tab='editor') }}">New list</a>
-                    {% endif %}
-                </div>
-            </div>
             <div class="col-12">
                 <div class="section-block h-100">
                     <h5 class="section-title">Lists</h5>
@@ -276,7 +269,7 @@
                                     <th>Type</th>
                                     <th>Status</th>
                                     <th>Riders</th>
-                                    <th>Stat Changes</th>
+                                    <th>Changes</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -288,16 +281,22 @@
                                         </a>
                                     </td>
                                     <td>{{ item.creator_label }}</td>
-                                    <td>Stat List</td>
+                                    <td>{{ 'Attribute List' if item.list_type == 'attribute' else 'Stat List' }}</td>
                                     <td class="text-nowrap">
+                                        {% if item.list_type == 'attribute' %}
+                                            {% with approval_status = item.approval_status %}{% include '_bulk_list_status.html' %}{% endwith %}
+                                        {% else %}
                                         {% set s = item.get('status') or {} %}
                                         {% if s.get('has_namespace') and s.get('has_stat_changes') %}
                                             <span title="Edits Saved">✏️</span>
                                         {% endif %}
                                         {% if s.get('has_namespace') and s.get('is_approved') %}
                                             <span class="ms-1 text-success" title="Approved">☑</span>
-                                        {% elif s.get('has_namespace') and s.get('has_stat_changes') %}
+                                        {% elif s.get('is_submitted') %}
                                             <span class="ms-1" title="Approval pending">⏳</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Draft</span>
+                                        {% endif %}
                                         {% endif %}
                                     </td>
                                     <td>{{ item.get('riders_count', 0) }}</td>

@@ -18,12 +18,12 @@
 {% elif review_tab == 'stats' %}
 {% from '_rider_review_stats.html' import stat_table with context %}
 <div class="panel-card card mb-3"><div class="card-body">
-    <h5>Pending Stat Approvals</h5>
+    <h5>Reviews Needed</h5>
     <p class="text-muted">Individual approvals apply the rider's submitted individual stats together. Open the source for race or list approvals.</p>
     {{ stat_table(pending_stats, true) }}
 </div></div>
 <div class="panel-card card"><div class="card-body">
-    <h5>Historical and Applied Stat Changes</h5>
+    <h5>History</h5>
     {{ stat_table(historical_stats, false) }}
 </div></div>
 {% else %}

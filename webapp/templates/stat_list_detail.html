@@ -1,6 +1,7 @@
 {% extends "rider_detail.html" if profile_context else "base.html" %}
+{% from '_attribute_editor.html' import attribute_value with context %}
 
-{% block title %}{{ 'Rider Detail' if profile_context else 'Stat List' }} - WDB{% endblock %}
+{% block title %}{{ 'Rider Detail' if profile_context else ('Attribute List' if is_attribute_list else 'Stat List') }} - WDB{% endblock %}
 
 {% block styles %}
 {{ super() }}
@@ -18,6 +19,20 @@ body > .container {
 }
 .table-wrapper {
     overflow-x: auto;
+}
+.bulk-list-attributes {
+    columns: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+}
+@media (max-width: 700px) {
+    .bulk-list-attributes {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: none;
+        grid-auto-flow: row;
+    }
 }
 .stat-col {
     width: 72px;
@@ -142,13 +157,6 @@ body.dark-mode .panel-card .border.bg-light label,
 body.dark-mode .panel-card .border.bg-light {
     color: #f9fafb !important;
 }
-.page-header-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: 0.5rem;
-    font-size: 1rem;
-}
 {% endblock %}
 
 
@@ -157,27 +165,9 @@ body.dark-mode .panel-card .border.bg-light {
 {% if not profile_context %}
 {% set bulk_tab = 'editor' %}{% include '_bulk_editor_tabs.html' %}
 {% if list_is_approved %}<div class="alert alert-info">This list is approved and read-only.</div>{% endif %}
-<!-- Page Title and Back Button -->
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="mb-0">
-        {{ stat_list.list_name }}
-        <span class="page-header-status" aria-label="List status">
-            {% if scope_delta_status.approved_changes > 0 and scope_delta_status.unapproved_changes == 0 %}
-            <span class="text-success" title="Approved">☑</span>
-            {% elif scope_delta_status.unapproved_changes > 0 %}
-            <span title="Approval pending">⏳</span>
-            {% endif %}
-        </span>
-    </h1>
-    <a class="btn btn-outline-secondary" href="{{ url_for('web.bulk_editor') }}">Back To Bulk Editor</a>
-</div>
-{% if can_create_stats %}
-<form method="post" action="{{ url_for('web.stats_editor_rename_list', list_id=stat_list.id) }}" class="d-flex align-items-center gap-2 mb-3">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="list-name" class="form-label mb-0">List name</label>
-    <input id="list-name" name="list_name" class="form-control w-auto" value="{{ stat_list.list_name }}" maxlength="120" required>
-    <button type="submit" class="btn btn-outline-primary">Save name</button>
-</form>
+{% include '_bulk_list_attributes.html' %}
+{% if can_manage_list %}
+{% include '_stat_list_rider_search.html' %}
 {% endif %}
 
 {% endif %}
@@ -185,7 +175,7 @@ body.dark-mode .panel-card .border.bg-light {
 {% block rider_stats_section %}
 {% if profile_context %}
 <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
-<h5 class="mb-0">Rider Stats</h5>
+<h3 class="h5 mb-0" id="rider-stats-title">Stats</h3>
 <div class="d-flex flex-nowrap align-items-center gap-2">
 {% if can_update_stats or can_approve_stats %}<button type="button" class="btn btn-outline-primary btn-sm" id="rider-stats-toggle" aria-label="Edit Rider Stats" aria-expanded="false" aria-controls="rider-stats-editor">Edit</button>{% endif %}
 
@@ -208,7 +198,14 @@ body.dark-mode .panel-card .border.bg-light {
                 <span class="badge bg-success">Approved</span>
                 {% endif %}
                 {% endif %}
-                <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
+                {% if is_attribute_list %}
+                {% if can_approve_attributes %}
+                <form method="post" action="{{ url_for('web.stats_editor_approve_list_attributes', list_id=stat_list.id) }}" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-success" {% if not can_approve_attribute_list %}disabled{% endif %}>Approve List</button>
+                </form>
+                {% endif %}
+                {% else %}<span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>{% endif %}
                 {% if can_update_stats %}
                 <form method="post" action="{{ (url_for('web.rider_stats_action', rider_id=profile_context.rider.cyclist_id, action='save') if profile_context else url_for('web.stats_editor_save_list_stat_deltas', list_id=stat_list.id)) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -298,9 +295,15 @@ body.dark-mode .panel-card .border.bg-light {
                             <th>Rider</th>
                             <th>Team</th>
                             {% endif %}
+                            {% if is_attribute_list %}
+                            {% for name in attribute_names %}
+                            <th scope="col">{{ name|replace('_', ' ')|title }}</th>
+                            {% endfor %}
+                            {% else %}
                             {% for stat_key in stat_fields %}
                             <th class="stat-col">{{ stat_key|upper }}</th>
                             {% endfor %}
+                            {% endif %}
                         </tr>
                     </thead>
                     <tbody>
@@ -336,6 +339,12 @@ body.dark-mode .panel-card .border.bg-light {
                                 {% endif %}
                             </td>
                             {% endif %}
+                            {% if is_attribute_list %}
+                            {% for name in attribute_names %}
+                            {% set field = attribute_fields.get(row.rider_id, {}).get(name) %}
+                            <td>{{ attribute_value(field, field.value if field and field.value else '-', 'rider', row.rider_id, selected_namespace.slug, can_edit_attributes, stat_list.id) }}</td>
+                            {% endfor %}
+                            {% else %}
                             {% for stat_key in stat_fields %}
                             {% set stat_value = stat_values[stat_key] if stat_values and stat_key in stat_values else none %}
                             {% set original_stat_value = original_stat_values[stat_key] if original_stat_values and stat_key in original_stat_values else stat_value %}
@@ -343,11 +352,12 @@ body.dark-mode .panel-card .border.bg-light {
                                 {% if stat_value is not none %}
                                 <div class="stat-input-row">
                                     <span class="delta-display" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" style="visibility: hidden;">+0</span>
-                                    <input type="{{ 'number' if can_update_stats else 'text' }}" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1" {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields %}disabled title="Editing locked"{% endif %}>
+                                    <input type="{{ 'number' if can_update_stats else 'text' }}" class="form-control stat-input" data-rider-id="{{ row.rider_id }}" data-stat-name="{{ stat_key }}" data-original-value="{{ original_stat_value if original_stat_value is not none else stat_value }}" data-saved-value="{{ stat_value }}" value="{{ stat_value }}" min="50" max="85" step="1" {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields or stat_key in row.get('locked_stats', ()) %}disabled title="Editing locked"{% endif %}>
                                 </div>
                                 {% else %}-{% endif %}
                             </td>
                             {% endfor %}
+                            {% endif %}
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -363,9 +373,6 @@ body.dark-mode .panel-card .border.bg-light {
 
 {% if profile_context %}</div>{% endif %}
 {% endblock %}
-{% endif %}
-{% if not profile_context and can_manage_list %}
-{% include '_stat_list_rider_search.html' %}
 {% endif %}
 {% endblock %}
 

@@ -5,8 +5,8 @@
 `PcsRider` (`pcs_riders`) and `PcsRiderResult` (`pcs_rider_results`) use the
 `main` bind and store PCS rider-page data independently of the Activity Monitor,
 FirstCycling IDs, and Namespace CDB rider matches. The existing `PcsRaceResult`
-race-page matching workflow is unchanged. No fetching, scheduling, or backfill
-is added by these models.
+race-page matching workflow is unchanged. The external call worker writes the
+profile and result rows after a successful PCS Rider request.
 
 The rider's canonical PCS slug is unique; `profile_url`, `display_name`,
 `birth_date`, and `nationality` hold profile facts. `source_payload` retains
@@ -14,7 +14,30 @@ additional parser facts such as title, heading, and canonical URL. Only facts
 currently extracted are modeled; height, weight, and team are not extracted by
 the current rider-page parser.
 
-Result columns follow `activity_profile.parse_pcs_html` rows: `year` maps to
+The profile upsert also stores the response's `latest_participation` in nullable
+`latest_participation_*` columns. These include year, date, race name/category/type,
+race ID/URL, stage number/name, row type, result position, participation status,
+and the confirmed-participation flag. The payload's `result` maps to
+`latest_participation_result_position`, `participation_status` to
+`latest_participation_status`, and `confirmed_participation` to
+`latest_participation_confirmed`. A nonempty latest participation replaces the
+saved summary. Responses with missing, null, or empty latest participation and
+failed requests preserve the previous summary.
+
+For an existing `pcs_riders` table, back up **main**, pause web and worker writes,
+confirm the database with `SELECT current_database()`, and have an operator review
+and apply [pcs_rider_latest_participation_main.sql](../../tools/pcs_rider_latest_participation_main.sql)
+before deploying the matching code and restarting web and workers.
+
+```text
+psql -v ON_ERROR_STOP=1 -d <main-database> -f webapp/tools/pcs_rider_latest_participation_main.sql
+```
+
+Existing rows receive null summary values until a successful PCS fetch includes
+a nonempty latest participation.
+Fresh installations include these columns in the model and table creation script.
+
+Result columns follow `profile.parse_pcs_profile` rows: `year` maps to
 `season`, `date` to `result_date`, and `result` to `result_position`. Other
 fields retain their parser names. `race_id` is a PCS string grouping key, not
 a numeric FirstCycling ID. `source_payload` retains the original row. Missing
@@ -22,8 +45,9 @@ season/date values are allowed, and headings, classifications, DNS, and DNF
 remain distinguishable. `confirmed_participation` is the parser's row flag,
 not confirmation that a PCS profile matches a CDB rider.
 
-Future callers must supply a stable `source_result_key` per rider and result
-row. The database enforces uniqueness of `(rider_id, source_result_key)` even
+The worker builds a stable `source_result_key` from the race URL, date, row
+type, and occurrence within rows sharing those fields. The database enforces
+uniqueness of `(rider_id, source_result_key)` even
 for undated rows. Deleting a PCS rider cascades to that rider's results.
 Neither table references monitor records or Namespace rider IDs.
 

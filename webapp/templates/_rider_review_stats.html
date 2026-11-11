@@ -1,23 +1,29 @@
-{% macro stat_table(edits, pending) %}
+{% macro stat_table(edits, pending, hide_rider=false) %}
 {% if edits %}
 <div class="table-responsive"><table class="table table-sm table-hover align-middle">
-    <thead><tr><th>Rider</th><th>Stat</th><th>Before</th><th>After</th><th>Delta</th><th>Source</th><th>Status</th><th>Release</th>{% if pending %}<th>Review</th>{% endif %}</tr></thead>
-    <tbody>{% for edit in edits %}<tr>
-        <td><a href="{{ edit.rider_url }}">{{ edit.rider_name }}</a></td>
+    <thead><tr>{% if not hide_rider %}<th>Rider</th>{% endif %}<th>Stat</th><th>Before</th><th>After</th><th>Delta</th><th>Source</th><th>Status</th><th>Release</th>{% if pending %}<th>Review</th>{% endif %}</tr></thead>
+    <tbody>{% for edit in edits %}
+    {% set is_batch = edit.source.type in ('Stat List', 'Race Result') %}
+    <tr>
+        {% if not hide_rider %}<td><a href="{{ edit.rider_url }}">{{ edit.rider_name }}</a></td>{% endif %}
         <td>{{ edit.stat }}</td><td>{{ edit.original_value }}</td><td>{{ edit.final_value }}</td><td>{{ edit.delta_value }}</td>
-        <td>{% if edit.source.url %}<a href="{{ edit.source.url }}">{{ edit.source.label }}</a>{% else %}{{ edit.source.label }}{% endif %}</td>
+        <td>{% if pending and is_batch %}<small class="d-block text-muted">{{ edit.source.type }}</small>{% endif -%}
+            {% if hide_rider and edit.source.type == 'Individual' %}Individual{% elif edit.source.url %}<a href="{{ edit.source.url }}">{{ edit.source.label }}</a>{% else %}{{ edit.source.label }}{% endif %}</td>
         <td>{{ edit.approval_status }}</td><td>{{ edit.release_status }}</td>
         {% if pending %}<td class="text-nowrap">
-            {% if can_approve_stats and edit.approve_url %}
+            {% if is_batch %}
+            {% if can_approve_stats and edit.source.url %}
+            <a href="{{ edit.source.url }}">Review batch</a>
+            {% else %}Batch review required{% endif %}
+            {% elif can_approve_stats and edit.approve_url %}
             <form method="post" action="{{ edit.approve_url }}" class="m-0">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-sm btn-success" title="Approve all submitted individual stat changes for this rider">Approve rider stats</button>
             </form>
-            {% elif can_approve_stats and edit.source.url %}<a href="{{ edit.source.url }}">Review &amp; approve</a>
             {% else %}Awaiting approver{% endif %}
         </td>{% endif %}
     </tr>{% endfor %}</tbody>
 </table></div>
-{% if edits|length == 200 %}<p class="text-muted">Showing the latest 200 edits.</p>{% endif %}
+{% if not hide_rider and edits|length == 200 %}<p class="text-muted">Showing the latest 200 edits.</p>{% endif %}
 {% else %}<p class="text-muted mb-0">{{ 'No pending stat approvals.' if pending else 'No historical or applied stat changes.' }}</p>{% endif %}
 {% endmacro %}

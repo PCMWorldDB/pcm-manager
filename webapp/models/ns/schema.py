@@ -3,8 +3,9 @@
 These models define the structure of tables in each namespace database.
 Each namespace gets its own PostgreSQL database with this schema.
 """
-from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, DateTime, BigInteger, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, DateTime, BigInteger, UniqueConstraint, Index, CheckConstraint
 from webapp.models.ns.base import NamespaceBase
+from webapp.models.ns.field_configuration import FieldConfigurationAudit, FieldLevelConfiguration
 from webapp.models.ns.cdb import CDB_HISTORY_TABLES, CDB_TABLES
 from sqlalchemy.orm import relationship
 
@@ -31,6 +32,7 @@ class StatChange(NamespaceBase):
     delta_value = Column(Integer, nullable=False)
     is_confilict_override = Column(Boolean, nullable=False, default=False)
     is_approved = Column(Boolean, nullable=False, default=False)
+    is_applied_immediately = Column(Boolean, nullable=False, server_default='false')
 
     __table_args__ = (
         UniqueConstraint(
@@ -159,43 +161,48 @@ class ReleaseFile(NamespaceBase):
     )
 
 
-class StatList(NamespaceBase):
-    """Ad-hoc stat list metadata."""
+class RiderList(NamespaceBase):
+    """Metadata for an ad-hoc rider stat or attribute list."""
 
-    __tablename__ = 'stat_lists'
+    __tablename__ = 'rider_list'
 
     id = Column(Integer, primary_key=True)
     list_name = Column(String(120), nullable=False)
+    list_type = Column(String(20), nullable=False, server_default='stat')
     season_year = Column(Integer, nullable=False, index=True)
     gender = Column(String(20), nullable=False, index=True)
     created_by_id = Column(Integer, nullable=True)
     created_at = Column(DateTime)
 
+    __table_args__ = (CheckConstraint("list_type IN ('stat', 'attribute')", name='ck_stat_lists_list_type'),)
 
-class StatListItem(NamespaceBase):
-    """Riders assigned to a stat list."""
 
-    __tablename__ = 'stat_list_items'
+class RiderListItem(NamespaceBase):
+    """Riders assigned to a stat or attribute list."""
+
+    __tablename__ = 'rider_list_item'
 
     id = Column(Integer, primary_key=True)
-    stat_list_id = Column(Integer, nullable=False, index=True)
+    rider_list_id = Column(Integer, nullable=False, index=True)
     rider_id = Column(Integer, nullable=False, index=True)
 
     __table_args__ = (
-        UniqueConstraint('stat_list_id', 'rider_id', name='uq_stat_list_items_list_rider'),
+        UniqueConstraint('rider_list_id', 'rider_id', name='uq_rider_list_item_list_rider'),
     )
 
 
 # List of all tables to create (in order)
 NAMESPACE_TABLES = [
     *CDB_TABLES,
+    FieldLevelConfiguration,
+    FieldConfigurationAudit,
     Release,
     *CDB_HISTORY_TABLES,
     ReleaseFile,
     StatChange,
     StatChangeSnapshot,
-    StatList,
-    StatListItem,
+    RiderList,
+    RiderListItem,
 ]
 
 

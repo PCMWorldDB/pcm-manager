@@ -29,7 +29,7 @@ def test_individual_release_grouping_and_overview(app, monkeypatch):
             NamespaceBase.metadata.create_all(engine)
             with engine.begin() as conn:
                 conn.execute(text("INSERT INTO rider (id,first_name,last_name,stat_mo) VALUES (1,'Full','Name',72),(2,'Pending','Rider',70)"))
-                conn.execute(text("INSERT INTO stat_lists (id,list_name,season_year,gender) VALUES (1,'Test list',2026,'Men')"))
+                conn.execute(text("INSERT INTO rider_list (id,list_name,season_year,gender) VALUES (1,'Test list',2026,'Men')"))
                 conn.execute(text('''
                     INSERT INTO stat_changes (race_result_id,stat_list_id,rider_id,stat_name,original_value,final_value,delta_value,is_approved,is_confilict_override)
                     VALUES (NULL,NULL,1,'mo',70,72,2,TRUE,FALSE),

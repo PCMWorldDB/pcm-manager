@@ -218,6 +218,32 @@ def namespace():
     pass
 
 
+@namespace.command('seed-field-configuration')
+@click.argument('namespace_slug')
+@click.option('--yes', is_flag=True, help='Skip the confirmation prompt')
+@with_appcontext
+def seed_field_configuration(namespace_slug, yes):
+    """Populate missing field defaults after the manual namespace SQL installation."""
+    from webapp.integrations.cdb.field_configuration import seed_fields
+    from webapp.web.routes import _ensure_namespace_database_connection
+
+    selected = Namespace.query.filter_by(slug=namespace_slug, is_deleted=False).first()
+    if selected is None:
+        raise click.ClickException('Namespace not found.')
+    if selected.database_name == (db.engines.get('main') or db.engine).url.database:
+        raise click.ClickException('Field configuration requires an isolated namespace database.')
+    if not yes and not click.confirm(f"Populate missing field defaults in namespace '{namespace_slug}'?"):
+        return
+    engine = create_engine(selected.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, selected)
+            seed_fields(conn, selected.pcm_version or 'PCM2025')
+    finally:
+        engine.dispose()
+    click.echo('Missing namespace field defaults populated. Existing settings were preserved.')
+
+
 @namespace.command('install-activity-monitor')
 @click.argument('namespace_slug')
 @click.option('--yes', is_flag=True, help='Skip the confirmation prompt')

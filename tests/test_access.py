@@ -18,7 +18,7 @@ def test_startup_initializes_postgres_and_roles(app, client):
 
 @pytest.mark.parametrize("path", [
     "/admin/namespaces/create",
-    "/stats-editor/races/999/approve-stat-deltas",
+    "/races/999/approve-stat-deltas",
     "/stats-editor/lists/999/approve-stat-deltas",
     "/stats-editor/lists/999/submit-for-approval",
 ])
@@ -45,7 +45,7 @@ def test_user_manager_cannot_access_activity_monitor_or_administer(app, client, 
         assert client.get("/activity-monitor/riders").status_code == 403
         for path in (
             "/admin/namespaces/create",
-            "/stats-editor/races/999/approve-stat-deltas",
+            "/races/999/approve-stat-deltas",
             "/stats-editor/lists/999/approve-stat-deltas",
             "/activity-monitor/history-transfer",
         ):

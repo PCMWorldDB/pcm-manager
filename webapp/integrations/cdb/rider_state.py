@@ -1,5 +1,23 @@
 """Refresh derived rider flags in the caller's namespace transaction."""
+from datetime import date
+
 from sqlalchemy import text
+
+
+PCS_IDENTITY_RESET = {
+    'pcs_identity_status': 'unknown',
+    'pcs_birth_date': None,
+    'pcs_latest_updated_at': None,
+}
+
+
+def pcs_dob_identity_status(cdb_birth_date, pcs_birth_date):
+    """Compare the CDB's YYYYMMDD value with the date reported by PCS."""
+    try:
+        rider_dob = date.fromisoformat(str(cdb_birth_date))
+    except ValueError:
+        return 'review'
+    return 'verified' if rider_dob == pcs_birth_date else 'review'
 
 
 def refresh_pending_flags(conn, rider_ids=None):

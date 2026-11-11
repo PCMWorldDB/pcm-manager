@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}External Data Integrations - Settings{% endblock %}
+
+{% block styles %}
+    body.dark-mode .external-integrations .bg-light {
+        background: #1f2937 !important;
+        color: #e5e7eb;
+    }
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 external-integrations">
+    <h1 class="h4 mb-3">External Data Integrations</h1>
+    <nav class="nav nav-tabs mb-3" aria-label="External Data Integrations">
+        {% if can_view_groups %}
+        <a class="nav-link{% if tab == 'groups' %} active{% endif %}"
+           {% if tab == 'groups' %}aria-current="page"{% endif %}
+           href="{{ url_for('web.admin_integrations_index') }}">History</a>
+        {% endif %}
+        {% if can_view_manual %}
+        <a class="nav-link{% if tab == 'manual' %} active{% endif %}"
+           {% if tab == 'manual' %}aria-current="page"{% endif %}
+           href="{{ url_for('web.admin_integrations_index', tab='manual') }}">Manual Syncs</a>
+        {% endif %}
+        {% if can_view_scheduler %}
+        <a class="nav-link{% if tab == 'scheduler' %} active{% endif %}"
+           {% if tab == 'scheduler' %}aria-current="page"{% endif %}
+           href="{{ url_for('web.admin_integrations_index', tab='scheduler') }}">Scheduler</a>
+        {% endif %}
+    </nav>
+    {% if tab == 'manual' %}
+        {% include "admin/_manual_external_syncs.html" %}
+    {% elif tab == 'scheduler' %}
+        {% include "admin/_external_sync_scheduler.html" %}
+    {% else %}
+        {% include "admin/_external_call_groups.html" %}
+    {% endif %}
+</div>
+{% endblock %}

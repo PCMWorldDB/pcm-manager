@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from webapp.extensions import db
-from webapp.models import ExternalCallTask, ExternalCallTaskGroup, ExternalSyncAPICallLog, ExternalSyncLog
+from webapp.models import ExternalCallTask, ExternalCallTaskGroup
 from webapp import worker as queue
 from webapp.worker import RetryableFetch, validate_request
 
@@ -18,7 +18,9 @@ def request(provider='pcs', slug='test-rider'):
 
 @pytest.fixture
 def queue_context(app):
-    with app.app_context():
+    with app.app_context(), pytest.MonkeyPatch.context() as patch:
+        # Queue tests use synthetic provider payloads and isolate dispatch/retry state.
+        patch.setattr(queue, 'apply_rider_check', lambda *args: None)
         yield
         db.session.rollback()
         db.session.query(ExternalCallTask).delete()
@@ -33,10 +35,14 @@ def tasks(group):
 
 def test_mixed_group_and_duplicate_delivery(queue_context, monkeypatch):
     calls = []
-    monkeypatch.setattr(queue, 'fetch_profile', lambda provider, params: calls.append(provider) or {'name': 'Rider'})
+    monkeypatch.setattr(queue, 'fetch_profile', lambda provider, target: calls.append((provider, target)) or {'name': 'Rider'})
     group = queue.enqueue_group([request(), request('firstcycling')])
     db.session.commit()
     pcs, fc = tasks(group)
+    assert pcs.max_attempts == 2 and fc.max_attempts == 3
+    assert pcs.request_url == 'https://www.procyclingstats.com/rider/test-rider/road'
+    assert json.loads(pcs.request_params_json) == {'rider_slug': 'test-rider'}
+    assert json.loads(fc.request_params_json) == {'rider_id': 123}
     assert pcs.related_to_id is None and pcs.related_to_table is None
     assert fc.related_to_id is None and fc.related_to_table is None
     assert group.provider is None
@@ -44,9 +50,113 @@ def test_mixed_group_and_duplicate_delivery(queue_context, monkeypatch):
     assert not queue.execute_task(pcs.id)
     assert queue.execute_task(fc.id)
     db.session.refresh(group)
-    assert calls == ['pcs', 'firstcycling']
+    assert calls == [('pcs', pcs.request_url), ('firstcycling', {'rider_id': 123})]
     assert group.status == 'success' and group.synced_count == 2
     assert json.loads(pcs.result_json) == {'name': 'Rider'}
+
+
+def test_legacy_pcs_task_stores_url_when_executed(queue_context, monkeypatch):
+    group = queue.enqueue_group([request()])
+    pcs = tasks(group)[0]
+    pcs.request_url = None
+    pcs.request_params_json = '{"rider_slug": "test-rider"}'
+    db.session.commit()
+
+    def fetch(provider, target):
+        assert provider == 'pcs'
+        assert target == 'https://www.procyclingstats.com/rider/test-rider/road'
+        raise RetryableFetch('rate limited', http_status=429)
+
+    monkeypatch.setattr(queue, 'fetch_profile', fetch)
+    assert queue.execute_task(pcs.id)
+    assert pcs.status == 'retry_wait'
+    assert pcs.request_url == 'https://www.procyclingstats.com/rider/test-rider/road'
+    assert json.loads(pcs.request_params_json) == {'rider_slug': 'test-rider'}
+
+
+def test_pcs_task_with_url_only_still_executes(queue_context, monkeypatch):
+    group = queue.enqueue_group([request(slug='julian-alaphilippe')])
+    pcs = tasks(group)[0]
+    pcs.request_params_json = None
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr(queue, 'fetch_profile', lambda provider, target: calls.append((provider, target)) or {})
+    assert queue.execute_task(pcs.id)
+    assert pcs.status == 'success'
+    assert calls == [('pcs', 'https://www.procyclingstats.com/rider/julian-alaphilippe/road')]
+
+
+def test_pcs_legacy_task_has_only_one_retry(queue_context, monkeypatch):
+    group = queue.enqueue_group([request()])
+    task = tasks(group)[0]
+    task.max_attempts = 3
+    db.session.commit()
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        raise RetryableFetch('rate limited', http_status=429)
+
+    monkeypatch.setattr(queue, 'fetch_profile', fetch)
+    assert queue.execute_task(task.id)
+    assert (task.attempt, task.max_attempts, task.status) == (1, 2, 'retry_wait')
+    task.available_at = datetime.utcnow() - timedelta(seconds=1)
+    task.started_at = datetime.utcnow() - timedelta(minutes=5)
+    db.session.commit()
+    assert queue.execute_task(task.id)
+    assert (task.attempt, task.status, task.http_status) == (2, 'failed', 429)
+    assert task.finished_at is not None
+    assert not queue.execute_task(task.id)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('attempt,http_status', [(2, None), (1, 200)])
+def test_pcs_legacy_task_already_retried_is_finalized_without_fetch(queue_context, monkeypatch, attempt, http_status):
+    group = queue.enqueue_group([request()])
+    task = tasks(group)[0]
+    task.max_attempts, task.attempt, task.status = 3, attempt, 'retry_wait'
+    task.http_status = http_status
+    db.session.commit()
+    monkeypatch.setattr(queue, 'fetch_profile', lambda *args: pytest.fail('Retry limit already reached'))
+    assert queue.execute_task(task.id)
+    assert (task.attempt, task.max_attempts, task.status) == (attempt, 2, 'failed')
+    assert task.finished_at is not None
+    db.session.refresh(group)
+    assert group.status == 'failed' and group.failed_count == 1
+
+
+@pytest.mark.parametrize('provider', ['pcs', 'firstcycling'])
+def test_postprocessing_failure_does_not_retry_pcs_200(queue_context, monkeypatch, provider):
+    group = queue.enqueue_group([request(provider)])
+    task = tasks(group)[0]
+    monkeypatch.setattr(queue, 'fetch_profile', lambda *args: {'profile': {}, 'rows': []})
+
+    def fail_processing(*args):
+        raise RuntimeError('Synthetic processing failure')
+
+    monkeypatch.setattr(queue, 'apply_rider_check', fail_processing)
+    db.session.commit()
+    assert queue.execute_task(task.id)
+    assert task.status == ('failed' if provider == 'pcs' else 'retry_wait')
+    assert task.http_status == (200 if provider == 'pcs' else None)
+    assert (task.finished_at is not None) == (provider == 'pcs')
+    assert 'Could not apply rider check results' in task.error_message
+    assert json.loads(task.result_json) == {'profile': {}, 'rows': []}
+
+
+def test_pcs_parse_failure_records_200_without_retry(queue_context, monkeypatch):
+    group = queue.enqueue_group([request()])
+    task = tasks(group)[0]
+    db.session.commit()
+
+    def fail_fetch(*args):
+        raise queue.ProfileProcessingError('Malformed PCS response', 200)
+
+    monkeypatch.setattr(queue, 'fetch_profile', fail_fetch)
+    assert queue.execute_task(task.id)
+    assert (task.status, task.attempt, task.http_status) == ('failed', 1, 200)
+    assert task.finished_at is not None
+    assert not queue.execute_task(task.id)
 
 
 def test_pcs_global_cooldown_does_not_block_fc(queue_context, monkeypatch):
@@ -91,13 +201,14 @@ def test_pcs_spacing_and_running_gate(queue_context, monkeypatch):
     assert queue.execute_task(second.id)
 
 
-def test_partial_group_and_historical_aliases(queue_context, monkeypatch):
+def test_partial_group_skips_historical_task(queue_context, monkeypatch):
     group = queue.enqueue_group([request('firstcycling'), request()])
-    historical = ExternalSyncAPICallLog(provider='firstcycling', endpoint='old', request_url='redacted', outcome='success', external_sync_log=group)
+    historical = ExternalCallTask(
+        provider='firstcycling', endpoint='old', request_url='redacted', outcome='success', task_group=group,
+    )
     db.session.add(historical)
     db.session.commit()
-    assert ExternalSyncLog is ExternalCallTaskGroup
-    assert historical.external_sync_log_id == group.id
+    assert historical.task_group_id == group.id
     assert not queue.execute_task(historical.id)
     monkeypatch.setattr(queue, 'fetch_profile', lambda *args: {'ok': True})
     first, second = [task for task in tasks(group) if task.status != 'historical']
@@ -118,6 +229,8 @@ def test_validate_before_any_insert(queue_context):
         validate_request('pcs', 'arbitrary_url', {'url': 'http://localhost'})
     with pytest.raises(ValueError):
         validate_request('unknown', 'get_rider_profile', {})
+    with pytest.raises(ValueError):
+        validate_request('pcs', 'get_rider_profile', {'rider_slug': '0'})
 
 
 def test_optional_namespace_context(queue_context, monkeypatch):
@@ -394,3 +507,33 @@ def test_concurrent_publishers_share_low_queue_cap(app, queue_context, monkeypat
     assert len(deliveries) == 1
     db.session.expire_all()
     assert sum(group.is_worker_queued for group in groups) == 1
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_cancellation_during_fetch_stops_pending_work_and_preserves_group_status(app, queue_context, monkeypatch, retry):
+    group = queue.enqueue_group([request('firstcycling'), request('firstcycling')])
+    db.session.commit()
+    group_id = group.id
+    first, pending = tasks(group)
+    first_id, pending_id = first.id, pending.id
+
+    def fetch(*args):
+        # A separate transaction cancels while the worker has an HTTP request in flight.
+        with app.app_context():
+            queue.cancel_external_group(group_id)
+            db.session.commit()
+        if retry:
+            raise RetryableFetch('Synthetic network failure')
+        return {'ok': True}
+
+    monkeypatch.setattr(queue, 'fetch_profile', fetch)
+    assert queue.execute_task(first_id)
+    db.session.expire_all()
+    assert group.status == 'cancelled'
+    assert first.status == ('cancelled' if retry else 'success')
+    assert pending.status == 'cancelled' and pending.attempt == 0
+    assert not queue.execute_task(pending_id)
+    assert not queue.submit_external_group(group_id)
+    queue._refresh_group(group_id)
+    db.session.commit()
+    assert group.status == 'cancelled'

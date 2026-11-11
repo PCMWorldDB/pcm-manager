@@ -6,11 +6,18 @@
             <td>{{ change.before_value if change.before_value is not none else 'Empty' }}</td>
             <td>{{ change.after_value if change.after_value is not none else 'Empty' }}</td>
             <td>{{ change.created_at.strftime('%Y-%m-%d %H:%M:%S') if change.created_at else '-' }} &middot; {{ change.submitted_by }}</td>
-            <td class="text-nowrap">{% if can_approve_attributes %}
+            <td class="text-nowrap">
+                {% if change.stat_list_id is not none %}
+                <a href="{{ url_for('web.bulk_editor', namespace_slug=selected_namespace.slug, tab='editor', list_id=change.stat_list_id) }}">Review list</a>
+                {% endif %}
+                {% if can_approve_attributes and change.can_approve|default(true) %}
                 <div class="d-flex flex-nowrap align-items-center gap-2">
-                {% for action in ('approve', 'reject') %}
+                {% for action in (('reject',) if change.stat_list_id is not none else ('approve', 'reject')) %}
                 <form method="post" class="m-0 flex-shrink-0" action="{{ url_for('web.review_attribute', entity_type=change.entity_type, change_id=change.id, action=action, namespace_slug=selected_namespace.slug) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    {% if return_to_rider %}
+                    <input type="hidden" name="return_to_rider_id" value="{{ change.entity_id }}">
+                    {% endif %}
                     <button class="btn btn-sm {{ 'btn-success' if action == 'approve' else 'btn-outline-danger' }}">{{ action|title }}</button>
                 </form>
                 {% endfor %}

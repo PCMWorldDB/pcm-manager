@@ -1,0 +1,41 @@
+{% macro stat_value_range(value) -%}
+    {%- if value is not none -%}
+        {%- if value <= 65 -%}range-low
+        {%- elif value <= 69 -%}range-decent
+        {%- elif value <= 73 -%}range-good
+        {%- elif value <= 77 -%}range-very-good
+        {%- elif value <= 81 -%}range-excellent
+        {%- else -%}range-elite
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro stat_value_styles() %}
+/* Stat value background color classes */
+.table td.stat-value[class*="range-"] {
+    background-color: var(--stat-bg) !important;
+    box-shadow: inset 0 0 0 9999px var(--stat-bg) !important;
+    color: var(--stat-fg, #000) !important;
+}
+td.stat-value.range-low {
+    --stat-bg: #6c757d;
+    --stat-fg: #fff;
+}
+td.stat-value.range-decent {
+    --stat-bg: var(--brand-primary);
+    --stat-fg: #fff;
+}
+td.stat-value.range-good {
+    --stat-bg: #90ee90;
+}
+td.stat-value.range-very-good {
+    --stat-bg: #ffd700;
+}
+td.stat-value.range-excellent {
+    --stat-bg: #ff8c00;
+}
+td.stat-value.range-elite {
+    --stat-bg: #dc3545;
+    --stat-fg: #fff;
+}
+{% endmacro %}

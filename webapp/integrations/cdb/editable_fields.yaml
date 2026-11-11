@@ -17,6 +17,8 @@ rider:
   - stat_rec
   - stat_att
   - birth_date
+  - pcs_slug
+  - pcs_identity_verified_override
 team: []
 # Race has no mapped namespace CDB model yet; keep it read-only.
 race: []

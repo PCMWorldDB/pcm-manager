@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}External Call Task Group #{{ group.id }}{% endblock %}
+
+{% block content %}
+{% set status_colors = {
+    'success': 'bg-success', 'partial': 'bg-warning text-dark', 'failed': 'bg-danger',
+    'running': 'bg-info text-dark', 'retry_wait': 'bg-warning text-dark'
+} %}
+<div class="container mt-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <a href="{{ url_for('web.admin_integrations_index') }}">Back to History</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('web.external_call_group_detail', group_id=group.id) }}">Refresh</a>
+    </div>
+    <section class="card mb-3" aria-labelledby="group-heading">
+        <div class="card-body">
+            <h1 id="group-heading" class="h4">External Call Task Group #{{ group.id }}</h1>
+            <p class="mb-3">
+                {{ sync_type_label or 'External Calls' }}
+                <span class="badge {{ status_colors.get(group.status, 'bg-secondary') }}">{{ group.status|replace('_', ' ')|capitalize }}</span>
+            </p>
+            {% if group.message %}<p>{{ group.message }}</p>{% endif %}
+            <dl class="row mb-0">
+                {% if group.scheduled_job %}
+                <dt class="col-sm-3">Scheduled Job</dt>
+                <dd class="col-sm-9">{{ group.scheduled_job.name }}</dd>
+                {% endif %}
+                <dt class="col-sm-3">Created (UTC)</dt>
+                <dd class="col-sm-9">{{ group.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+                <dt class="col-sm-3">Executed By</dt>
+                <dd class="col-sm-9">{{ group.executed_by.username if group.executed_by else 'System' }}</dd>
+                <dt class="col-sm-3">Namespace</dt>
+                <dd class="col-sm-9">{{ group.namespace.name if group.namespace else 'Global' }}</dd>
+                {% if group.provider %}
+                <dt class="col-sm-3">Provider</dt>
+                <dd class="col-sm-9">{{ group.provider }}</dd>
+                {% endif %}
+                <dt class="col-sm-3">Season</dt>
+                <dd class="col-sm-9">{{ group.season_year if group.season_year is not none else '—' }}{% if group.gender %} [{{ group.gender }}]{% endif %}</dd>
+                <dt class="col-sm-3">Origin</dt>
+                <dd class="col-sm-9">{{ group.origin|capitalize }}</dd>
+                <dt class="col-sm-3">Priority</dt>
+                <dd class="col-sm-9">{{ group.priority|capitalize }}</dd>
+                {% if details.get('start_date') and details.get('end_date') %}
+                <dt class="col-sm-3">Date Range</dt>
+                <dd class="col-sm-9">{{ details.start_date }} to {{ details.end_date }}</dd>
+                {% endif %}
+                {% for label, count in [('Requested', group.requested_count), ('Synced', group.synced_count), ('Failed', group.failed_count)] %}
+                <dt class="col-sm-3">{{ label }}</dt>
+                <dd class="col-sm-9">{{ count if count is not none else '—' }}</dd>
+                {% endfor %}
+                {% for key, label in [('skipped', 'Skipped'), ('rows_synced', 'Result Rows Synced'), ('applied_mode', 'Applied Mode'), ('limit', 'Record Limit')] %}
+                    {% if key in details %}
+                    <dt class="col-sm-3">{{ label }}</dt>
+                    <dd class="col-sm-9">{{ details[key] if details[key] is not none else '—' }}</dd>
+                    {% endif %}
+                {% endfor %}
+            </dl>
+        </div>
+    </section>
+
+    <section class="card" aria-labelledby="tasks-heading">
+        <div class="card-body">
+            <h2 id="tasks-heading" class="h5">Tasks ({{ tasks|length }})</h2>
+            {% if tasks %}
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th scope="col">ID</th>
+                            <th scope="col">Provider</th>
+                            <th scope="col">Endpoint</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Outcome</th>
+                            <th scope="col">Attempt</th>
+                            <th scope="col">HTTP Status</th>
+                            <th scope="col">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in tasks %}
+                        <tr>
+                            <th scope="row"><a href="{{ url_for('web.external_call_task_detail', group_id=group.id, task_id=task.id) }}">{{ task.id }}</a></th>
+                            <td>{{ task.provider }}</td>
+                            <td><code>{{ task.endpoint }}</code></td>
+                            <td><span class="badge {{ status_colors.get(task.status, 'bg-secondary') }}">{{ task.status|replace('_', ' ')|capitalize }}</span></td>
+                            <td>
+                                {{ task.outcome|replace('_', ' ')|capitalize if task.outcome else '—' }}
+                                {% if task.error_type %}<div class="small text-muted">{{ task.error_type }}</div>{% endif %}
+                            </td>
+                            <td>{{ task.attempt }} / {{ task.max_attempts }}</td>
+                            <td>{{ task.http_status if task.http_status is not none else '—' }}</td>
+                            <td>{{ (task.duration_ms ~ ' ms') if task.duration_ms is not none else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">No task items have been recorded for this group.</p>
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock %}

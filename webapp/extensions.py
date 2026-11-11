@@ -68,6 +68,11 @@ def init_extensions(app):
             'task': 'webapp.tasks.poll_external_calls',
             'schedule': app.config['EXTERNAL_CALL_POLL_SECONDS'],
         },
+        'poll-external-sync-schedules': {
+            'task': 'webapp.tasks.poll_external_sync_schedules',
+            'schedule': 60,
+            'options': {'expires': 60},
+        },
         'poll-activity-monitor-schedules': {
             'task': 'webapp.tasks.poll_activity_monitor_schedules',
             'schedule': app.config['ACTIVITY_MONITOR_POLL_SECONDS'],

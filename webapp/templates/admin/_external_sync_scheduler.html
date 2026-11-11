@@ -1,0 +1,180 @@
+{% from "admin/_integration_season_fields.html" import season_fields %}
+{% set creating_job = show_job_form and not editing %}
+<nav class="nav nav-tabs nav-subtabs mb-3" aria-label="Scheduler views">
+    <a class="nav-link{% if not creating_job %} active{% endif %}"
+       {% if not creating_job %}aria-current="page"{% endif %}
+       href="{{ url_for('web.admin_integrations_index', tab='scheduler') }}">Job</a>
+    {% if editable_job_types %}
+    <a class="nav-link{% if creating_job %} active{% endif %}"
+       {% if creating_job %}aria-current="page"{% endif %}
+       href="{{ url_for('web.admin_integrations_index', tab='scheduler', new=1) }}">Create New Job</a>
+    {% endif %}
+</nav>
+<p class="text-muted">Daily run times and relative dates use {{ scheduler_timezone }}.</p>
+
+{% if show_job_form %}
+<section class="card mb-3" aria-labelledby="job-form-heading">
+    <div class="card-body">
+        <h2 class="h5" id="job-form-heading">{{ 'Edit ' ~ editing.name if editing else 'New Scheduled Job' }}</h2>
+        <form method="get" action="{{ url_for('web.admin_integrations_index') }}" class="row g-2 align-items-end mb-3">
+            <input type="hidden" name="tab" value="scheduler">
+            {% if editing %}
+            <input type="hidden" name="job_id" value="{{ editing.id }}">
+            <div class="col-auto"><span class="fw-semibold">{{ job_types[job_type] }}</span></div>
+            {% else %}
+            <input type="hidden" name="new" value="1">
+            <div class="col-auto">
+                <label for="new-job-type" class="form-label">Job Type</label>
+                <select id="new-job-type" name="job_type" class="form-select form-select-sm" onchange="this.form.submit()">
+                    {% for kind, label in job_types.items() %}
+                    <option value="{{ kind }}" {% if kind == job_type %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+            {% if job_type != 'race_results' %}
+                {% if editing %}
+                <div class="col-auto"><span class="text-muted">{{ job_namespace.name }}</span></div>
+                {% else %}
+                <div class="col-auto">
+                    <label for="new-job-namespace" class="form-label">Namespace</label>
+                    <select id="new-job-namespace" name="namespace_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">Select a namespace</option>
+                        {% for ns in namespaces %}
+                        <option value="{{ ns.id }}" {% if job_namespace and ns.id == job_namespace.id %}selected{% endif %}>{{ ns.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+                {% if job_namespace and job_type == 'rider_activity_check' %}
+                <div class="col-auto">
+                    <label for="job-rider-search" class="form-label">Find Rider</label>
+                    <input id="job-rider-search" name="rider_search" class="form-control form-control-sm"
+                           value="{{ rider_search }}" maxlength="120" placeholder="Name or PCS slug">
+                </div>
+                {% endif %}
+            {% endif %}
+            {% if not editing or job_type != 'race_results' %}
+            <div class="col-auto">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Find Riders' if job_namespace and job_type == 'rider_activity_check' else 'Load Fields' }}</button>
+            </div>
+            {% endif %}
+        </form>
+
+        <form method="post" action="{{ url_for('web.save_external_sync_schedule') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="job_type" value="{{ job_type }}">
+            {% if editing %}<input type="hidden" name="job_id" value="{{ editing.id }}">{% endif %}
+            {% if job_namespace %}<input type="hidden" name="namespace_id" value="{{ job_namespace.id }}">{% endif %}
+            <fieldset {% if not can_update_schedule %}disabled{% endif %}>
+                <div class="row g-2 align-items-end mb-3">
+                    <div class="col-6 col-md-3 col-lg">
+                        <label for="job-name" class="form-label">Job Name</label>
+                        <input id="job-name" name="name" class="form-control form-control-sm"
+                               value="{{ editing.name if editing else '' }}" maxlength="120" required>
+                    </div>
+                    <div class="col-6 col-md-3 col-lg">
+                        <label for="job-time" class="form-label">Daily Run Time</label>
+                        <input type="time" id="job-time" name="run_at" class="form-control form-control-sm"
+                               value="{{ editing.run_at.strftime('%H:%M') if editing else '08:00' }}" required>
+                    </div>
+                    {% if job_type == 'race_results' %}
+                        {{ season_fields(configured_seasons, selected_season, 'scheduler-fc', compact=true) }}
+                        {% for field, label, default in [('start_days_ago', 'Relative Start', 1), ('end_days_ago', 'Relative End', 0)] %}
+                        <div class="col-6 col-md-3 col-lg">
+                            <label for="job-{{ field }}" class="form-label">{{ label }}</label>
+                            <select id="job-{{ field }}" name="{{ field }}" class="form-select form-select-sm">
+                                {% for days in range(31) %}
+                                <option value="{{ days }}" {% if job_params.get(field, default) == days %}selected{% endif %}>
+                                    {{ 'Today' if days == 0 else 'Yesterday' if days == 1 else days ~ ' days ago' }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% endfor %}
+                    {% elif job_type == 'rider_identity_check' %}
+                        <div class="col-6 col-md-3 col-lg">
+                            <label for="job-riders-per-run" class="form-label">Riders per Task Group</label>
+                            <input type="number" id="job-riders-per-run" name="riders_per_run" class="form-control form-control-sm"
+                                   value="{{ job_params.get('riders_per_run', 100) }}" min="1" max="1000" required>
+                        </div>
+                        <div class="col-6 col-md-3 col-lg">
+                            <label for="job-min_days_since_check" class="form-label">Days Since Check</label>
+                            <input type="number" id="job-min_days_since_check" name="min_days_since_check" class="form-control form-control-sm"
+                                   value="{{ job_params.get('min_days_since_check', 0) }}" min="0" max="365" required>
+                        </div>
+                    {% else %}
+                        <div class="col-6 col-md-3 col-lg">
+                            <label for="job-rider" class="form-label">Linked Rider</label>
+                            <select id="job-rider" name="rider_id" class="form-select form-select-sm" required>
+                                <option value="">{{ 'Select a rider' if job_namespace else 'Select a namespace first' }}</option>
+                                {% for rider in rider_choices %}
+                                <option value="{{ rider.id }}" {% if job_params.get('rider_id') == rider.id %}selected{% endif %}>
+                                    {{ rider.first_last_name or ([rider.first_name, rider.last_name]|select|join(' ')) or rider.pcs_slug }} ({{ rider.pcs_slug }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% set lookbacks = [('min_days_since_check', 'Days Since Check')] %}
+                        {% if job_type == 'rider_activity_check' %}
+                            {% set lookbacks = lookbacks + [('recent_activity_days', 'Recent Results Days')] %}
+                        {% endif %}
+                        {% for field, label in lookbacks %}
+                        <div class="col-6 col-md-3 col-lg">
+                            <label for="job-{{ field }}" class="form-label">{{ label }}</label>
+                            <input type="number" id="job-{{ field }}" name="{{ field }}" class="form-control form-control-sm"
+                                   value="{{ job_params.get(field, 0) }}" min="0" max="365" required>
+                        </div>
+                        {% endfor %}
+                    {% endif %}
+                    <div class="col-6 col-md-3 col-lg-auto">
+                        <div class="form-check mb-1">
+                            <input type="checkbox" id="job-enabled" name="enabled" value="1" class="form-check-input"
+                                   {% if editing and editing.enabled %}checked{% endif %}>
+                            <label for="job-enabled" class="form-check-label">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+                {% if job_type == 'rider_identity_check' %}
+                <p class="text-muted small">Checks the first eligible riders with unknown PCS identity status, ordered by rider ID.</p>
+                {% elif job_type == 'rider_activity_check' %}
+                <p class="text-muted small">Choose a rider with a PCS slug and a FirstCycling ID. Search by name or slug to narrow the list.</p>
+                {% endif %}
+                {% set ready = configured_seasons if job_type == 'race_results' else (job_namespace if job_type == 'rider_identity_check' else rider_choices) %}
+                <button type="submit" name="action" value="save" class="btn btn-sm btn-primary" {% if not ready %}disabled{% endif %}>Save Job</button>
+                <button type="submit" name="action" value="run_now" class="btn btn-sm btn-outline-primary" {% if not ready %}disabled{% endif %}>Run Now</button>
+                {% if editing and editing.enabled %}
+                <button type="submit" name="action" value="disable" class="btn btn-sm btn-outline-secondary" formnovalidate>Disable</button>
+                {% endif %}
+                <a class="btn btn-sm btn-link" href="{{ url_for('web.admin_integrations_index', tab='scheduler') }}">Cancel</a>
+            </fieldset>
+        </form>
+    </div>
+</section>
+{% endif %}
+
+{% if not creating_job and jobs %}
+<div class="table-responsive">
+    <table class="table table-sm align-middle">
+        <thead><tr>
+            <th scope="col">Name</th><th scope="col">Type</th><th scope="col">Namespace</th>
+            <th scope="col">Daily Time</th><th scope="col">Status</th><th scope="col">Last Scheduled</th><th scope="col">Actions</th>
+        </tr></thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr>
+                <th scope="row">{{ job.name }}</th>
+                <td>{{ job_types[job.job_type] }}</td>
+                <td>{{ job.namespace.name if job.namespace else 'Global' }}</td>
+                <td>{{ job.run_at.strftime('%H:%M') }}</td>
+                <td>{{ 'Enabled' if job.enabled else 'Disabled' }}</td>
+                <td>{{ job.last_run_on or '—' }}</td>
+                <td><a href="{{ url_for('web.admin_integrations_index', tab='scheduler', job_id=job.id) }}">{{ 'Edit' if job.job_type in editable_job_types else 'Open' }}</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% elif not creating_job %}
+<p class="alert alert-info">No scheduled jobs have been created.</p>
+{% endif %}

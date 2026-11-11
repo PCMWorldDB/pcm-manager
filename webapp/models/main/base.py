@@ -136,10 +136,35 @@ class AuditAction:
     USER_ROLE_REMOVED = 'user_role_removed'
     NAMESPACE_CREATED = 'namespace_created'
     NAMESPACE_UPDATED = 'namespace_updated'
+    FIELD_CONFIGURATION_UPDATED = 'field_configuration_updated'
+    FIELD_PERMISSION_UPDATED = 'field_permission_updated'
     NAMESPACE_DELETED = 'namespace_deleted'
     NAMESPACE_PROVISIONED = 'namespace_provisioned'
     NAMESPACE_CDB_IMPORTED = 'namespace_cdb_imported'
     NAMESPACE_STATUS_CHANGED = 'namespace_status_changed'
+
+
+class ScheduledJob(MainDBModel):
+    """Named, independently scheduled external data job."""
+
+    __tablename__ = 'scheduled_jobs'
+
+    name = db.Column(db.String(120), nullable=False)
+    job_type = db.Column(db.String(32), nullable=False)
+    namespace_id = db.Column(db.Integer, db.ForeignKey('namespaces.id'), index=True)
+    namespace = db.relationship('Namespace')
+    params = db.Column(db.JSON, nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=False)
+    run_at = db.Column(db.Time, nullable=False)
+    last_run_on = db.Column(db.Date)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "(job_type = 'race_results' AND namespace_id IS NULL) OR "
+            "(job_type IN ('rider_identity_check', 'rider_activity_check') AND namespace_id IS NOT NULL)",
+            name='ck_scheduled_job_scope',
+        ),
+    )
 
 
 class ExternalCallTaskGroup(MainDBModel):
@@ -149,6 +174,8 @@ class ExternalCallTaskGroup(MainDBModel):
     namespace_id = db.Column(db.Integer, db.ForeignKey('namespaces.id', ondelete='SET NULL'),
                              nullable=True, index=True)
     namespace = db.relationship('Namespace', foreign_keys=[namespace_id])
+    scheduled_job_id = db.Column(db.Integer, db.ForeignKey('scheduled_jobs.id', ondelete='SET NULL'), index=True)
+    scheduled_job = db.relationship('ScheduledJob')
 
     # Compatibility metadata for old FC sync screens; queue groups have no provider.
     provider = db.Column(db.String(50), nullable=True, index=True)
@@ -219,8 +246,6 @@ class ExternalCallTask(MainDBModel):
     error_message = db.Column(db.Text, nullable=True)
 
     task_group = db.relationship('ExternalCallTaskGroup', foreign_keys=[task_group_id])
-    external_sync_log_id = db.synonym('task_group_id')
-    external_sync_log = db.synonym('task_group')
 
     __table_args__ = (
         Index('ix_external_call_task_related_record',
@@ -232,8 +257,3 @@ class ExternalCallTask(MainDBModel):
             f'<ExternalCallTask provider={self.provider} endpoint={self.endpoint} '
             f'outcome={self.outcome} http_status={self.http_status}>'
         )
-
-
-# Existing FC routes and audit readers continue to use the renamed tables.
-ExternalSyncLog = ExternalCallTaskGroup
-ExternalSyncAPICallLog = ExternalCallTask

@@ -8,21 +8,33 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from webapp.integrations.cdb import get_field_mapping
-from webapp.models.ns.cdb import Country, Division, Region, Rider, Team
+from webapp.integrations.cdb.field_configuration import import_mapping, stored_fields
+from webapp.integrations.cdb.rider_state import PCS_IDENTITY_RESET
+from webapp.integrations.pcs.slug import assumed_rider_slug
+from webapp.models.ns.cdb import Country, Division, Race, RaceClass, Region, Rider, Stage, Team
 
 
 MODELS = (('country', Country), ('division', Division), ('region', Region),
-          ('team', Team), ('rider', Rider))
+          ('team', Team), ('race_class', RaceClass), ('race', Race), ('stage', Stage),
+          ('rider', Rider))
 
 
-def build_plan(sqlite, connection, pcm_version, table_types=None):
+def _rider_pcs_slug(first_name, last_name):
+    """Generate an unverified PCS identifier from the rider's name."""
+    return assumed_rider_slug(first_name, last_name)
+
+
+def build_plan(sqlite, connection, pcm_version, table_types=None, *, lock_configuration=False):
     plan = {'tables': {}, 'errors': [], 'changes': []}
     operations = []
     state = []
+    mappings = {}
+    configuration = stored_fields(connection, lock=lock_configuration)
     for kind, model in MODELS:
         if table_types is not None and kind not in table_types:
             continue
-        mapping = get_field_mapping(pcm_version, kind)
+        mapping = import_mapping(get_field_mapping(pcm_version, kind), kind, configuration)
+        mappings[kind] = mapping
         fields = mapping['mappings']
         table = model.__table__
         existing = ({row['id']: dict(row) for row in connection.execute(select(table)).mappings()}
@@ -31,13 +43,17 @@ def build_plan(sqlite, connection, pcm_version, table_types=None):
         counts = dict(inserted=0, updated=0, deleted=0, preserved=0)
         plan['tables'][kind] = counts
         quote = lambda name: '"' + name.replace('"', '""') + '"'
-        available = {row[1] for row in sqlite.execute(
+        available = {row[1].casefold() for row in sqlite.execute(
             f'PRAGMA table_info({quote(mapping["cdb_table_name"])})'
         )}
-        missing = {config['source'] for config in fields.values()} - available
+        missing = {config['source'] for config in fields.values()
+                   if config.get('required', True) and config['source'].casefold() not in available}
         if missing:
             raise sqlite3.OperationalError(f'{kind}: missing CDB columns: {", ".join(sorted(missing))}')
-        columns = ', '.join(quote(config['source']) for config in fields.values())
+        columns = ', '.join(
+            quote(config['source']) if config['source'].casefold() in available else 'NULL'
+            for config in fields.values()
+        )
         rows = sqlite.execute(
             f'SELECT {columns} FROM {quote(mapping["cdb_table_name"])} '
             f'ORDER BY {quote(fields["id"]["source"])}'
@@ -51,7 +67,11 @@ def build_plan(sqlite, connection, pcm_version, table_types=None):
                     if target_type is int and isinstance(value, float) and not value.is_integer():
                         raise ValueError(f'{kind}.{field}: expected an integer')
                     value = bool(int(value)) if target_type is bool else target_type(value)
-                    if target_type is str and len(value) > table.c[field].type.length:
+                    if kind == 'rider' and field == 'pcs_slug':
+                        value = value.strip()
+                        value = None if value in ('', '0') else value
+                    max_length = getattr(table.c[field].type, 'length', None)
+                    if target_type is str and value is not None and max_length is not None and len(value) > max_length:
                         raise ValueError(f'{kind}.{field}: value is too long')
                 incoming[field] = value
             key = incoming['id']
@@ -83,6 +103,25 @@ def build_plan(sqlite, connection, pcm_version, table_types=None):
                     values[field] = value
                 elif action == 'preserved':
                     counts['preserved'] += 1
+            if (kind == 'rider' and 'pcs_slug' in incoming and incoming['pcs_slug'] is None
+                    and (old is None or fields['pcs_slug']['policy'] == 'overwrite')
+                    and (old is None or (not old['is_deleted'] and (old['pcs_slug'] or '').strip() in ('', '0')))):
+                effective = {**(old or {}), **values}
+                slug = _rider_pcs_slug(effective.get('first_name'), effective.get('last_name'))
+                if slug:
+                    values['pcs_slug'] = slug
+                    if old is None:
+                        incoming['pcs_slug'] = slug
+                    else:
+                        plan['changes'].append(dict(table=kind, id=key, field='pcs_slug',
+                                                    old=old['pcs_slug'], new=slug, action='overwrite'))
+            if kind == 'rider' and old is not None and 'pcs_slug' in values:
+                reset = {**PCS_IDENTITY_RESET, 'pcs_identity_verified_override': False}
+                for field, value in reset.items():
+                    if old[field] != value:
+                        values[field] = value
+                        plan['changes'].append(dict(table=kind, id=key, field=field,
+                                                    old=old[field], new=value, action='overwrite'))
             if old is None:
                 counts['inserted'] += 1
                 values['is_deleted'] = False
@@ -99,7 +138,7 @@ def build_plan(sqlite, connection, pcm_version, table_types=None):
                 plan['changes'].append(dict(table=kind, id=key, field='is_deleted',
                                             old=False, new=True, action='soft_delete'))
     # Includes current rows and policies, so confirmation rejects stale reviews.
-    payload = (plan, state, [get_field_mapping(pcm_version, kind) for kind, _ in MODELS])
+    payload = (plan, state, mappings)
     plan['fingerprint'] = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     return plan, operations
 
@@ -178,7 +217,8 @@ class CDBImporter:
             raise ValueError('CDB table and namespace model do not match')
         with self.pg_engine.begin() as connection:
             connection.execute(text(f'LOCK TABLE {model_class.__tablename__} IN EXCLUSIVE MODE'))
-            plan, operations = build_plan(self.sqlite_conn, connection, self.pcm_version, {table_type})
+            plan, operations = build_plan(self.sqlite_conn, connection, self.pcm_version, {table_type},
+                                          lock_configuration=True)
             if plan['errors']:
                 raise ValueError('; '.join(plan['errors'][:20]))
             apply_plan(connection, operations)
@@ -210,6 +250,18 @@ class CDBImporter:
         """Import division lookup table from SQLite to PostgreSQL."""
         return self.import_mapped_table('division', Division, batch_size=batch_size)
 
+    def import_race_classes(self, batch_size=1000):
+        """Import race categories from SQLite to PostgreSQL."""
+        return self.import_mapped_table('race_class', RaceClass, batch_size=batch_size)
+
+    def import_races(self, batch_size=1000):
+        """Import race definitions from SQLite to PostgreSQL."""
+        return self.import_mapped_table('race', Race, batch_size=batch_size)
+
+    def import_stages(self, batch_size=1000):
+        """Import stage calendar entries from SQLite to PostgreSQL."""
+        return self.import_mapped_table('stage', Stage, batch_size=batch_size)
+
     def import_regions(self, batch_size=1000):
         """Import region lookup table from SQLite to PostgreSQL."""
         return self.import_mapped_table(
@@ -229,7 +281,8 @@ class CDBImporter:
             # Also prevents app writes between comparison and application.
             tables = ', '.join(model.__tablename__ for _, model in MODELS)
             connection.execute(text(f'LOCK TABLE {tables} IN EXCLUSIVE MODE'))
-            plan, operations = build_plan(self.sqlite_conn, connection, self.pcm_version)
+            plan, operations = build_plan(self.sqlite_conn, connection, self.pcm_version,
+                                          lock_configuration=True)
             if expected_fingerprint and plan['fingerprint'] != expected_fingerprint:
                 raise ValueError('Import review is stale. Analyze the file again.')
             if plan['errors']:

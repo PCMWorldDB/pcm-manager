@@ -19,7 +19,7 @@ def test_pcs_profile_fetch(monkeypatch):
             assert timeout == 30
             return BytesIO(html)
     monkeypatch.setattr(providers, 'build_opener', lambda *args: Opener())
-    result = providers.fetch_profile('pcs', {'rider_slug': 'test-rider'})
+    result = providers.fetch_profile('pcs', 'https://www.procyclingstats.com/rider/test-rider/road')
     assert result['profile']['canonical_slug'] == 'test-rider'
     assert result['rows'][0]['result'] == 'DNF'
     assert result['rows'][0]['year'] == 2025
@@ -32,10 +32,40 @@ def test_pcs_retry_after(monkeypatch, code):
             raise HTTPError(req.full_url, code, 'busy', {'Retry-After': '180'}, None)
     monkeypatch.setattr(providers, 'build_opener', lambda *args: Opener())
     with pytest.raises(providers.RetryableFetch) as error:
-        providers.fetch_profile('pcs', {'rider_slug': 'test-rider'})
+        providers.fetch_profile('pcs', 'https://www.procyclingstats.com/rider/test-rider/road')
     assert error.value.delay == 180 and error.value.http_status == code
     future = datetime.now(timezone.utc) + timedelta(seconds=180)
     assert 175 <= providers.retry_after(format_datetime(future)) <= 180
+
+
+def test_pcs_fetch_rejects_noncanonical_url(monkeypatch):
+    monkeypatch.setattr(providers, 'build_opener', lambda *args: pytest.fail('must reject URL before fetching'))
+    with pytest.raises(ValueError, match='canonical PCS rider profile URL'):
+        providers.fetch_profile('pcs', 'https://www.procyclingstats.com/rider/../race/road')
+
+
+@pytest.mark.parametrize('phase', ['read', 'parse'])
+def test_pcs_200_processing_errors_are_terminal(monkeypatch, phase):
+    class Response(BytesIO):
+        status = 200
+
+        def read(self, size):
+            if phase == 'read':
+                raise TimeoutError('Read timed out after HTTP 200')
+            return super().read(size)
+
+    class Opener:
+        def open(self, req, timeout):
+            return Response(b'<html></html>')
+
+    def fail_parse(html):
+        raise ValueError('Could not parse HTTP 200 response')
+
+    monkeypatch.setattr(providers, 'build_opener', lambda *args: Opener())
+    monkeypatch.setattr(providers, 'parse_pcs_profile', fail_parse)
+    with pytest.raises(providers.ProfileProcessingError) as error:
+        providers.fetch_profile('pcs', 'https://www.procyclingstats.com/rider/test-rider/road')
+    assert error.value.http_status == 200
 
 
 def test_fc_uses_no_pcs_delay_or_internal_retries(monkeypatch):

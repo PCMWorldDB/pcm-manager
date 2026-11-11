@@ -1,0 +1,56 @@
+{% from "admin/_integration_season_fields.html" import season_fields %}
+{% set is_pcs = active_sync_view == 'pcs_rider' %}
+<nav class="nav nav-tabs nav-subtabs mb-3" aria-label="Manual sync types">
+    {% for sync_type, label in manual_types.items() %}
+    <a class="nav-link{% if active_sync_view == sync_type %} active{% endif %}"
+       {% if active_sync_view == sync_type %}aria-current="page"{% endif %}
+       href="{{ url_for('web.admin_integrations_index', tab='manual', sync_view=sync_type) }}">{{ label }}</a>
+    {% endfor %}
+</nav>
+
+<h2 class="h5">{{ manual_types[active_sync_view] }}</h2>
+{% if is_pcs or configured_seasons %}
+<form method="post" action="{{ url_for('web.admin_integrations_run') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="provider" value="{{ 'pcs' if is_pcs else 'firstcycling' }}">
+    <input type="hidden" name="sync_type" value="{{ active_sync_view }}">
+    <div class="row g-3 mb-3">
+        {% if is_pcs %}
+        <div class="col-md-6">
+            <label for="pcs-rider-slug" class="form-label">PCS Rider Slug</label>
+            <input id="pcs-rider-slug" name="rider_slug" class="form-control" value="{{ rider_slug }}"
+                   placeholder="jane-doe" maxlength="255" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required>
+            <div class="form-text">Enter the part of the PCS profile URL after /rider/.</div>
+        </div>
+        {% else %}
+            {{ season_fields(configured_seasons, selected_season, 'manual') }}
+            {% if active_sync_view == 'fc_race_results' %}
+            <div class="col-sm-6 col-lg-3">
+                <label for="manual-start-date" class="form-label">Start Date</label>
+                <input type="date" id="manual-start-date" name="start_date" class="form-control" value="{{ selected_start_date }}" required>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+                <label for="manual-end-date" class="form-label">End Date</label>
+                <input type="date" id="manual-end-date" name="end_date" class="form-control" value="{{ selected_end_date }}" required>
+            </div>
+            {% elif active_sync_view in ('fc_teams', 'fc_riders') %}
+            <div class="col-sm-6 col-lg-3">
+                <label for="manual-limit" class="form-label">Record Limit (Optional)</label>
+                <input type="number" id="manual-limit" name="limit" class="form-control" value="{{ selected_limit }}" min="1" max="2147483647">
+            </div>
+            {% endif %}
+        {% endif %}
+    </div>
+    {% if active_sync_view == 'fc_race_results' %}
+    <p class="text-muted">Sync race results for races overlapping the selected dates.</p>
+    {% endif %}
+    <button type="submit" class="btn btn-primary" {% if not is_pcs and not can_run_firstcycling_integrations %}disabled{% endif %}>
+        {{ 'Check PCS Rider' if is_pcs else 'Start Sync - ' ~ sync_type_display(active_sync_view) }}
+    </button>
+    {% if not is_pcs and not can_run_firstcycling_integrations %}
+    <p class="text-muted mt-2">You do not have permission to run FirstCycling syncs.</p>
+    {% endif %}
+</form>
+{% else %}
+<p class="alert alert-warning">No FirstCycling seasons are configured.</p>
+{% endif %}

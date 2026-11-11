@@ -1,8 +1,10 @@
 {% extends "base.html" %}
+{% from '_stat_value.html' import stat_value_range, stat_value_styles %}
 
 {% block title %}{{ 'Riders' if active_method == 'riders' else 'Teams' }} - WDB{% endblock %}
 
 {% block styles %}
+    {{ stat_value_styles() }}
     .teams-table {
         table-layout: fixed;
         width: 100%;
@@ -31,6 +33,9 @@
         width: 100%;
         min-width: 1300px;
     }
+    .riders-table-attributes {
+        min-width: 1050px;
+    }
     .riders-table-wrapper {
         max-width: 100%;
         overflow-x: auto;
@@ -48,6 +53,22 @@
     }
     .riders-table .col-country {
         width: 130px;
+    }
+    .riders-table .col-select {
+        width: 40px;
+    }
+    .rider-selection-cell {
+        cursor: pointer;
+        text-align: center;
+        touch-action: none;
+        user-select: none;
+    }
+    .rider-selection-cell input {
+        margin: 0;
+        pointer-events: none;
+    }
+    .riders-table tr.rider-selected > td {
+        box-shadow: inset 0 0 0 9999px rgba(13, 110, 253, .18);
     }
     .riders-table .col-stat {
         width: 48px;
@@ -173,9 +194,8 @@
 </div>
 {% elif active_method == 'riders' %}
 <div class="d-flex align-items-center gap-3 flex-wrap mb-3">
-    <span class="fw-semibold" id="rider-view-label">View</span>
-    <nav class="nav nav-pills nav-subtabs" aria-labelledby="rider-view-label">
-        {% for view, label in [('stats', 'Stats'), ('activity', 'Activity')] %}
+    <nav class="nav nav-pills nav-subtabs" aria-label="Rider views">
+        {% for view, label in rider_views.items() %}
         {% if view != 'activity' or can_view_activity %}
         <form method="post" action="{{ url_for('web.riders') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -233,7 +253,7 @@
                         </div>
                         <div><label for="stat-min" class="form-label">Minimum</label><input id="stat-min" name="stat_min" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_min }}"></div>
                         <div><label for="stat-max" class="form-label">Maximum</label><input id="stat-max" name="stat_max" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_max }}"></div>
-                        {% else %}
+                        {% elif rider_filters.view == 'activity' %}
                         <div>
                             <label for="activity-status" class="form-label">Activity</label>
                             <select id="activity-status" name="activity_status" class="form-select">
@@ -265,9 +285,42 @@
         </div>
 
         {% if riders %}
+        {% set can_create_stat_list = rider_filters.view == 'stats' and can_start_stat_list %}
+        {% set can_open_attribute_editor = rider_filters.view == 'attributes' and can_create_rider_list and can_bulk_edit_attributes %}
+        {% set check_type = {'activity': 'rider_activity_check', 'attributes': 'rider_identity_check'}.get(rider_filters.view) %}
+        {% set check_label = rider_task_types.get(check_type) %}
+        {% set can_select_riders = can_create_stat_list or can_open_attribute_editor or check_label %}
+        {% if can_select_riders %}
+        <form method="post" id="rider-selection-form"
+              data-storage-key="riders-selection:{{ current_user.id }}:{{ selected_namespace.id }}:{{ rider_filters.view }}"
+              data-filters="{{ [rider_filters.q, rider_filters.country, rider_filters.division, rider_filters.team,
+                               rider_filters.stat_key, rider_filters.stat_min, rider_filters.stat_max,
+                               rider_filters.activity_status]|tojson|forceescape }}"
+              data-limit="{{ rider_selection_limit }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="rider_ids">
+            <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+                <span class="small text-muted" role="status"><span id="rider-selection-count">0</span> selected · maximum {{ rider_selection_limit }}</span>
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="clear-rider-selection" disabled>Deselect all</button>
+                {% if can_create_stat_list or can_open_attribute_editor %}
+                <button class="btn btn-primary btn-sm" type="submit" name="list_type"
+                        value="{{ 'stat' if can_create_stat_list else 'attribute' }}"
+                        formaction="{{ url_for('web.stats_editor_create_list', namespace_slug=selected_namespace.slug) }}" disabled>
+                    {{ 'Create Stat List' if can_create_stat_list else 'Bulk Edit Attributes' }}
+                </button>
+                {% endif %}
+                {% if check_label %}
+                <button class="btn btn-primary btn-sm" type="submit" name="sync_type" value="{{ check_type }}"
+                        formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>
+                    Create {{ check_label }} Group
+                </button>
+                {% endif %}
+            </div>
+        {% endif %}
         <div class="table-wrapper riders-table-wrapper">
-            <table class="table table-sm table-hover align-middle mb-0 riders-table">
+            <table class="table table-sm table-hover align-middle mb-0 riders-table{% if rider_filters.view == 'attributes' %} riders-table-attributes{% endif %}">
                 <colgroup>
+                    {% if can_select_riders %}<col class="col-select">{% endif %}
                     <col class="col-rider">
                     <col class="col-team">
                     <col class="col-country">
@@ -279,19 +332,29 @@
                 </colgroup>
                 <thead>
                     <tr>
+                        {% if can_select_riders %}<th scope="col"><span class="visually-hidden">Select</span></th>{% endif %}
                         <th>Name</th>
                         <th>Team</th>
                         <th>Country</th>
                         {% if rider_filters.view == 'stats' %}
                         {% for stat in stat_fields %}<th class="col-stat">{{ stat|upper }}</th>{% endfor %}
-                        {% else %}
+                        {% elif rider_filters.view == 'activity' %}
                         <th>Last Race</th><th>Race Date</th><th>Days Since Race</th><th>Last Checked</th><th>Check Status</th>
+                        {% else %}
+                        <th>Rider ID</th><th>FirstCycling ID</th><th>Birth Date</th><th>Height</th><th>Weight</th>
                         {% endif %}
                     </tr>
                 </thead>
                 <tbody>
                     {% for rider in riders %}
                     <tr>
+                        {% if can_select_riders %}
+                        <td class="rider-selection-cell">
+                            <input class="form-check-input rider-select" type="checkbox" value="{{ rider.rider_id }}"
+                                   aria-label="Select {{ rider.name or ('Rider #' ~ rider.rider_id) }}"
+                                   {% if rider.is_deleted or rider.rider_id <= 0 %}disabled{% endif %}>
+                        </td>
+                        {% endif %}
                         <td class="text-truncate-cell">
                             <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}">
                                 {{ rider.name or ('Rider #' ~ rider.rider_id) }}
@@ -308,19 +371,33 @@
                         </td>
                         <td>{{ rider.nation_name or '-' }}</td>
                         {% if rider_filters.view == 'stats' %}
-                        {% for stat in stat_fields %}<td class="rider-stat">{{ rider_stats_map[rider.rider_id][stat] if rider_stats_map[rider.rider_id][stat] is not none else '-' }}</td>{% endfor %}
-                        {% else %}
+                        {% for stat in stat_fields %}
+                        {% set value = rider_stats_map[rider.rider_id][stat] %}
+                        <td class="rider-stat stat-value {{ stat_value_range(value) }}">{{ value if value is not none else '-' }}</td>
+                        {% endfor %}
+                        {% elif rider_filters.view == 'activity' %}
                         <td>{{ rider.latest_race_name or '-' }}</td>
                         <td>{{ rider.latest_result_date or '-' }}</td>
                         <td>{{ rider.days_since_last_race if rider.days_since_last_race is not none else '-' }}</td>
                         <td>{{ rider.latest_check_at|activity_datetime if rider.latest_check_at else '-' }}</td>
                         <td>{{ rider.latest_check_status|activity_check_status if rider.latest_check_status else ('History unavailable' if rider.activity_available == false else 'Awaiting check' if rider.monitor_id else 'Not monitored') }}</td>
+                        {% else %}
+                        <td>{{ rider.rider_id }}</td>
+                        <td>{{ rider.first_cycling_id or '-' }}</td>
+                        <td>{{ rider.birth_date_display or '-' }}</td>
+                        <td>{{ (rider.size_cm ~ ' cm') if rider.size_cm is not none else '-' }}</td>
+                        <td>{{ (rider.weight_kg ~ ' kg') if rider.weight_kg is not none else '-' }}</td>
                         {% endif %}
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        {% if can_select_riders %}
+        </form>
+        <script defer src="{{ url_for('static', filename='js/rider_drag_selection.js') }}"></script>
+        <script defer src="{{ url_for('static', filename='js/rider_selection.js') }}"></script>
+        {% endif %}
 
         {% if rider_pagination.total_pages > 1 %}
         <nav class="mt-3" aria-label="Rider result pages">

@@ -228,6 +228,7 @@
                 <button class="btn btn-primary btn-sm" type="submit">Start checks</button>
             </div>
         </div>
+        <script src="{{ url_for('static', filename='js/rider_drag_selection.js') }}"></script>
         <script>
         (() => {
             const form = document.getElementById('activity-rider-selection');
@@ -311,7 +312,6 @@
                 openButton.disabled = selectedIds.size !== 1 || chosenBoxes.length !== 1;
                 openButton.dataset.href = openButton.disabled ? '' : chosenBoxes[0].dataset.detailUrl;
             };
-            const eligibleBoxes = boxes.filter((box) => !box.disabled);
             boxes.forEach((box) => box.addEventListener('change', () => {
                 if (box.checked) {
                     if (selectedIds.size < maxSelected) selectedIds.add(box.value);
@@ -320,40 +320,16 @@
                 saveSelection();
             }));
 
-            let drag = null;
-            const applyRange = (endBox) => {
-                if (!drag || !endBox) return;
-                const start = eligibleBoxes.indexOf(drag.anchor);
-                const end = eligibleBoxes.indexOf(endBox);
-                if (start < 0 || end < 0) return;
-                const next = new Set(drag.base);
-                const range = eligibleBoxes.slice(Math.min(start, end), Math.max(start, end) + 1);
-                if (drag.remove) range.forEach((box) => next.delete(box.value));
-                else {
-                    for (const box of range) {
-                        if (next.has(box.value)) continue;
-                        if (next.size >= maxSelected) break;
-                        next.add(box.value);
-                    }
-                }
-                selectedIds = next;
-                saveSelection();
-            };
-            form.addEventListener('pointerdown', (event) => {
-                if (event.button !== 0 || !event.target.closest('.activity-rider-selection-cell')) return;
-                const box = event.target.closest('.activity-rider-selection-cell')?.querySelector('.activity-rider-select');
-                if (!box || box.disabled) return;
-                event.preventDefault();
-                drag = { anchor: box, base: new Set(selectedIds), remove: selectedIds.has(box.value) };
-                applyRange(box);
+            bindRiderDragSelection(form, {
+                cellSelector: '.activity-rider-selection-cell',
+                boxes,
+                maxSelected,
+                getSelection: () => selectedIds,
+                setSelection: (ids) => {
+                    selectedIds = ids;
+                    saveSelection();
+                },
             });
-            document.addEventListener('pointermove', (event) => {
-                if (!drag || !(event.buttons & 1)) return;
-                const row = document.elementFromPoint(event.clientX, event.clientY)?.closest('tr[data-rider-id]');
-                const box = row?.querySelector('.activity-rider-select');
-                if (box && !box.disabled) { event.preventDefault(); applyRange(box); }
-            });
-            document.addEventListener('pointerup', () => { drag = null; });
             form.addEventListener('click', (event) => {
                 if (event.detail > 0 && event.target.closest('.activity-rider-select')) event.preventDefault();
             });

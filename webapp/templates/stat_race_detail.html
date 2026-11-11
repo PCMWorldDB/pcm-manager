@@ -181,7 +181,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
                 {% if selected_stage %}
             <a
                 class="race-title-link"
-                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}">
+                href="{{ url_for('web.race_detail', race_id=race.race_id) }}">
                 {{ race.name or 'Race Detail' }}
             </a>
             {% else %}
@@ -215,7 +215,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
     </div>
     <div class="page-header-actions">
         <div>
-            <form method="post" action="{{ url_for('web.stats_editor_get_result', race_id=race.race_id) }}" class="d-inline-block get-result-form">
+            <form method="post" action="{{ url_for('web.race_get_result', race_id=race.race_id) }}" class="d-inline-block get-result-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 {% if selected_stage %}
                 <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
@@ -316,7 +316,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
                         </td>
                         <td>
                             <a
-                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id, stage_id=stage.id) }}#stage-selection"
+                                href="{{ url_for('web.race_detail', race_id=race.race_id, stage_id=stage.id) }}#stage-selection"
                                 class="text-decoration-none">
                                 Stage {{ stage.stage_number or '?' }} - {{ (stage.stage_start_location or '-') ~ ' to ' ~ (stage.stage_end_location or '-') }}
                             </a>
@@ -342,7 +342,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
                         </td>
                         <td>
                             <a
-                                href="{{ url_for('web.stats_editor_race_detail', race_id=race.race_id) }}#stage-selection"
+                                href="{{ url_for('web.race_detail', race_id=race.race_id) }}#stage-selection"
                                 class="text-decoration-none">
                                 Overall result
                             </a>
@@ -371,7 +371,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
             <div class="d-flex align-items-center gap-2 ms-3">
                 <span class="text-muted" id="save-stat-delta-hint">No changes yet.</span>
                 {% if can_update_stats %}
-                <form method="post" action="{{ url_for('web.stats_editor_save_stat_deltas', race_id=race.race_id) }}" id="stat-delta-form" class="mb-0">
+                <form method="post" action="{{ url_for('web.race_save_stat_deltas', race_id=race.race_id) }}" id="stat-delta-form" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     {% if selected_stage %}
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
@@ -380,14 +380,14 @@ body.dark-mode .stat-input-row.has-stat-delta {
                     <button type="submit" class="btn btn-primary" id="save-stat-delta-btn" disabled>Save{% if not can_update_stats %} &#128274;{% endif %}</button>
                 </form>
                 {% if not selected_stage %}
-                <form method="post" action="{{ url_for('web.stats_editor_submit_for_approval', race_id=race.race_id) }}" class="mb-0">
+                <form method="post" action="{{ url_for('web.race_submit_for_approval', race_id=race.race_id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-success" {% if not selected_namespace or not scope_delta_status.unapproved_changes %}disabled{% endif %}>Submit for Approval</button>
                 </form>
                 {% endif %}
                 {% endif %}
                 {% if can_approve_stats %}
-                <form method="post" action="{{ url_for('web.stats_editor_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
+                <form method="post" action="{{ url_for('web.race_approve_stat_deltas', race_id=race.race_id) }}" class="mb-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     {% if selected_stage %}
                     <input type="hidden" name="stage_id" value="{{ selected_stage.id }}">
@@ -565,7 +565,7 @@ body.dark-mode .stat-input-row.has-stat-delta {
                                     min="50"
                                     max="85"
                                     step="1"
-                                    {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields %}disabled title="Editing locked"{% endif %}>
+                                    {% if not can_update_stats or ('stat_' ~ stat_key) not in editable_rider_fields or stat_key in row.get('locked_stats', ()) %}disabled title="Editing locked"{% endif %}>
                             </div>
                             {% else %}
                             -

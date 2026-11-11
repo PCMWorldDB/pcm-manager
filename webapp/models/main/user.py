@@ -106,7 +106,7 @@ class User(UserMixin, MainDBModel):
             if isinstance(permission, str):
                 if ':' not in permission:
                     return False
-                resource, action = permission.split(':', 1)
+                resource, action = permission.rsplit(':', 1)
                 normalized_permissions.append((resource, action))
             else:
                 normalized_permissions.append(tuple(permission))

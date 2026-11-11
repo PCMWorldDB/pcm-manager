@@ -1,6 +1,7 @@
 """Idempotent synchronization for RBAC metadata."""
 
 from webapp.extensions import db
+from webapp.integrations.cdb.field_configuration import field_slugs
 from webapp.models import Action, Resource, Role, RolePermission
 
 
@@ -29,6 +30,16 @@ ROLES = [
         'name': 'stat_editor_approver',
         'display_name': 'Stat Editor Approver',
         'description': 'Can approve rider/team/race statistics edits',
+    },
+    {
+        'name': 'database_editor',
+        'display_name': 'Database Editor',
+        'description': 'Can edit configured object fields except rider statistics',
+    },
+    {
+        'name': 'database_maintainer',
+        'display_name': 'Database Maintainer',
+        'description': 'Can edit and approve configured object fields, including rider statistics',
     },
     {
         'name': 'user_manager',
@@ -95,6 +106,11 @@ RESOURCES = [
         'supported_actions': ['create', 'read', 'update', 'delete', 'approve', 'publish', 'download', 'export'],
     },
     {
+        'name': 'integrations-external-calls',
+        'description': 'Review external calls, run PCS rider checks, and manage schedules',
+        'supported_actions': ['read', 'download', 'update'],
+    },
+    {
         'name': 'integrations-firstcycling',
         'description': 'FirstCycling integration settings and syncs',
         'supported_actions': ['read', 'download'],
@@ -105,6 +121,25 @@ RESOURCES = [
         'supported_actions': ['read', 'update'],
     },
 ]
+
+
+FIELD_RESOURCES = [
+    {'name': slug, 'description': f'Object field {slug}', 'supported_actions': ['update', 'approve']}
+    for slug in field_slugs()
+]
+
+
+def _initial_field_actions(role_name, slug):
+    if role_name in ('admin', 'database_maintainer'):
+        return ('update', 'approve')
+    if role_name == 'database_editor' and slug != 'rider:stat':
+        return ('update',)
+    if slug == 'rider:stat':
+        if role_name == 'stat_editor':
+            return ('update',)
+        if role_name == 'stat_editor_approver':
+            return ('approve',)
+    return ()
 
 
 ACTIONS = [
@@ -131,6 +166,7 @@ ROLE_PERMISSIONS = {
         'teams': ['create', 'read', 'delete'],
         'stats': ['create', 'read', 'update', 'delete', 'approve', 'download'],
         'releases': ['create', 'read', 'update', 'delete', 'approve', 'publish', 'download', 'export'],
+        'integrations-external-calls': ['read', 'download', 'update'],
         'integrations-firstcycling': ['read', 'download'],
         'integrations-discord': ['read', 'update'],
     },
@@ -168,6 +204,14 @@ ROLE_PERMISSIONS = {
         'stats': ['read', 'approve'],
         'releases': ['read', 'download'],
     },
+    'database_editor': {
+        'teams': ['read'],
+        'stats': ['read'],
+    },
+    'database_maintainer': {
+        'teams': ['read'],
+        'stats': ['create', 'read', 'update', 'approve'],
+    },
     'user_manager': {
         'users': ['create', 'read', 'update'],
         'roles': ['read'],
@@ -175,6 +219,7 @@ ROLE_PERMISSIONS = {
     'integrations_manager': {
         'users': ['read'],
         'roles': ['read'],
+        'integrations-external-calls': ['read', 'download', 'update'],
         'integrations-firstcycling': ['read', 'download'],
         'integrations-discord': ['read', 'update'],
     },
@@ -268,8 +313,9 @@ def _sync_role_permissions(roles, resources, actions, log):
         for permission in existing_permissions
     }
 
+    field_resource_ids = {resources[resource['name']].id for resource in FIELD_RESOURCES}
     for permission_key, permission in existing_by_key.items():
-        if permission_key not in desired_keys:
+        if permission_key not in desired_keys and permission.resource_id not in field_resource_ids:
             db.session.delete(permission)
             log(
                 f'  Revoked {permission.role.name}: '
@@ -294,7 +340,7 @@ def _sync_role_permissions(roles, resources, actions, log):
 def _supported_actions_by_resource():
     return {
         resource['name']: set(resource['supported_actions'])
-        for resource in RESOURCES
+        for resource in RESOURCES + FIELD_RESOURCES
     }
 
 
@@ -328,12 +374,13 @@ def sync_rbac_metadata(log=None):
     _validate_role_permissions()
 
     configured_role_names = {role['name'] for role in ROLES}
-    configured_resource_names = {resource['name'] for resource in RESOURCES}
+    configured_resource_names = {resource['name'] for resource in RESOURCES + FIELD_RESOURCES}
     _prune_permissions_for_removed_metadata(configured_role_names, configured_resource_names, log)
     _prune_rows(Role, 'name', configured_role_names, 'role', log)
     _prune_rows(Resource, 'name', configured_resource_names, 'resource', log)
     db.session.flush()
 
+    new_role_names = configured_role_names - {name for name, in db.session.query(Role.name)}
     roles = _sync_rows(
         Role,
         ROLES,
@@ -342,9 +389,12 @@ def sync_rbac_metadata(log=None):
         label='role',
         log=log,
     )
+    new_field_names = {resource['name'] for resource in FIELD_RESOURCES} - {
+        name for name, in db.session.query(Resource.name)
+    }
     resources = _sync_rows(
         Resource,
-        RESOURCES,
+        RESOURCES + FIELD_RESOURCES,
         lookup_field='name',
         update_fields=('description',),
         label='resource',
@@ -360,8 +410,16 @@ def sync_rbac_metadata(log=None):
         log=log,
     )
 
-    db.session.commit()
+    db.session.flush()
     _sync_role_permissions(roles, resources, actions, log)
+    for slug in field_slugs():
+        for role_name in roles:
+            if slug not in new_field_names and role_name not in new_role_names:
+                continue
+            for action in _initial_field_actions(role_name, slug):
+                db.session.add(RolePermission(
+                    role_id=roles[role_name].id, resource_id=resources[slug].id, action_id=actions[action].id,
+                ))
 
     db.session.commit()
     log('RBAC metadata synchronized successfully!')

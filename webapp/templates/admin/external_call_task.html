@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}External Call Task #{{ task.id }}{% endblock %}
+
+{% block styles %}
+    .task-json { background: #f8f9fa; color: #212529; border: 1px solid #dee2e6; white-space: pre-wrap; overflow-wrap: anywhere; }
+    body.dark-mode .task-json { background: #1f2937; color: #f9fafb; border-color: #4b5563; }
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <a href="{{ url_for('web.external_call_group_detail', group_id=group.id) }}">Back to Task Group #{{ group.id }}</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('web.external_call_task_detail', group_id=group.id, task_id=task.id) }}">Refresh</a>
+    </div>
+    <section class="card">
+        <div class="card-body">
+            <h1 class="h4">External Call Task #{{ task.id }}</h1>
+            <dl class="row mb-0">
+                {% for label, value in [
+                    ('Task Group', group.id), ('Status', task.status), ('Outcome', task.outcome), ('Provider', task.provider),
+                    ('Endpoint', task.endpoint), ('Attempt', task.attempt ~ ' / ' ~ task.max_attempts),
+                    ('Related Record', (task.related_to_table ~ ' #' ~ task.related_to_id) if task.related_to_table and task.related_to_id is not none else none),
+                    ('Request URL', task.request_url), ('HTTP Status', task.http_status),
+                    ('Duration', (task.duration_ms ~ ' ms') if task.duration_ms is not none else none),
+                    ('Response Bytes', task.response_bytes), ('Error Type', task.error_type),
+                    ('Error Message', task.error_message),
+                    ('Created (UTC)', task.created_at), ('Updated (UTC)', task.updated_at),
+                    ('Available (UTC)', task.available_at), ('Started (UTC)', task.started_at),
+                    ('Finished (UTC)', task.finished_at)
+                ] %}
+                <dt class="col-sm-3">{{ label }}</dt>
+                <dd class="col-sm-9 text-break">
+                    {% if label == 'Related Record' and related_record_url %}
+                    <a class="text-reset text-decoration-underline" href="{{ related_record_url }}">{{ related_record_name or value }}</a>
+                    {% else %}
+                    {{ value if value is not none else '—' }}
+                    {% endif %}
+                </dd>
+                {% endfor %}
+            </dl>
+            <h2 class="h6 mt-3">Request Parameters</h2>
+            <pre class="task-json p-3 rounded">{{ request_params if request_params is not none else '—' }}</pre>
+            <h2 class="h6 mt-3">Result</h2>
+            <pre class="task-json p-3 rounded">{{ result if result is not none else '—' }}</pre>
+        </div>
+    </section>
+</div>
+{% endblock %}
