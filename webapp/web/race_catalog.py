@@ -4,7 +4,7 @@ from datetime import date
 from types import SimpleNamespace
 
 
-def unified_races(cdb_races, fc_races, identities):
+def unified_races(cdb_races, fc_races, identities, pcs_races=()):
     """One row per known identity, retaining unmatched and conflicting CDB rows.
 
     WDBO IDs must never be joined directly to arbitrary namespace-local IDs.
@@ -22,6 +22,7 @@ def unified_races(cdb_races, fc_races, identities):
             cdb_id=None, firstcycling_id=identity.firstcycling_id if identity else None,
             pcs_slug=identity.pcs_slug if identity else None,
             identity_id=identity.id if identity else None, mapping_conflict=False,
+            pcs_race=False,
             search_names=[identity.pcs_slug] if identity and identity.pcs_slug else [],
         )
 
@@ -39,6 +40,18 @@ def unified_races(cdb_races, fc_races, identities):
         row.id = race.id
         row.firstcycling_id = race.race_id
         row.search_names.append(race.name or '')
+        rows[key] = row
+
+    for race in pcs_races:
+        identity = by_pcs.get(race.race_slug)
+        key = f'identity_{identity.id}' if identity else f'pcs_{race.race_slug}'
+        row = rows.get(key) or empty(key, identity)
+        if row.race_id is None:
+            for name in ('name', 'classification', 'nation_name', 'start_date', 'end_date', 'stage_count'):
+                setattr(row, name, getattr(race, name))
+        row.pcs_slug = race.race_slug
+        row.pcs_race = True
+        row.search_names.append(race.name)
         rows[key] = row
 
     targets = []
@@ -67,7 +80,7 @@ def unified_races(cdb_races, fc_races, identities):
         row.cdb_id = race['id']
         row.search_names.append(race['race_name'] or '')
         row.mapping_conflict = conflict
-        row.name = (race['race_name'] or row.name) if row.race_id is None else row.name
+        row.name = (race['race_name'] or row.name) if row.race_id is None and not row.pcs_race else row.name
         row.name = row.name or f"CDB race #{race['id']}"
         row.stage_count = row.stage_count if row.stage_count is not None else race['number_stages']
         row.firstcycling_id = row.firstcycling_id or race['first_cycling_id'] or None

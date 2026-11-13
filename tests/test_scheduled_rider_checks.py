@@ -547,10 +547,8 @@ def test_rider_page_queues_only_one_pcs_task_in_selected_namespace(app, namespac
         page = request(profile_url)
         assert page.status_code == 200
         markup = BeautifulSoup(page.data, 'html.parser')
-        check_button = markup.select_one('#rider-identity-title + form button[aria-label="Check PCS identity"]')
-        assert check_button and check_button.get_text(strip=True) == 'Check'
-        assert 'btn-success' in check_button.get('class', [])
-        assert check_button.find_parent('form')['action'] == check_url
+        assert not markup.select('#rider-identity form[action$="/check-identity"]')
+        assert not markup.select('#rider-data-actions form')  # No FC link for a combined fetch.
         assert not BeautifulSoup(request(f'/n/{second.slug}/riders/2').data, 'html.parser').select(
             '#rider-identity button[aria-label="Check PCS identity"]')
         assert request(f'/n/{second.slug}/riders/2/check-identity', method='POST').status_code == 302
@@ -580,6 +578,68 @@ def test_rider_page_queues_only_one_pcs_task_in_selected_namespace(app, namespac
     finally:
         db.session.delete(viewer)
         db.session.delete(admin)
+        db.session.commit()
+
+
+def test_rider_page_fetches_both_providers_in_selected_namespace(app, namespaces, client, monkeypatch):
+    (first, first_engine), (second, engine) = namespaces
+    profile_url = f'/n/{second.slug}/riders/1'
+    fetch_url = f'{profile_url}/fetch-data'
+    user = User(username=uuid4().hex, is_active=True, roles=[Role.query.filter_by(name='admin').one()])
+    db.session.add(user)
+    db.session.commit()
+    submitted = []
+    monkeypatch.setattr(worker, 'submit_external_group', submitted.append)
+
+    def request(path, **kwargs):
+        with app.app_context():
+            return client.open(path, **kwargs)
+
+    try:
+        assert request(fetch_url, method='POST').status_code == 302
+        with client.session_transaction() as session:
+            session['_user_id'] = str(user.id)
+            session['_fresh'] = True
+        for permission in ('_can_check_rider_identity', '_can_run_firstcycling_integrations'):
+            with monkeypatch.context() as patch:
+                patch.setattr(routes, permission, lambda: False)
+                assert request(fetch_url, method='POST').status_code == 403
+                assert not BeautifulSoup(request(profile_url).data, 'html.parser').select('#rider-data-actions form')
+        markup = BeautifulSoup(request(profile_url).data, 'html.parser')
+        buttons = markup.select('#rider-data-actions button')
+        assert [button.get_text(strip=True) for button in buttons] == ['Fetch Data', '']
+        assert buttons[1]['data-bs-target'] == '#rider-debug-modal'
+        assert buttons[0].find_parent('form')['action'] == fetch_url
+        assert not markup.select('#rider-identity form[action$="/check-identity"]')
+        with monkeypatch.context() as patch:
+            patch.setattr(Namespace, 'build_connection_string', lambda self: first_engine.url)
+            assert request(fetch_url, method='POST').status_code == 404
+        with engine.begin() as conn:
+            conn.execute(text('UPDATE rider SET first_cycling_id=NULL WHERE id=1'))
+            conn.execute(text('UPDATE rider SET is_deleted=TRUE WHERE id=3'))
+        assert request(fetch_url, method='POST').status_code == 302
+        assert not BeautifulSoup(request(profile_url).data, 'html.parser').select('#rider-data-actions form')
+        assert request(f'/n/{second.slug}/riders/3/fetch-data', method='POST').status_code == 404
+        assert request(f'/n/{second.slug}/riders/999/fetch-data', method='POST').status_code == 404
+        assert request('/n/missing/riders/1/fetch-data', method='POST').status_code == 404
+        assert not submitted
+        with engine.begin() as conn:
+            conn.execute(text('UPDATE rider SET first_cycling_id=991001 WHERE id=1'))
+        response = request(fetch_url, method='POST', data={'namespace_id': first.id, 'rider_id': 2})
+        assert response.status_code == 302 and response.location == profile_url
+        group = ExternalCallTaskGroup.query.filter_by(executed_by_id=user.id).one()
+        assert submitted == [group.id]
+        assert (group.namespace_id, group.requested_count, group.workflow_type) == (second.id, 2, None)
+        assert group.sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
+        tasks = ExternalCallTask.query.filter_by(task_group_id=group.id).order_by(ExternalCallTask.id).all()
+        assert [(task.provider, task.related_to_table, task.related_to_id) for task in tasks] == [
+            ('pcs', 'rider', 1), ('firstcycling', 'rider', 1),
+        ]
+        assert json.loads(tasks[0].request_params_json) == {'rider_slug': 'b-rider-1'}
+        assert json.loads(tasks[1].request_params_json) == {'rider_id': 991001}
+    finally:
+        db.session.rollback()
+        db.session.delete(user)
         db.session.commit()
 
 

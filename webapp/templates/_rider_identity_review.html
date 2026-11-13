@@ -7,7 +7,7 @@
             <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false">Actions &gt;</button>
             <ul class="dropdown-menu dropdown-menu-end">
                 <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="action" value="run_data_sync"
-                            formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>Bulk Run Data Syncs</button></li>
+                            formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>Fetch Data</button></li>
             </ul>
         </div>
         {% endif %}
@@ -74,8 +74,8 @@
                     <td class="text-nowrap">{{ rider.pcs_birth_date or '—' }}</td>
                     <td>
                         {% set status = 'override' if rider.pcs_identity_verified_override else rider.pcs_identity_status %}
-                        <span class="badge {{ 'text-bg-success' if status in ('verified', 'override') else 'text-bg-danger' if status == 'failed' else 'text-bg-warning' }}">{{ identity_flag_labels.get(status, identity_flag_labels.unknown) }}</span>
-                        {% if not rider.first_cycling_id %}<span class="badge text-bg-warning">Missing FirstCycling ID</span>{% endif %}
+                        <span class="badge {{ 'text-bg-success' if status in ('verified', 'override') else 'text-bg-warning' if status == 'review' else 'text-bg-danger' }}">{{ '🟢' if status in ('verified', 'override') else '🟡' if status == 'review' else '🔴' }} {{ identity_flag_labels.get(status, identity_flag_labels.unknown) }}</span>
+                        {% if not rider.first_cycling_id %}<span class="badge text-bg-danger">🔴 Missing FirstCycling ID</span>{% endif %}
                     </td>
                     <td>
                         <div class="d-flex flex-wrap gap-2">

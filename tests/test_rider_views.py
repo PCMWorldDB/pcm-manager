@@ -164,6 +164,129 @@ def test_rider_debug_tabs_show_only_exact_linked_profiles(app, client, rider_vie
             db.session.commit()
 
 
+@pytest.mark.parametrize('fc_id,status,override,slug,pcs_dob,expected', [
+    (900001, 'verified', False, 'saved-slug', '2000-01-01', '🟢'),
+    (900001, 'unknown', False, 'saved-slug', None, '🔴'),
+    (900001, 'review', False, 'saved-slug', None, '🟡'),
+    (900001, 'verified', False, 'saved-slug', '2001-01-01', '🟡'),
+    (900001, 'verified', False, '0', '2000-01-01', '🔴'),
+    (900001, 'failed', False, 'saved-slug', None, '🔴'),
+    (None, 'verified', False, 'saved-slug', '2000-01-01', '🔴'),
+    (0, 'unknown', False, 'saved-slug', None, '🔴'),
+    (None, 'failed', False, 'saved-slug', None, '🔴'),
+    (900001, 'failed', True, 'saved-slug', None, '🟢'),
+    (None, 'failed', True, 'saved-slug', None, '🔴'),
+])
+def test_rider_profile_overall_identity_flag(client, rider_views, monkeypatch, fc_id, status, override, slug, pcs_dob, expected):
+    _, engines = rider_views
+    monkeypatch.setattr(routes, '_rider_pcs_activity', lambda slug: [
+        ('Days since last race', 10), ('Last PCS sync (UTC)', '2026-11-13 12:00:00'),
+    ])
+    with engines[0].begin() as conn:
+        conn.execute(text('''UPDATE rider SET first_cycling_id=:fc, pcs_identity_status=:status,
+            pcs_identity_verified_override=:override, pcs_slug=:slug, birth_date=20000101,
+            pcs_birth_date=:dob WHERE id=1'''),
+                     dict(fc=fc_id, status=status, override=override, slug=slug, dob=pcs_dob))
+    response = client.get('/n/view-alpha/riders/1')
+    assert response.status_code == 200
+    markup = BeautifulSoup(response.data, 'html.parser')
+    flag = markup.select_one('#rider-name-title #rider-overall-flag')
+    assert flag.get_text(strip=True) == expected
+    assert markup.select_one('#rider-identity-flag').get_text(strip=True) == expected
+    assert flag['role'] == 'img' and flag['tabindex'] == '0' and flag['aria-label']
+    assert not markup.select('#rider-name-title #rider-pending-approval-flag')
+    assert markup.select_one('#rider-identity-title #rider-identity-flag')
+
+
+@pytest.mark.parametrize('days,checked,expected', [
+    (0, True, '🟢'), (199, True, '🟢'), (200, True, '🟡'), (360, True, '🟡'),
+    (361, True, '🔴'), (365, True, '🔴'), (366, True, '🔴'),
+    (None, True, '🔴'), (-1, True, '🔴'), (10, False, '🔴'),
+])
+def test_rider_latest_activity_flags(app, client, rider_views, days, checked, expected):
+    _, engines = rider_views
+    slug = 'activity-flags-' + uuid4().hex
+    with engines[0].begin() as conn:
+        conn.execute(text('''UPDATE rider SET first_cycling_id=900001, pcs_slug=:slug,
+            birth_date=20000101, pcs_birth_date='2000-01-01', pcs_identity_status='verified' WHERE id=1'''),
+                     {'slug': slug})
+    if checked:
+        with app.app_context():
+            profile = PcsRider(
+                rider_slug=slug, profile_url=f'https://www.procyclingstats.com/rider/{slug}',
+                latest_participation_date=date.today() - timedelta(days=days) if days is not None else None,
+                last_synced_at=datetime.utcnow(),
+            )
+            db.session.add(profile)
+            db.session.commit()
+    try:
+        response = client.get('/n/view-alpha/riders/1')
+        assert response.status_code == 200
+        markup = BeautifulSoup(response.data, 'html.parser')
+        assert markup.select_one('#rider-results-summary-title').get_text(strip=True) == 'Latest Activity' + expected
+        flag = markup.select_one('#rider-activity-flag')
+        assert flag['role'] == 'img' and flag['tabindex'] == '0' and flag['aria-label']
+        assert markup.select_one('#rider-overall-flag').get_text(strip=True) == expected
+        assert markup.select_one('#rider-identity-flag').get_text(strip=True) == '🟢'
+        beta = BeautifulSoup(client.get('/n/view-beta/riders/1').data, 'html.parser')
+        assert beta.select_one('#rider-activity-flag').get_text(strip=True) == '🔴'
+    finally:
+        with app.app_context():
+            PcsRider.query.filter_by(rider_slug=slug).delete()
+            db.session.commit()
+
+
+@pytest.mark.parametrize('identity,days,expected', [
+    ('verified', 10, '🟢'), ('verified', 200, '🟡'), ('verified', 361, '🔴'),
+    ('review', 10, '🟡'), ('review', 200, '🟡'), ('review', 361, '🔴'),
+    ('unknown', 10, '🔴'), ('unknown', 200, '🔴'), ('unknown', 361, '🔴'),
+])
+def test_rider_overall_flag_combines_identity_and_activity(client, rider_views, monkeypatch, identity, days, expected):
+    _, engines = rider_views
+    with engines[0].begin() as conn:
+        conn.execute(text('''UPDATE rider SET first_cycling_id=900001, pcs_slug='saved-slug',
+            birth_date=20000101, pcs_identity_status=:status, pcs_birth_date=:dob WHERE id=1'''),
+                     {'status': identity, 'dob': '2000-01-01' if identity == 'verified' else '2001-01-01'})
+    monkeypatch.setattr(routes, '_rider_pcs_activity', lambda slug: [
+        ('Days since last race', days), ('Last PCS sync (UTC)', '2026-11-13 12:00:00'),
+    ])
+    markup = BeautifulSoup(client.get('/n/view-alpha/riders/1').data, 'html.parser')
+    assert markup.select_one('#rider-overall-flag').get_text(strip=True) == expected
+
+
+def test_rider_profile_pending_approval_flag_is_namespace_scoped(client, rider_views):
+    _, engines = rider_views
+
+    def pending(slug, rider_id=1):
+        response = client.get(f'/n/view-{slug}/riders/{rider_id}')
+        assert response.status_code == 200
+        return BeautifulSoup(response.data, 'html.parser').select_one('#rider-name-title #rider-pending-approval-flag')
+
+    assert pending('alpha') is None
+    with engines[0].begin() as conn:
+        conn.execute(text('''INSERT INTO stat_changes
+            (rider_id,stat_list_id,stat_name,original_value,final_value,delta_value,is_confilict_override,is_approved)
+            VALUES (1,123,'mo',70,71,1,FALSE,FALSE)'''))
+    assert pending('alpha').get_text(strip=True) == '⏳'
+    assert pending('beta') is None
+    assert pending('alpha', 2) is None
+    with engines[0].begin() as conn:
+        conn.execute(text('UPDATE stat_changes SET is_approved=TRUE'))
+    assert pending('alpha') is None
+    with engines[0].begin() as conn:
+        conn.execute(text('''INSERT INTO cdb_changes
+            (entity_type,entity_id,attribute_name,operation,source,status)
+            VALUES ('rider',1,'weight_kg','update','attribute_editor','pending')'''))
+    assert pending('alpha').get_text(strip=True) == '⏳'
+    assert pending('beta') is None
+    with engines[0].begin() as conn:
+        conn.execute(text("UPDATE cdb_changes SET status='rejected'"))
+    assert pending('alpha') is None
+    with engines[0].begin() as conn:
+        conn.execute(text("UPDATE cdb_changes SET status='approved', applied_at=NOW()"))
+    assert pending('alpha') is None
+
+
 def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
     _, engines = rider_views
     with engines[0].begin() as conn:
@@ -208,7 +331,8 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
 
     def flags(markup):
         return [(flag.get_text(strip=True), flag['aria-label'])
-                for flag in markup.select('[aria-label="Rider flags"] .rider-flag[role="img"][tabindex="0"]')]
+                for flag in (markup.select('#rider-pcs-identifier .rider-flag[role="img"][tabindex="0"]')
+                             + markup.select('#rider-firstcycling-identifier .rider-flag[role="img"][tabindex="0"]'))]
 
     def pcs_slug(markup):
         label = markup.select_one('#rider-identifiers').find(class_='object-attribute-label', string='PCS')
@@ -221,7 +345,7 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
     try:
         alpha = profile('alpha', 1)
         assert not alpha.find('a', string='Shared identities')
-        assert alpha.select_one('h2').get_text(strip=True) == 'Alice Smith'
+        assert alpha.select_one('#rider-name-title > span').get_text(strip=True) == 'Alice Smith'
         assert pcs_slug(alpha) == 'alice-smith'
         identity = alpha.select_one('#rider-identity')
         assert [label.get_text(strip=True) for label in identity.select('.object-attribute-label')] == [
@@ -235,12 +359,12 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
         assert not identifiers.select('#rider-firstcycling-identifier .rider-flag')
         assert identity.select('.object-attribute-value')[0].get_text(strip=True) == 'Needs review'
         assert identity.select('.object-attribute-value')[2].get_text(strip=True) == 'No'
-        assert identity.select_one('#rider-identity-title [aria-label="Rider flags"] .rider-flag')
+        assert identity.select_one('#rider-identity-title #rider-identity-flag')
         assert pcs_dob(alpha) == '2001-01-01'
         assert not alpha.select('#rider-attributes [aria-label="Edit PCS Identity Verified Override"]')
         assert alpha.select_one('#rider-attributes .object-attribute-label').get_text(strip=True) == 'Team'
         assert not alpha.select('#rider-attributes .rider-flag')
-        assert flags(alpha) == [('⚠️', 'PCS identity needs review. A birth date is missing or the dates differ.')]
+        assert flags(alpha) == [('🟡', 'PCS identity needs review. A birth date is missing or the dates differ.')]
         columns = alpha.select('#rider-details .row > .col-12')
         assert [column['id'] for column in columns] == ['rider-attributes', 'rider-identity', 'rider-results-summary']
         assert [label.get_text(strip=True) for label in identifiers.select('.object-attribute-label')] == [
@@ -270,7 +394,7 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
         assert 'active' in alpha.select_one('#rider-review')['class']
         assert 'active' not in alpha.select_one('#rider-results')['class']
         assert [heading.find(string=True, recursive=False).strip() for heading in alpha.select('section[id^="rider-"] h3')][:4] == [
-            'Attributes', 'Identity', 'Activity', 'Stats',
+            'Attributes', 'Identity', 'Latest Activity', 'Stats',
         ]
         result_rows = []
         for row in alpha.select('#rider-results > .card-body > .table-responsive > table > tbody > tr'):
@@ -298,13 +422,13 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
         )
         assert not alpha_unlinked.select('#rider-firstcycling-identifier a')
         assert flags(alpha_unlinked) == [
-            ('❌', 'PCS identity error. The check failed.'), ('🆔', 'Missing FirstCycling ID'),
+            ('🔴', 'PCS identity error. The check failed.'), ('🔴', 'Missing FirstCycling ID'),
         ]
         beta_unlinked = profile('beta', 1)
         assert pcs_slug(beta_unlinked) == 'view-beta-rider'
         assert pcs_dob(beta_unlinked) == 'Unknown'
         assert flags(beta_unlinked) == [
-            ('⚠️', 'PCS identity unknown. No check result is recorded.'), ('🆔', 'Missing FirstCycling ID'),
+            ('🔴', 'PCS identity unknown. No check result is recorded.'), ('🔴', 'Missing FirstCycling ID'),
         ]
         assert 'No FirstCycling ID' in beta_unlinked.select_one('#rider-results').get_text()
         assert not beta_unlinked.select('#rider-results tbody tr')
@@ -314,15 +438,15 @@ def test_rider_profile_flags_and_firstcycling_results(app, client, rider_views):
         )
         assert pcs_slug(beta_linked) == 'saved-slug'
         assert pcs_dob(beta_linked) == '2000-01-01'
-        assert flags(beta_linked) == [('✅', 'PCS identity verified. DOB matches.')]
+        assert flags(beta_linked) == [('🟢', 'PCS identity verified. DOB matches.')]
 
         with engines[0].begin() as conn:
             conn.execute(text('UPDATE rider SET birth_date=20010101 WHERE id=1'))
-        assert flags(profile('alpha', 1)) == [('✅', 'PCS identity verified. DOB matches.')]
+        assert flags(profile('alpha', 1)) == [('🟢', 'PCS identity verified. DOB matches.')]
 
         with engines[1].begin() as conn:
             conn.execute(text("UPDATE rider SET pcs_identity_status='failed', pcs_identity_verified_override=TRUE WHERE id=2"))
-        assert flags(profile('beta', 2)) == [('✅', 'PCS identity verified by manual override.')]
+        assert flags(profile('beta', 2)) == [('🟢', 'PCS identity verified by manual override.')]
     finally:
         with app.app_context():
             for race_id in race_ids:
@@ -782,7 +906,9 @@ def test_rider_selection_creates_lists_in_the_selected_namespace(app, client, ri
         conn.execute(text("INSERT INTO rider (id, first_name, last_name, is_deleted) VALUES (3, 'Deleted', 'Rider', TRUE)"))
 
     markup = BeautifulSoup(client.get(path).data, 'html.parser')
-    assert markup.select_one('button[name="list_type"][value="stat"]')['formaction'] == create_url
+    stat_button = markup.select_one('button[name="list_type"][value="stat"]')
+    assert stat_button['formaction'] == create_url
+    assert stat_button.get_text(strip=True) == 'Edit Stats'
     assert {box['value'] for box in markup.select('.rider-select:not([disabled])')} == {'1', '2'}
     assert markup.select_one('.rider-select[value="3"][disabled]')
 
@@ -807,7 +933,7 @@ def test_rider_selection_creates_lists_in_the_selected_namespace(app, client, ri
     markup = BeautifulSoup(client.get(path).data, 'html.parser')
     assert markup.select_one('button[name="list_type"][value="attribute"]')['formaction'] == create_url
     sync_button = markup.select_one('.dropdown-menu button[value="run_data_sync"]')
-    assert sync_button and sync_button.get_text(strip=True) == 'Bulk Run Data Sync'
+    assert sync_button and sync_button.get_text(strip=True) == 'Fetch Data'
     assert sync_button['form'] == 'rider-selection-form'
     assert markup.select_one('.dropdown-menu button[value="attribute"]')
     assert not markup.select_one('button[value="rider_identity_check"]')
@@ -855,7 +981,7 @@ def test_bulk_data_sync_queues_one_mixed_group_in_selected_namespace(app, client
     assert '70001' in selection['data-storage-key']
     assert {box['value'] for box in selection.select('.rider-select')} == {'1', '2'}
     actions = review.select('.dropdown-menu button')
-    assert [button.get_text(strip=True) for button in actions] == ['Bulk Run Data Syncs']
+    assert [button.get_text(strip=True) for button in actions] == ['Fetch Data']
     assert actions[0]['formaction'] == path
     assert actions[0]['form'] == selection['id'] and actions[0].has_attr('disabled')
     assert not selection.select('form')

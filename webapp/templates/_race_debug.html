@@ -1,0 +1,37 @@
+<div class="modal fade" id="race-debug-modal" tabindex="-1" aria-labelledby="race-debug-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title h5" id="race-debug-title">{{ race.name or 'Race' }} · {{ selected_namespace.slug }}</h3>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <nav class="nav nav-tabs mb-3" role="tablist" aria-label="Race attribute tables">
+                    {% for label in race_debug_sources %}
+                    <button class="nav-link{% if loop.first %} active{% endif %}" id="race-debug-{{ label|lower }}-tab" type="button" role="tab"
+                            data-bs-toggle="tab" data-bs-target="#race-debug-{{ label|lower }}" aria-controls="race-debug-{{ label|lower }}"
+                            aria-selected="{{ 'true' if loop.first else 'false' }}">{{ label }}</button>
+                    {% endfor %}
+                </nav>
+                <div class="tab-content">
+                    {% for label, columns in race_debug_sources.items() %}
+                    <div class="tab-pane fade{% if loop.first %} show active{% endif %}" id="race-debug-{{ label|lower }}" role="tabpanel" aria-labelledby="race-debug-{{ label|lower }}-tab" tabindex="0">
+                        {% if label == 'PCS' %}<p class="text-muted">Linked PCS identity and saved race edition rows.</p>{% endif %}
+                        <table class="table table-sm"{% if loop.first %} id="race-debug-table"{% endif %}>
+                            <thead><tr><th scope="col">Column</th><th scope="col">Value</th></tr></thead>
+                            <tbody>
+                                {% for column, value in columns.items()|sort %}
+                                <tr><th scope="row">{{ column }}</th><td class="text-break"><code>{{ value|tojson }}</code></td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>

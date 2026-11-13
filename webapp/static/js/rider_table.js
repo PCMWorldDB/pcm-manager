@@ -113,8 +113,8 @@
                     const status = r.pcs_identity_verified_override ? 'override' : r.pcs_identity_status;
                     const label = config.identityLabels[status] || config.identityLabels.unknown;
                     const flag = (symbol, title) => `<span class="rider-flag" role="img" aria-label="${escape(title)}" title="${escape(title)}" tabindex="0">${symbol}</span>`;
-                    return flag(({verified: '✅', review: '⚠️', failed: '❌', unknown: '⚠️', override: '✅'})[status] || '⚠️', label)
-                        + (!r.first_cycling_id ? flag('🆔', 'Missing FirstCycling ID') : '');
+                    return flag(({verified: '🟢', review: '🟡', failed: '🔴', unknown: '🔴', override: '🟢'})[status] || '🔴', label)
+                        + (!r.first_cycling_id ? flag('🔴', 'Missing FirstCycling ID') : '');
                 }],
             ],
         };

@@ -298,7 +298,7 @@
                     <ul class="dropdown-menu dropdown-menu-end">
                         {% if can_create_stat_list %}
                         <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="list_type" value="stat"
-                                    formaction="{{ url_for('web.stats_editor_create_list', namespace_slug=selected_namespace.slug) }}" disabled>Create Stat List</button></li>
+                                    formaction="{{ url_for('web.stats_editor_create_list', namespace_slug=selected_namespace.slug) }}" disabled>Edit Stats</button></li>
                         {% endif %}
                         {% if can_open_attribute_editor %}
                         <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="list_type" value="attribute"
@@ -306,7 +306,7 @@
                         {% endif %}
                         {% if can_run_data_sync %}
                         <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="action" value="run_data_sync"
-                                    formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>Bulk Run Data Sync</button></li>
+                                    formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>Fetch Data</button></li>
                         {% endif %}
                     </ul>
                 </div>
@@ -424,9 +424,9 @@
                         <td>{{ rider.birth_date_display or '-' }}</td>
                         <td>
                             {% set status = 'override' if rider.pcs_identity_verified_override else rider.pcs_identity_status %}
-                            {% set symbols = {'verified': '✅', 'review': '⚠️', 'failed': '❌', 'unknown': '⚠️', 'override': '✅'} %}
-                            <span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" title="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" tabindex="0">{{ symbols.get(status, '⚠️') }}</span>
-                            {% if not rider.first_cycling_id %}<span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="Missing FirstCycling ID" title="Missing FirstCycling ID" tabindex="0">🆔</span>{% endif %}
+                            {% set symbols = {'verified': '🟢', 'review': '🟡', 'failed': '🔴', 'unknown': '🔴', 'override': '🟢'} %}
+                            <span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" title="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" tabindex="0">{{ symbols.get(status, '🔴') }}</span>
+                            {% if not rider.first_cycling_id %}<span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="Missing FirstCycling ID" title="Missing FirstCycling ID" tabindex="0">🔴</span>{% endif %}
                         </td>
                         {% else %}
                         <td>{{ rider.birth_date_display or '-' }}</td>

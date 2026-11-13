@@ -140,3 +140,52 @@ target Namespace database must first receive the manual schema update described
 in [`activity_monitor_allow_pcs_without_fc_id.md`](../activity_monitor_allow_pcs_without_fc_id.md).
 New identity-based source keys remain stable within the Namespace and rider
 identity generation; existing FC-based source keys are unchanged.
+
+## Queued race parsing
+
+The `pcs.get_race` worker fetches one bounded HTML response without redirects,
+then calls `race.parse_pcs_race_html`. Landing pages, startlists, flat URLs such
+as `uae-tour-2026-stage-6/results` and `uae-tour-2026-gc`, and slash-separated
+edition URLs resolve to the base `uae-tour` slug and selected season. Explicit
+seasons must match; returned canonical URLs must identify the same race and
+requested result scope. Recognized PCS gender categories must also match.
+
+The parser accepts the supplied HTML without network access:
+
+```python
+from webapp.integrations.pcs.race import parse_pcs_race_html, store_race
+
+payload = parse_pcs_race_html(
+    html, source_url=source_url, year=2026, gender="Men",
+)
+# In an application context and caller-owned transaction:
+summary = store_race(params, payload, namespace_id=namespace.id)
+```
+
+`params` contains `race_slug`, `season_year`, `race_url`, and `gender` (use
+`parse_race_url(source_url, year)` plus gender). The queue supplies its task
+group's namespace ID and commits the race and result writes atomically.
+No namespace CDB records are changed and no new schema changes are required.
+The existing `pcs_races` table must be provisioned as described in
+[pcs_races_main.md](../../../migrations/pcs_races_main.md).
+
+Race-page results upsert `PcsRaceResult` within the supplied namespace, using the
+canonical edition/result URL in its existing `race_name` field as the exact
+scope key and rider name as the row identity. This keeps seasons, GC and stages
+separate without changing the legacy table schema. These queued rows do not
+perform namespace CDB rider matching; the legacy `PcsClient` matcher remains
+available separately. Valid PCS rider links also upsert minimal `PcsRider`
+records and shared `PcsRiderResult` rows without overwriting existing profile
+facts. Repeat parses update existing rows. Stage dates and distances stay in the
+source payload rather than overwriting overall race-edition facts. DNF and DNS
+are retained in shared rider results; GC rows do not confirm participation.
+Startlists and overviews without result rows only update the race. Missing or
+unrecognized result tables on explicit result pages fail the task. No additional
+pages or stages are fetched automatically.
+
+For a single-call offline upsert, use
+`PcsClient(namespace).sync_race_from_html(html=html, source_url=source_url)`.
+It uses the namespace's `database_year` and `gender`; pass `year=2026` to
+explicitly select the season. It commits by default and rolls back failed writes;
+`commit=False` leaves transaction handling to the caller. The legacy
+`sync_race_results_from_html` method retains its CDB matching behavior.

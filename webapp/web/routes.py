@@ -29,6 +29,7 @@ from werkzeug.exceptions import HTTPException, NotFound
 
 from webapp.web import web_bp
 from webapp.web.race_catalog import unified_races, filter_races
+from webapp.web.race_detail import cdb_race_view, merge_race_view, pcs_result_scope
 from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, RIDER_VIEWS, IDENTITY_FILTERS, IDENTITY_REVIEW_FILTERS, DEFAULT_IDENTITY_REVIEW_FLAGS, activity_sql, identity_flag_condition, filter_snapshot
 from webapp.web.forms import (
     AdminPasswordResetForm,
@@ -55,7 +56,8 @@ from webapp.integrations.discord import (
 from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.models.main.firstcycling import FirstCyclingRaceResult, FirstCyclingRaceStage
-from webapp.models.main.pcs import PcsRider
+from webapp.models.main.pcs import PcsRace, PcsRider, PcsRiderResult
+from webapp.integrations.pcs.race import RACE_ENDPOINT as PCS_RACE_ENDPOINT, parse_race_url
 from webapp.integrations.cdb import get_field_mapping
 from webapp.integrations.cdb.editability import get_editable_fields
 from webapp.integrations.cdb import attribute_changes, field_configuration
@@ -72,6 +74,7 @@ from webapp.security import validate_password_policy
 from webapp.worker import create_manual_external_group, run_external_sync_task, run_rider_check_now
 from webapp.worker import run_activity_monitor_run_task
 from webapp.worker import enqueue_group, replace_draft_requests, submit_external_group, cancel_external_group
+from webapp.worker import RACE_RESULTS_ENDPOINT
 from webapp.integrations.activity_monitor_queue import (
     enqueue_activity_monitor_run,
     request_activity_monitor_run_stop,
@@ -501,6 +504,8 @@ EXTERNAL_SYNC_TYPE_LABELS = {
     'fc_teams': 'Teams',
     'fc_riders': 'Riders',
     'fc_race_results': 'Race Results',
+    'firstcycling.get_race_results': 'FC Race Results',
+    'pcs.get_race': 'PCS Race',
     PCS_RIDER_SYNC: 'PCS Rider',
     FC_RIDER_SYNC: 'FC Rider',
     **RIDER_CHECK_JOBS,
@@ -514,6 +519,7 @@ RIDER_BULK_TASK_PROVIDERS = {
     ACTIVITY_CHECK: ('pcs', 'firstcycling'),
 }
 MAX_BULK_TASK_RIDERS = 250
+MAX_BULK_TASK_RACES = 250
 SCHEDULED_JOB_TYPES = {'race_results': 'Race Results', **RIDER_CHECK_JOBS}
 
 
@@ -1351,6 +1357,7 @@ def _namespace_roster_rider_from_row(row):
         pcs_slug=row.get('pcs_slug'),
         is_deleted=row.get('is_deleted', False),
         has_pending_attribute_changes=row.get('has_pending_attribute_changes', False),
+        has_pending_approval=row.get('has_pending_approval', False),
         name=_cdb_rider_display_name(row),
         first_name=row.get('first_name'),
         last_name=row.get('last_name'),
@@ -1895,6 +1902,14 @@ def _load_namespace_roster_rider(namespace, rider_id):
                     SELECT
                         to_jsonb(c) AS debug_columns,
                         c.id AS cyclist_id,
+                        (EXISTS (
+                            SELECT 1 FROM stat_changes sc
+                            WHERE sc.rider_id = c.id AND sc.is_approved = FALSE
+                        ) OR EXISTS (
+                            SELECT 1 FROM cdb_changes changes
+                            WHERE changes.entity_type = 'rider' AND changes.entity_id = c.id
+                              AND changes.status = 'pending' AND changes.applied_at IS NULL
+                        )) AS has_pending_approval,
                         c.first_cycling_id,
                         to_jsonb(c)->>'pcs_identity_status' AS pcs_identity_status,
                         (to_jsonb(c)->>'pcs_birth_date')::date AS pcs_birth_date,
@@ -8816,6 +8831,29 @@ def _save_rider_task_group(namespace, group, runnable_types):
 
 
 @login_required
+def fetch_rider_data(rider_id):
+    if not (_can_check_rider_identity() and _can_run_firstcycling_integrations()):
+        abort(403)
+    namespace = _get_selected_namespace()
+    rider = _load_namespace_roster_rider(namespace, rider_id)
+    if rider is None or rider.is_deleted:
+        abort(404)
+    return_url = url_for('web.rider_detail', namespace_slug=namespace.slug, rider_id=rider_id)
+    try:
+        requests = _rider_task_requests(namespace, [rider_id], [PCS_RIDER_SYNC, FC_RIDER_SYNC])
+        create_manual_external_group(
+            requests, namespace_id=namespace.id, executed_by_id=current_user.id,
+            message=f'Fetch Rider Data: rider #{rider_id}',
+        )
+    except (ValueError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, ValueError) else 'Could not queue rider data fetch.', 'error')
+    else:
+        flash('PCS and FirstCycling rider data fetch queued.', 'info')
+    return redirect(return_url)
+
+
+@login_required
 def check_rider_identity(rider_id):
     if not _can_check_rider_identity():
         abort(403)
@@ -8942,8 +8980,9 @@ def rider_detail(rider_id):
         rider_history=rider_history,
         attribute_history_at_limit=attribute_history_at_limit,
         selected_namespace=selected_namespace,
-        can_check_identity=(_can_check_rider_identity() and not rider.is_deleted
-                            and bool(request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name))),
+        can_fetch_data=(_can_check_rider_identity() and _can_run_firstcycling_integrations()
+                        and not rider.is_deleted and (_safe_int(getattr(rider, 'first_cycling_id', None)) or 0) > 0
+                        and bool(request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name))),
         stat_fields=STAT_DELTA_FIELDS,
         back_url=url_for('web.riders' if came_from_riders else 'web.teams'),
         back_label='Back to Riders' if came_from_riders else 'Back to Teams',
@@ -9532,7 +9571,8 @@ def stats_editor():
 
         fc_races = base_query.options(selectinload(FirstCyclingRace.race_stages)).all()
         cdb_races = _load_namespace_catalog_races(selected_namespace)
-        catalog = unified_races(cdb_races, fc_races, IDENTITY_MODELS['race'].query.all())
+        pcs_races = PcsRace.query.filter_by(season_year=selected_year, gender=selected_gender).all()
+        catalog = unified_races(cdb_races, fc_races, IDENTITY_MODELS['race'].query.all(), pcs_races)
         filter_choices['nations'] = sorted({race.nation_name for race in catalog if race.nation_name})
         races = filter_races(catalog, selected_filters, _normalize_name_search_term)
 
@@ -9699,6 +9739,8 @@ def stats_editor():
         selected_filters=selected_filters,
         can_manage_identities=current_user.has_permission('identities', 'read'),
         can_create_stats=_can_create_stats() or _can_attribute_action('update'),
+        can_fetch_race_results=_can_download_stats(), race_selection_limit=MAX_BULK_TASK_RACES,
+        race_selection_today=datetime.utcnow().date(),
     )
 
 
@@ -11158,20 +11200,138 @@ def cdb_race_detail(race_id):
     namespace = _get_selected_namespace(_get_accessible_namespaces())
     if namespace is None:
         abort(404)
+    cdb_race, cdb_view, catalog_row = _race_cdb_context(namespace, cdb_id=race_id)
+    if cdb_race is None:
+        abort(404)
+    year, gender = _resolve_namespace_season(namespace)
+    fc_race = None
+    if catalog_row and not catalog_row.mapping_conflict and catalog_row.firstcycling_id:
+        fc_race = FirstCyclingRace.query.filter_by(
+            race_id=catalog_row.firstcycling_id, season_year=year, gender=gender).first()
+    if fc_race:
+        return redirect(url_for('web.race_detail', race_id=fc_race.race_id))
+    stage_id = request.args.get('stage_id', type=int)
+    selected_stage = next((stage for stage in cdb_view.race_stages if stage.id == stage_id), None)
+    if stage_id is not None and selected_stage is None:
+        abort(404)
+    pcs_slug = catalog_row.pcs_slug if catalog_row and not catalog_row.mapping_conflict else None
+    pcs_rows = _race_pcs_rows(pcs_slug, year, selected_stage)
+    status = dict(total_changes=0, approved_changes=0, unapproved_changes=0)
+    return render_template(
+        'stat_race_detail.html', race=cdb_view, cdb_race=cdb_race,
+        pcs_slug=pcs_slug, results_source='pcs' if pcs_rows else 'cdb',
+        has_fc=False, has_pcs=bool(pcs_rows), detail_endpoint='web.cdb_race_detail',
+        detail_race_id=race_id, stage_rows=cdb_view.race_stages, selected_stage=selected_stage,
+        result_rows=pcs_rows, result_title='Overall Results',
+        result_state=_build_race_result_state(cdb_view), delta_change_count=0,
+        scope_delta_status=status, overall_delta_status=status, stat_conflicts=[],
+        stage_status_map={}, selected_namespace=namespace, stat_fields=[], editable_rider_fields=[],
+        can_update_stats=False, can_approve_stats=False, can_download_stats=False,
+        **_race_debug_context(namespace, cdb_race, catalog_row, pcs_slug=pcs_slug),
+        **_attribute_editor_context(namespace, 'race', race_id),
+    )
+
+
+def _race_cdb_context(namespace, *, fc_race=None, cdb_id=None):
+    """Resolve only conflict-free provider identities inside the selected namespace."""
     if namespace.database_name == db.engines['main'].url.database:
         abort(400)
     engine = create_engine(namespace.build_connection_string())
     try:
         with engine.connect() as conn:
             _ensure_namespace_database_connection(conn, namespace)
-            race = conn.execute(text('SELECT * FROM race WHERE id = :id AND NOT is_deleted'),
-                                {'id': race_id}).mappings().first()
-            if race is None:
-                abort(404)
+            races = conn.execute(text('''
+                SELECT r.*, to_jsonb(r) AS debug_columns,
+                       c.constant AS country_constant, rc.constant AS class_constant
+                FROM race r LEFT JOIN country c ON c.id = r.country_id AND NOT c.is_deleted
+                LEFT JOIN race_class rc ON rc.id = r.race_class_id AND NOT rc.is_deleted
+                WHERE NOT r.is_deleted ORDER BY r.id
+            ''')).mappings().all()
+            catalog = unified_races(races, [fc_race] if fc_race else [], IDENTITY_MODELS['race'].query.all())
+            row = next((row for row in catalog if
+                        (row.cdb_id == cdb_id if cdb_id is not None else row.race_id == fc_race.race_id)), None)
+            race = next((race for race in races if row and race['id'] == row.cdb_id), None)
+            if race is None or (cdb_id is None and row.mapping_conflict):
+                return None, None, row
+            stages = conn.execute(text('''SELECT * FROM stage WHERE race_id = :id AND NOT is_deleted
+                ORDER BY stage_number NULLS LAST, id'''), {'id': race['id']}).mappings().all()
     finally:
         engine.dispose()
-    return render_template('cdb_race_detail.html', race=race,
-                           **_attribute_editor_context(namespace, 'race', race_id))
+    year, _ = _resolve_namespace_season(namespace)
+    return race, cdb_race_view(race, stages, year), row
+
+
+def _race_debug_context(namespace, cdb_race, catalog_row, *, fc_race=None, pcs_slug=None):
+    def columns(record):
+        return {
+            column.name: value.isoformat() if hasattr(value, 'isoformat') else value
+            for column in record.__table__.columns
+            for value in [getattr(record, column.key)]
+        }
+
+    sources = {}
+    if cdb_race is not None:
+        sources['CDB'] = cdb_race['debug_columns']
+    if fc_race is not None:
+        sources['FC'] = columns(fc_race)
+    identity = None
+    if pcs_slug:
+        year, _ = _resolve_namespace_season(namespace)
+        identity = IDENTITY_MODELS['race'].query.filter_by(pcs_slug=pcs_slug).first()
+        rows = PcsRiderResult.query.filter(
+            PcsRiderResult.season == year,
+            PcsRiderResult.race_url.contains(f'race/{pcs_slug}/{year}/'),
+        ).order_by(PcsRiderResult.id).all()
+        sources['PCS'] = {
+            'pcs_slug': pcs_slug,
+            'season': year,
+            'race_identity': columns(identity) if identity else None,
+            'race_results': [columns(row) for row in rows
+                             if pcs_result_scope(row, pcs_slug, year) is not None],
+        }
+        profile = PcsRace.query.filter_by(race_slug=pcs_slug, season_year=year,
+                                         gender=_resolve_namespace_season(namespace)[1]).first()
+        if profile is not None:
+            sources['PCS']['race'] = columns(profile)
+    fc_id = fc_race.race_id if fc_race is not None else (
+        catalog_row.firstcycling_id if catalog_row and not catalog_row.mapping_conflict
+        else cdb_race['first_cycling_id'] if cdb_race else identity.firstcycling_id if identity else None
+    )
+    return dict(race_debug_sources=sources, race_firstcycling_id=fc_id,
+                race_provider_identity_id=identity.id if identity else None,
+                can_link_race_cdb=_can_attribute_action('update'),
+                can_link_race_fc=current_user.has_permission('identities', 'update'))
+
+
+def _race_pcs_rows(slug, year, selected_stage):
+    if not slug or not year:
+        return []
+    scope = selected_stage.stage_number if selected_stage else 'overall'
+    rows = db.session.query(PcsRiderResult, PcsRider).join(PcsRider).filter(
+        PcsRiderResult.season == year,
+        PcsRiderResult.race_url.contains(f'race/{slug}/{year}/'),
+    ).all()
+    display_rows = []
+    seen = set()
+    for result, rider in rows:
+        if pcs_result_scope(result, slug, year) != scope or rider.id in seen:
+            continue
+        seen.add(rider.id)
+        position = result.result_position or '-'
+        if position.isdigit():
+            position = int(position)
+        payload = result.source_payload if isinstance(result.source_payload, dict) else {}
+        display_rows.append(dict(
+            result=SimpleNamespace(overall_position=position, stage_position=position,
+                                   overall_time=payload.get('time'), stage_time=payload.get('time'), rider_id=None),
+            rider_name=rider.display_name or rider.rider_slug, rider_link_id=None,
+            rider_in_namespace=False, team_id=None, team_name=payload.get('team_name') or '-', stats={}, original_stats={},
+        ))
+    return sorted(display_rows, key=lambda row: (
+        not isinstance(row['result'].overall_position, int),
+        row['result'].overall_position if isinstance(row['result'].overall_position, int) else 999999,
+        row['rider_name'],
+    ))
 
 
 @web_bp.route('/races/<int:race_id>')
@@ -11192,6 +11352,9 @@ def race_detail(race_id, stage_id=None):
         selectinload(FirstCyclingRace.race_results),
     ).filter_by(race_id=race_id, season_year=selected_year, gender=selected_gender).first_or_404()
 
+    cdb_race, cdb_view, catalog_row = _race_cdb_context(selected_namespace, fc_race=race)
+    pcs_slug = catalog_row.pcs_slug if catalog_row and not catalog_row.mapping_conflict else None
+
     stage_rows = sorted(
         race.race_stages,
         key=lambda stage: (
@@ -11201,6 +11364,8 @@ def race_detail(race_id, stage_id=None):
     )
     stage_lookup = {stage.id: stage for stage in stage_rows if stage.id is not None}
     selected_stage = stage_lookup.get(stage_id) if stage_id is not None else None
+    if stage_id is not None and selected_stage is None:
+        abort(404)
 
     result_state = _build_race_result_state(race)
 
@@ -11393,12 +11558,19 @@ def race_detail(race_id, stage_id=None):
             ),
         )
 
+    pcs_rows = _race_pcs_rows(pcs_slug, selected_year, selected_stage)
+    results_source = 'pcs' if pcs_rows and (not display_rows or request.args.get('source') == 'pcs') else 'fc'
+    showing_fc = results_source == 'fc'
+    attribute_context = _attribute_editor_context(selected_namespace, 'race', cdb_race['id']) if cdb_race else {}
     return render_template(
         'stat_race_detail.html',
-        race=race,
+        race=merge_race_view(race, cdb_view) if cdb_view else race,
+        cdb_race=cdb_race, pcs_slug=pcs_slug, has_fc=True, has_pcs=bool(pcs_rows),
+        cdb_calendar_rows=cdb_view.race_stages if cdb_view and not stage_rows else [],
+        results_source=results_source, detail_endpoint='web.race_detail', detail_race_id=race_id,
         stage_rows=stage_rows,
         selected_stage=selected_stage,
-        result_rows=display_rows,
+        result_rows=display_rows if showing_fc else pcs_rows,
         editable_rider_fields=editable_rider_fields,
         result_title=result_title,
         result_state=result_state,
@@ -11409,10 +11581,13 @@ def race_detail(race_id, stage_id=None):
         selected_namespace=selected_namespace,
         overall_delta_status=overall_delta_status,
         is_submitted_for_approval=_race_is_submitted_for_approval(selected_namespace, race.race_id),
-        stat_fields=STAT_DELTA_FIELDS,
-        can_approve_stats=_can_approve_stats(),
-        can_update_stats=_can_update_stats(),
+        stat_fields=STAT_DELTA_FIELDS if showing_fc else [],
+        can_approve_stats=_can_approve_stats() and showing_fc,
+        can_update_stats=_can_update_stats() and showing_fc,
         can_download_stats=_can_download_stats(),
+        **_race_debug_context(selected_namespace, cdb_race, catalog_row,
+                              fc_race=race, pcs_slug=pcs_slug),
+        **attribute_context,
     )
 
 
@@ -11445,6 +11620,252 @@ def select_namespace():
     session['selected_namespace_id'] = selected_namespace.id
     g.selected_namespace = selected_namespace
     return redirect(_with_namespace_slug_in_url(next_url, selected_namespace))
+
+
+def _pcs_race_target(namespace, slug, year):
+    """Resolve exact provider links before creating any background work."""
+    _, gender = _resolve_namespace_season(namespace)
+    profile = PcsRace.query.filter_by(race_slug=slug, season_year=year).first()
+    if profile is not None and profile.gender != gender:
+        raise ValueError('This PCS edition belongs to a different namespace gender.')
+    identities = IDENTITY_MODELS['race'].query.all()
+    identity = next((row for row in identities if row.pcs_slug == slug), None)
+    fc_races = FirstCyclingRace.query.filter_by(
+        race_id=identity.firstcycling_id, season_year=year, gender=gender).all() if identity and identity.firstcycling_id else []
+    catalog = unified_races(_load_namespace_catalog_races(namespace), fc_races, identities)
+    for row in catalog:
+        if row.pcs_slug != slug or row.mapping_conflict:
+            continue
+        if row.race_id:
+            return url_for('web.race_detail', race_id=row.race_id)
+        if row.cdb_id:
+            return url_for('web.cdb_race_detail', race_id=row.cdb_id)
+    if profile is not None or identity is not None:
+        return url_for('web.pcs_race_detail', race_slug=slug, year=year)
+    return None
+
+
+@web_bp.route('/races/pcs/add', methods=['POST'])
+@login_required
+def add_pcs_race():
+    if not _can_access_panel('stat_editor') or not _can_download_stats():
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    year, gender = _resolve_namespace_season(namespace)
+    if namespace is None or year is None:
+        return jsonify(error='Select a namespace season first.'), 400
+    try:
+        params = {**parse_race_url(request.form.get('pcs_url', ''), year), 'gender': gender}
+        # Serialize simultaneous Get requests for this namespace and edition.
+        db.session.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
+                           {'key': f"pcs-race:{namespace.id}:{params['race_slug']}:{year}"})
+        target = _pcs_race_target(namespace, params['race_slug'], year)
+        if target:
+            db.session.rollback()
+            return jsonify(status='success', existing=True, race_url=target)
+        group = ExternalCallTaskGroup.query.join(ExternalCallTask, ExternalCallTask.task_group_id == ExternalCallTaskGroup.id).filter(
+            ExternalCallTaskGroup.namespace_id == namespace.id,
+            ExternalCallTaskGroup.executed_by_id == current_user.id,
+            ExternalCallTaskGroup.workflow_type == 'pcs_race',
+            ExternalCallTaskGroup.season_year == year, ExternalCallTaskGroup.gender == gender,
+            ExternalCallTaskGroup.status.in_(['queued', 'running']),
+            ExternalCallTask.endpoint == PCS_RACE_ENDPOINT,
+            text("(external_call_task.request_params_json::jsonb ->> 'race_slug') = :pcs_slug").bindparams(pcs_slug=params['race_slug']),
+        ).first()
+        if group is None:
+            group = create_manual_external_group(
+                [dict(provider='pcs', endpoint=PCS_RACE_ENDPOINT, params=params)],
+                namespace_id=namespace.id, executed_by_id=current_user.id,
+                provider='pcs', workflow_type='pcs_race', season_year=year, gender=gender,
+                message=f"Add PCS Race: {params['race_slug']} ({year})"[:255],
+            )
+        else:
+            db.session.rollback()
+        return jsonify(status='queued', group_id=group.id,
+                       status_url=url_for('web.pcs_race_task_status', group_id=group.id)), 202
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify(error=str(exc)), 400
+
+
+@web_bp.route('/races/pcs/task-groups/<int:group_id>')
+@login_required
+def pcs_race_task_status(group_id):
+    if not _can_access_panel('stat_editor') or not _can_download_stats():
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    group = ExternalCallTaskGroup.query.filter_by(id=group_id, namespace_id=namespace.id,
+                                                workflow_type='pcs_race').first_or_404()
+    if group.executed_by_id != current_user.id and not _can_read_external_call_groups():
+        abort(404)
+    if _resolve_namespace_season(namespace) != (group.season_year, group.gender):
+        response = jsonify(status='failed', error='The namespace season changed after this request was queued.')
+        response.cache_control.no_store = True
+        return response
+    task = ExternalCallTask.query.filter_by(task_group_id=group.id, provider='pcs', endpoint=PCS_RACE_ENDPOINT).first_or_404()
+    if task.status == 'success':
+        params = json.loads(task.request_params_json)
+        target = _pcs_race_target(namespace, params['race_slug'], params['season_year'])
+        if target:
+            response = jsonify(status='success', race_url=target)
+        else:
+            response = jsonify(status='failed', error='PCS completed without saving a race.')
+    elif task.status in {'failed', 'cancelled'} or group.status in {'failed', 'cancelled'}:
+        response = jsonify(status='failed', error=task.error_message or 'PCS race fetch was cancelled or failed.')
+    else:
+        response = jsonify(status='running' if task.status == 'running' else 'queued')
+    response.cache_control.no_store = True
+    return response
+
+
+@web_bp.route('/races/pcs/<race_slug>/<int:year>')
+@login_required
+def pcs_race_detail(race_slug, year):
+    if not _can_access_panel('stat_editor'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    selected_year, gender = _resolve_namespace_season(namespace)
+    if namespace is None or year != selected_year:
+        abort(404)
+    try:
+        target = _pcs_race_target(namespace, race_slug, year)
+    except ValueError:
+        abort(404)
+    if target is None:
+        abort(404)
+    if target != url_for('web.pcs_race_detail', race_slug=race_slug, year=year):
+        return redirect(target)
+    profile = PcsRace.query.filter_by(race_slug=race_slug, season_year=year, gender=gender).first()
+    names = ('name', 'category', 'classification', 'nation_name', 'description', 'distance_km',
+             'profile', 'start_date', 'end_date', 'start_location', 'end_location', 'stage_count')
+    race = SimpleNamespace(**{name: getattr(profile, name, None) for name in names},
+                           race_id=None, race_stages=[], race_results=[])
+    race.name = race.name or race_slug
+    rows = _race_pcs_rows(race_slug, year, None)
+    status = dict(total_changes=0, approved_changes=0, unapproved_changes=0)
+    return render_template(
+        'stat_race_detail.html', race=race, cdb_race=None, pcs_slug=race_slug, results_source='pcs',
+        has_fc=False, has_pcs=bool(rows), detail_endpoint='web.pcs_race_detail', detail_race_id=None,
+        stage_rows=[], selected_stage=None, result_rows=rows, result_title='Overall Results',
+        result_state=_build_race_result_state(race), delta_change_count=0, scope_delta_status=status,
+        overall_delta_status=status, stat_conflicts=[], stage_status_map={}, selected_namespace=namespace,
+        stat_fields=[], editable_rider_fields=[], can_update_stats=False, can_approve_stats=False,
+        can_download_stats=False,
+        **_race_debug_context(namespace, None, None, pcs_slug=race_slug),
+    )
+
+
+@web_bp.route('/races/pcs/<race_slug>/<int:year>/link-fc', methods=['POST'])
+@login_required
+def pcs_race_link_fc(race_slug, year):
+    if not _can_access_panel('stat_editor') or not current_user.has_permission('identities', 'update'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None or _resolve_namespace_season(namespace)[0] != year:
+        abort(404)
+    model = IDENTITY_MODELS['race']
+    identity = model.query.filter_by(pcs_slug=race_slug).first_or_404()
+    before = identity.firstcycling_id
+    try:
+        conn = db.session.connection(bind_arguments={'mapper': model})
+        save_identity(conn, 'race', dict(firstcycling_id=request.form.get('firstcycling_id'), pcs_slug=race_slug),
+                      identity_id=identity.id)
+        AuditLog.log_action('identity_updated', current_user, resource_type='race_identity', resource_id=identity.id,
+                            details={'before': {'firstcycling_id': before}, 'after': {'firstcycling_id': request.form.get('firstcycling_id')}},
+                            ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'))
+        db.session.commit()
+        flash('FirstCycling identity saved.', 'success')
+    except (ValueError, IntegrityError) as exc:
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, ValueError) else 'That FC ID is already linked to another identity.', 'error')
+    return redirect(url_for('web.pcs_race_detail', race_slug=race_slug, year=year))
+
+
+@web_bp.route('/races/pcs/<race_slug>/<int:year>/link-cdb', methods=['POST'])
+@login_required
+def pcs_race_link_cdb(race_slug, year):
+    if not _can_access_panel('stat_editor') or not _can_attribute_action('update'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None or _resolve_namespace_season(namespace)[0] != year:
+        abort(404)
+    identity = IDENTITY_MODELS['race'].query.filter_by(pcs_slug=race_slug).first_or_404()
+    cdb_id = request.form.get('cdb_id', type=int)
+    if cdb_id is None or not 0 < cdb_id < 2**31:
+        abort(400)
+    if namespace.database_name == db.engines['main'].url.database:
+        abort(400)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.begin() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            row = conn.execute(text('SELECT * FROM race WHERE id=:id AND NOT is_deleted FOR UPDATE'), {'id': cdb_id}).mappings().first()
+            if row is None:
+                abort(404)
+            duplicate = conn.execute(text('''SELECT id FROM race WHERE id != :id AND NOT is_deleted
+                AND (pcs_slug=:slug OR (CAST(:fc AS integer) IS NOT NULL AND first_cycling_id=:fc))'''),
+                dict(id=cdb_id, slug=race_slug, fc=identity.firstcycling_id)).first()
+            if duplicate or row['pcs_slug'] not in (None, '', race_slug) or (
+                identity.firstcycling_id and row['first_cycling_id'] not in (None, 0, identity.firstcycling_id)
+            ):
+                raise ValueError('The CDB race has conflicting source mappings. Review its current identity first.')
+            for field, value in [('pcs_slug', race_slug), ('first_cycling_id', identity.firstcycling_id)]:
+                if value is not None and row[field] != value:
+                    attribute_changes.propose(conn, 'race', cdb_id, field, str(value), current_user.id,
+                                              authorize=current_user.has_permission)
+        flash('CDB identity changes saved using the configured approval policy.', 'success')
+    except PermissionError:
+        abort(403)
+    except ValueError as exc:
+        flash(str(exc), 'error')
+    finally:
+        engine.dispose()
+    return redirect(url_for('web.pcs_race_detail', race_slug=race_slug, year=year))
+
+
+@web_bp.route('/races/fetch-results', methods=['POST'])
+@login_required
+def race_bulk_fetch_results():
+    if not _can_access_panel('stat_editor') or not _can_download_stats():
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    year, gender = _resolve_namespace_season(namespace)
+    tokens = re.findall(r'[^,\s]+', request.form.get('race_ids', ''))
+    if not 1 <= len(tokens) <= MAX_BULK_TASK_RACES or any(
+        not re.fullmatch(r'[0-9]{1,10}', token) or not 0 < int(token) <= 2147483647
+        for token in tokens
+    ):
+        abort(400, description=f'Select between 1 and {MAX_BULK_TASK_RACES} valid races.')
+    ids = list(dict.fromkeys(map(int, tokens)))
+    if year is None:
+        abort(400, description='Select a namespace season before fetching race results.')
+    races = FirstCyclingRace.query.options(selectinload(FirstCyclingRace.race_stages),
+                                          selectinload(FirstCyclingRace.race_results)).filter(
+        FirstCyclingRace.race_id.in_(ids), FirstCyclingRace.season_year == year,
+        FirstCyclingRace.gender == gender,
+    ).all()
+    catalog = unified_races(_load_namespace_catalog_races(namespace), races, IDENTITY_MODELS['race'].query.all())
+    eligible = {row.race_id for row in catalog if row.race_id is not None and not row.mapping_conflict
+                and (row.start_date is None or row.start_date <= datetime.utcnow().date())}
+    if set(ids) != eligible:
+        abort(400, description='One or more races are unavailable in this namespace season or have conflicting mappings.')
+    group = create_manual_external_group(
+        [dict(provider='firstcycling', endpoint=RACE_RESULTS_ENDPOINT,
+              params=dict(race_id=race_id, season_year=year, gender=gender),
+              related_to_table='firstcycling_races', related_to_id=next(race.id for race in races if race.race_id == race_id))
+         for race_id in ids],
+        namespace_id=namespace.id, executed_by_id=current_user.id,
+        provider='firstcycling', workflow_type='fc_race_results', season_year=year, gender=gender,
+        message=f'Fetch Race Results: {len(ids)} races ({year}, {gender})',
+    )
+    flash(f'Queued {len(ids)} races in taskgroup #{group.id}.', 'success')
+    if _can_read_external_call_groups():
+        return redirect(url_for('web.external_call_group_detail', group_id=group.id))
+    return redirect(url_for('web.races'))
 
 
 @web_bp.route('/stats-editor/races/<int:race_id>/get-result', methods=['POST'], endpoint='legacy_race_get_result')
@@ -13655,6 +14076,7 @@ def _register_namespace_scoped_routes():
         ('/riders/stat-edit-log', 'stat_edit_log', stats_editor, ['GET', 'POST']),
         ('/riders/<int:rider_id>', 'rider_detail', rider_detail, ['GET']),
         ('/riders/<int:rider_id>/check-identity', 'check_rider_identity', check_rider_identity, ['POST']),
+        ('/riders/<int:rider_id>/fetch-data', 'fetch_rider_data', fetch_rider_data, ['POST']),
         ('/attributes/<entity_type>/<int:entity_id>/propose', 'propose_attribute', propose_attribute, ['POST']),
         ('/attributes/<entity_type>/review/<int:change_id>/<action>', 'review_attribute', review_attribute, ['POST']),
         ('/riders/<int:rider_id>/stats/<action>', 'rider_stats_action', rider_stats_action, ['POST']),
@@ -13676,6 +14098,12 @@ def _register_namespace_scoped_routes():
         ('/races/<int:race_id>', 'race_detail', race_detail, ['GET']),
         ('/races/<int:race_id>/<int:stage_id>', 'race_detail', race_detail, ['GET']),
         ('/races/<int:race_id>/get-result', 'race_get_result', race_get_result, ['POST']),
+        ('/races/fetch-results', 'race_bulk_fetch_results', race_bulk_fetch_results, ['POST']),
+        ('/races/pcs/add', 'add_pcs_race', add_pcs_race, ['POST']),
+        ('/races/pcs/task-groups/<int:group_id>', 'pcs_race_task_status', pcs_race_task_status, ['GET']),
+        ('/races/pcs/<race_slug>/<int:year>', 'pcs_race_detail', pcs_race_detail, ['GET']),
+        ('/races/pcs/<race_slug>/<int:year>/link-fc', 'pcs_race_link_fc', pcs_race_link_fc, ['POST']),
+        ('/races/pcs/<race_slug>/<int:year>/link-cdb', 'pcs_race_link_cdb', pcs_race_link_cdb, ['POST']),
         ('/races/<int:race_id>/save-stat-deltas', 'race_save_stat_deltas', race_save_stat_deltas, ['POST']),
         ('/races/<int:race_id>/submit-for-approval', 'race_submit_for_approval', race_submit_for_approval, ['POST']),
         ('/races/<int:race_id>/approve-stat-deltas', 'race_approve_stat_deltas', race_approve_stat_deltas, ['POST']),

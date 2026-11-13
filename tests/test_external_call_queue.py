@@ -1,5 +1,6 @@
 ﻿"""Regression coverage for shared queue state and provider isolation."""
 import json
+from uuid import uuid4
 from datetime import datetime, timedelta
 
 import pytest
@@ -56,6 +57,97 @@ def test_mixed_group_and_duplicate_delivery(queue_context, monkeypatch):
     assert calls == [('pcs', pcs.request_url), ('firstcycling', {'rider_id': 123})]
     assert group.status == 'success' and group.synced_count == 2
     assert json.loads(pcs.result_json) == {'name': 'Rider'}
+
+
+def test_race_result_tasks_use_group_audit_and_do_not_apply_rider_checks(queue_context, monkeypatch):
+    from webapp.models import FirstCyclingRace
+    race = FirstCyclingRace(race_id=981071, season_year=2026, gender='Men', name='Synthetic race')
+    db.session.add(race)
+    calls = []
+    class Client:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+        def sync_race_results(self, **kwargs):
+            calls.append(kwargs)
+            return {'overall_results': 10, 'stage_results': 20}
+    monkeypatch.setattr(queue, 'FirstCyclingClient', Client)
+    monkeypatch.setattr(queue, 'apply_rider_check', lambda *args: pytest.fail('Race tasks are not rider checks'))
+    group = queue.enqueue_group([dict(provider='firstcycling', endpoint='get_race_results',
+                                      params=dict(race_id=race.race_id, season_year=2026, gender='Men'))],
+                                workflow_type='fc_race_results')
+    db.session.commit()
+    try:
+        task = tasks(group)[0]
+        assert queue.execute_task(task.id)
+        assert not queue.execute_task(task.id)
+        db.session.refresh(group)
+        assert group.status == 'success' and group.synced_count == 1
+        assert calls == [dict(external_sync_log_id=group.id), dict(race_id=race.race_id, season_year=2026, commit=True)]
+        assert json.loads(task.result_json)['stage_results'] == 20
+    finally:
+        db.session.delete(race)
+        db.session.commit()
+
+
+@pytest.mark.parametrize('params', [dict(race_id=True, season_year=2026, gender='Men'),
+                                   dict(race_id=1, season_year=2026, gender='invalid'),
+                                   dict(race_id=1, season_year=10000, gender='Men')])
+def test_race_task_validation(params):
+    with pytest.raises(ValueError):
+        validate_request('firstcycling', 'get_race_results', params)
+
+
+def test_race_task_missing_edition_fails_without_fetching(queue_context, monkeypatch):
+    monkeypatch.setattr(queue, 'FirstCyclingClient', lambda **kwargs: pytest.fail('Must not fetch'))
+    group = queue.enqueue_group([dict(provider='firstcycling', endpoint='get_race_results',
+                                      params=dict(race_id=981071, season_year=2025, gender='Women'))])
+    db.session.commit()
+    task = tasks(group)[0]
+    assert queue.execute_task(task.id)
+    db.session.refresh(group)
+    assert task.status == group.status == 'failed'
+    assert 'unavailable' in task.error_message
+
+
+@pytest.mark.parametrize('outcome', ['success', 'unconfigured', 'wrong_edition'])
+def test_pcs_race_queue_contract_and_atomic_storage(queue_context, monkeypatch, outcome):
+    from webapp.models.main.identity import RaceIdentity
+    from webapp.models.main.pcs import PcsRace
+    slug = 'test-' + uuid4().hex
+    params = dict(race_slug=slug, season_year=2026, gender='Men',
+                  race_url=f'https://www.procyclingstats.com/race/{slug}/2026')
+    if outcome != 'unconfigured':
+        monkeypatch.setattr(queue, 'fetch_pcs_race', lambda request: dict(
+            race_slug=slug, season_year=2026 if outcome == 'success' else 2025,
+            name='PCS synthetic race', start_date='2026-03-02', stage_count=1))
+    else:
+        def unavailable(params):
+            raise NotImplementedError('PCS race fetching is not configured yet.')
+        monkeypatch.setattr(queue, 'fetch_pcs_race', unavailable)
+    monkeypatch.setattr(queue, 'apply_rider_check', lambda *args: pytest.fail('Must not apply rider checks'))
+    group = queue.enqueue_group([dict(provider='pcs', endpoint='get_race', params=params)])
+    db.session.commit()
+    try:
+        task = tasks(group)[0]
+        assert task.request_url == params['race_url']
+        assert queue.execute_task(task.id)
+        db.session.refresh(group)
+        profile = PcsRace.query.filter_by(race_slug=slug).first()
+        identity = RaceIdentity.query.filter_by(pcs_slug=slug).first()
+        if outcome == 'success':
+            assert task.status == group.status == 'success'
+            assert profile.name == 'PCS synthetic race'
+            assert profile.start_date.isoformat() == '2026-03-02'
+            assert identity.firstcycling_id is None
+            assert json.loads(task.result_json)['pcs_race_id'] == profile.id
+        else:
+            assert task.status == group.status == 'failed'
+            assert profile is identity is None
+            assert ('not configured' if outcome == 'unconfigured' else 'different race edition') in task.error_message
+    finally:
+        PcsRace.query.filter_by(race_slug=slug).delete()
+        RaceIdentity.query.filter_by(pcs_slug=slug).delete()
+        db.session.commit()
 
 
 @pytest.mark.parametrize(('states', 'expected'), [

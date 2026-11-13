@@ -19,6 +19,7 @@ from webapp import create_app
 from webapp.extensions import celery as _celery, db
 from webapp.integrations.firstcycling.api import FirstCyclingClient
 from webapp.integrations.pcs.profile import parse_pcs_profile
+from webapp.integrations.pcs.race import RACE_ENDPOINT as PCS_RACE_ENDPOINT, parse_race_url, fetch_race as fetch_pcs_race, store_race as store_pcs_race
 from webapp.integrations.pcs.slug import rider_profile_url, rider_slug_from_profile_url, valid_rider_slug
 from webapp.integrations.rider_checks import (
     PROFILE_ENDPOINT, apply_rider_check,
@@ -31,6 +32,7 @@ SYNC_TYPE_RACE = 'fc_race_calendar'
 SYNC_TYPE_TEAMS = 'fc_teams'
 SYNC_TYPE_RIDERS = 'fc_riders'
 SYNC_TYPE_RACE_RESULTS = 'fc_race_results'
+RACE_RESULTS_ENDPOINT = 'get_race_results'
 logger = logging.getLogger(__name__)
 PCS_MAX_ATTEMPTS = 2
 
@@ -64,6 +66,24 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def validate_request(provider, endpoint, params):
+    if provider == 'pcs' and endpoint == PCS_RACE_ENDPOINT:
+        if (not isinstance(params, dict) or type(params.get('season_year')) is not int
+                or not 1 <= params['season_year'] <= 9999 or params.get('gender') not in {'Men', 'Women'}):
+            raise ValueError('A valid PCS race season and gender are required')
+        parsed = parse_race_url(params.get('race_url'), params['season_year'])
+        if parsed['race_slug'] != params.get('race_slug') or parsed['race_url'] != params['race_url']:
+            raise ValueError('A canonical PCS race URL is required')
+        return
+    if provider == 'firstcycling' and endpoint == RACE_RESULTS_ENDPOINT:
+        if not isinstance(params, dict):
+            raise ValueError('Request parameters must be an object')
+        for name in ('race_id', 'season_year'):
+            value = params.get(name)
+            if isinstance(value, bool) or not str(value).isdigit() or int(value) <= 0:
+                raise ValueError(f'A positive {name} is required')
+        if int(params['season_year']) > 9999 or params.get('gender') not in {'Men', 'Women'}:
+            raise ValueError('A valid race season and gender are required')
+        return
     if endpoint != PROFILE_ENDPOINT or provider not in {'pcs', 'firstcycling'}:
         raise ValueError('Unsupported provider/endpoint')
     if not isinstance(params, dict):
@@ -76,6 +96,23 @@ def validate_request(provider, endpoint, params):
         rider_id = params.get('rider_id')
         if isinstance(rider_id, bool) or not str(rider_id).isdigit() or int(rider_id) <= 0:
             raise ValueError('A positive FirstCycling rider_id is required')
+
+
+def fetch_pcs_html(target):
+    """Fetch one validated PCS URL without redirects; the queue owns retries."""
+    request = Request(target, headers={'User-Agent': 'WorldDB/1.0', 'Accept': 'text/html'})
+    try:
+        with build_opener(_NoRedirect()).open(request, timeout=30) as response:
+            html = response.read(5_000_001)
+            if len(html) > 5_000_000:
+                raise ValueError('PCS page exceeds size limit')
+            return html
+    except HTTPError as exc:
+        if exc.code in {403, 429} or exc.code >= 500:
+            raise RetryableFetch('PCS cooldown required', max(60, retry_after(exc.headers.get('Retry-After'))), exc.code) from exc
+        raise ValueError(f'PCS HTTP {exc.code}') from exc
+    except (URLError, TimeoutError) as exc:
+        raise RetryableFetch('PCS connection failure') from exc
 
 
 def fetch_profile(provider, target):
@@ -134,7 +171,7 @@ PCS_LOCK = 812734902
 
 def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
                   origin='manual', priority=None, provider=None, workflow_type=None, scheduled_job_id=None,
-                  draft=False):
+                  draft=False, season_year=None, gender=None):
     """Validate all requests before inserting; caller commits before dispatch."""
     if origin not in {'manual', 'scheduled'}:
         raise ValueError('Unsupported task group origin')
@@ -149,7 +186,8 @@ def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=N
     group = ExternalCallTaskGroup(status='draft' if draft else 'queued', origin=origin, priority=priority,
                                   namespace_id=namespace_id, executed_by_id=executed_by_id,
                                   message=message, requested_count=len(requests),
-                                  provider=provider, workflow_type=workflow_type, scheduled_job_id=scheduled_job_id)
+                                  provider=provider, workflow_type=workflow_type, scheduled_job_id=scheduled_job_id,
+                                  season_year=season_year, gender=gender)
     db.session.add(group)
     db.session.flush()
     _add_group_requests(group, requests)
@@ -160,11 +198,12 @@ def _add_group_requests(group, requests):
     group.sync_types = sorted({f"{request['provider']}.{request['endpoint']}" for request in requests})
     for request in requests:
         is_pcs = request['provider'] == 'pcs'
+        is_pcs_profile = is_pcs and request['endpoint'] == PROFILE_ENDPOINT
         # Keep the validated slug available to workers that predate URL-backed tasks.
-        params = {'rider_slug': request['params']['rider_slug']} if is_pcs else request['params']
+        params = {'rider_slug': request['params']['rider_slug']} if is_pcs_profile else request['params']
         db.session.add(ExternalCallTask(
             task_group_id=group.id, provider=request['provider'], endpoint=request['endpoint'],
-            request_url=rider_profile_url(params['rider_slug']) if is_pcs else None,
+            request_url=(rider_profile_url(params['rider_slug']) if is_pcs_profile else params['race_url'] if is_pcs else None),
             request_params_json=json.dumps(params), status='draft' if group.status == 'draft' else 'queued',
             related_to_id=request.get('related_to_id'),
             related_to_table=request.get('related_to_table'),
@@ -236,6 +275,30 @@ def _refresh_group(group_id):
         group.is_worker_queued = False
 
 
+def fetch_race_results(params, group_id):
+    """Use the existing FC importer for one validated edition, with group audit logs."""
+    from webapp.models import FirstCyclingRace
+
+    race = FirstCyclingRace.query.filter_by(
+        race_id=int(params['race_id']), season_year=int(params['season_year']),
+        gender=params['gender'],
+    ).first()
+    if race is None or (race.start_date and race.start_date > datetime.utcnow().date()):
+        raise ValueError('The selected race edition is unavailable for result fetching.')
+    client = FirstCyclingClient(external_sync_log_id=group_id)
+    client.retry_attempts = 0
+    try:
+        return client.sync_race_results(race_id=race.race_id, season_year=race.season_year, commit=True)
+    except Exception as exc:
+        db.session.rollback()
+        cause = exc.__cause__
+        if isinstance(cause, HTTPError) and (cause.code == 429 or cause.code >= 500):
+            raise RetryableFetch('FirstCycling temporarily unavailable', retry_after(cause.headers.get('Retry-After')), cause.code) from exc
+        if isinstance(cause, URLError):
+            raise RetryableFetch('FirstCycling connection failure') from exc
+        raise
+
+
 def execute_task(task_id):
     """Claim exactly once, commit before I/O, then store results and group state."""
     now = datetime.utcnow()
@@ -280,15 +343,20 @@ def execute_task(task_id):
     params, payload, result = {}, None, None
     error, status, available_at, http_status = None, 'success', now, None
     try:
-        if provider == 'pcs' and request_url is not None:
+        if provider == 'pcs' and endpoint == PROFILE_ENDPOINT and request_url is not None:
             validate_request(provider, endpoint, {'rider_slug': rider_slug_from_profile_url(request_url)})
         else:
             params = json.loads(params_json or '{}')
             validate_request(provider, endpoint, params)
-            if provider == 'pcs':
+            if provider == 'pcs' and endpoint == PROFILE_ENDPOINT:
                 # Tasks queued before PCS URLs were stored still carry their slug in JSON.
                 request_url = rider_profile_url(params['rider_slug'])
-        payload = fetch_profile(provider, request_url if provider == 'pcs' else params)
+        if provider == 'pcs' and endpoint == PCS_RACE_ENDPOINT:
+            payload = fetch_pcs_race(params)
+        elif provider == 'firstcycling' and endpoint == RACE_RESULTS_ENDPOINT:
+            payload = fetch_race_results(params, task.task_group_id)
+        else:
+            payload = fetch_profile(provider, request_url if provider == 'pcs' else params)
         if provider == 'pcs':
             http_status = 200
         result = json.dumps(payload, default=str)
@@ -312,7 +380,13 @@ def execute_task(task_id):
     checked_at = datetime.utcnow()
     if group is not None and group.status == 'cancelled' and status == 'retry_wait':
         status = 'cancelled'
-    if status not in {'retry_wait', 'cancelled'} and isinstance(params, dict):
+    if provider == 'pcs' and endpoint == PCS_RACE_ENDPOINT and status == 'success':
+        try:
+            with db.session.begin_nested():
+                result = json.dumps(store_pcs_race(params, payload, namespace_id=group.namespace_id if group else None))
+        except Exception as exc:
+            status, error = 'failed', str(exc)
+    if endpoint not in {RACE_RESULTS_ENDPOINT, PCS_RACE_ENDPOINT} and status not in {'retry_wait', 'cancelled'} and isinstance(params, dict):
         try:
             with db.session.begin_nested():
                 apply_rider_check(task, params, payload, status, checked_at)
@@ -387,7 +461,7 @@ def submit_external_group(group_id):
 
 
 def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
-                                 provider=None, workflow_type=None):
+                                 provider=None, workflow_type=None, season_year=None, gender=None):
     """Create/commit high-priority work and notify Celery immediately.
 
     Call from an authorized application action after resolving selected riders.
@@ -396,7 +470,7 @@ def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=
     """
     group = enqueue_group(requests, namespace_id=namespace_id,
                           executed_by_id=executed_by_id, message=message, origin='manual',
-                          provider=provider, workflow_type=workflow_type)
+                          provider=provider, workflow_type=workflow_type, season_year=season_year, gender=gender)
     group_id = group.id
     db.session.commit()
     try:

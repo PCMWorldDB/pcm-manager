@@ -37,6 +37,7 @@ class PcsRaceResultRow:
     age: int | None = None
     points: int | None = None
     time: str | None = None
+    result_position: str | None = None
 
 
 @dataclass
@@ -263,13 +264,13 @@ def parse_pcs_race_results_html(html, source_url=None):
     for row in table.select('tbody tr'):
         cells = _row_cells_by_header(row, headers)
         position_cell = _cell_by_code(row, 'rnk') or cells.get('rnk')
-        rider_cell = _cell_by_code(row, 'ridername') or cells.get('ridername')
-        team_cell = _cell_by_code(row, 'teamnamelink') or cells.get('teamnamelink')
+        rider_cell = _cell_by_code(row, 'ridername') or cells.get('ridername') or cells.get('rider')
+        team_cell = _cell_by_code(row, 'teamnamelink') or cells.get('teamnamelink') or cells.get('riderteam')
         age_cell = _cell_by_code(row, 'age') or cells.get('age')
         points_cell = _cell_by_code(row, 'pnt') or cells.get('pnt')
-        time_cell = _cell_by_code(row, 'time') or cells.get('time')
+        time_cell = _cell_by_code(row, 'time') or cells.get('time') or cells.get('timelag')
 
-        rider_link = rider_cell.select_one('a[href*="/rider/"]') if rider_cell else None
+        rider_link = rider_cell.select_one('a[href*="rider/"]') if rider_cell else None
         rider_name = _extract_rider_name(rider_cell, rider_link)
         if not rider_name:
             continue
@@ -281,6 +282,7 @@ def parse_pcs_race_results_html(html, source_url=None):
 
         parsed_rows.append(PcsRaceResultRow(
             position=_parse_int(position_text),
+            result_position=position_text,
             rider_name=rider_name,
             pcs_rider_path=pcs_rider_path,
             team_name=_clean_text(team_link.get_text(' ', strip=True)) if team_link else None,
@@ -395,6 +397,23 @@ class PcsClient:
         self.db_session = db_session or db.session
         self.matcher = PcsRiderMatcher(namespace, fuzzy_threshold=fuzzy_threshold)
 
+    def sync_race_from_html(self, *, html, source_url, year=None, commit=True):
+        """Upsert an edition and its race/rider results from one fetched page."""
+        from webapp.integrations.pcs.race import parse_race_url, parse_pcs_race_html, store_race
+
+        year = year if year is not None else self.namespace.database_year
+        params = dict(parse_race_url(source_url, year), gender=self.namespace.gender)
+        payload = parse_pcs_race_html(html, source_url=source_url, year=year, gender=params['gender'])
+        try:
+            summary = store_race(params, payload, namespace_id=self.namespace.id, db_session=self.db_session)
+            if commit:
+                self.db_session.commit()
+            return summary
+        except Exception:
+            if commit:
+                self.db_session.rollback()
+            raise
+
     def sync_race_results_from_html(
         self,
         *,
@@ -418,6 +437,7 @@ class PcsClient:
 
             row_payload = asdict(parsed_row)
             row_payload.pop('pcs_rider_path', None)
+            row_payload.pop('result_position', None)
             pcs_result = PcsRaceResult(
                 namespace_id=self.namespace.id,
                 race_name=parsed.race_name,

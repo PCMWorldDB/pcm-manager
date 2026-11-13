@@ -7,6 +7,37 @@ from webapp.extensions import db
 from webapp.models.main.base import MainDBModel
 
 
+class PcsRace(MainDBModel):
+    """Shared PCS race edition facts, independent of namespace CDB IDs."""
+
+    __tablename__ = 'pcs_races'
+    race_slug = db.Column(db.String(500), nullable=False)
+    season_year = db.Column(db.Integer, nullable=False)
+    gender = db.Column(db.String(20), nullable=False)
+    race_url = db.Column(db.String(1000), nullable=False)
+    name = db.Column(db.String(500), nullable=False)
+    category = db.Column(db.String(100))
+    classification = db.Column(db.String(100))
+    nation_name = db.Column(db.String(100))
+    description = db.Column(db.Text)
+    distance_km = db.Column(db.Float)
+    profile = db.Column(db.String(100))
+    start_date = db.Column(db.Date)
+    end_date = db.Column(db.Date)
+    start_location = db.Column(db.String(255))
+    end_location = db.Column(db.String(255))
+    stage_count = db.Column(db.Integer)
+    source_payload = db.Column(db.JSON)
+    last_synced_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('race_slug', 'season_year', name='uq_pcs_race_edition'),
+        db.CheckConstraint("race_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'", name='ck_pcs_race_slug'),
+        db.CheckConstraint('season_year BETWEEN 1 AND 9999', name='ck_pcs_race_year'),
+        db.CheckConstraint("gender IN ('Men', 'Women')", name='ck_pcs_race_gender'),
+    )
+
+
 class PcsRider(MainDBModel):
     """Shared PCS profile facts, independent of CDB and monitor identities."""
 

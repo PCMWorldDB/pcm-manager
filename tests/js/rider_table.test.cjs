@@ -71,6 +71,21 @@ function setup(t, {riders = [rider(1), rider(2)], namespaceId = 1, saved, limit 
     return {window, find, change, select, requests, snapshot, config};
 }
 
+test('identity flags use consistent severity dots', (t) => {
+    const {find, change} = setup(t, {riders: [
+        rider(1, {pcs_identity_status: 'verified'}),
+        rider(2, {pcs_identity_status: 'review'}),
+        rider(3, {pcs_identity_status: 'unknown'}),
+        rider(4, {pcs_identity_status: 'failed'}),
+        rider(5, {pcs_identity_status: 'failed', pcs_identity_verified_override: true}),
+        rider(6, {pcs_identity_status: 'verified', first_cycling_id: null}),
+    ]});
+    change('#rider-view', 'identity');
+    assert.deepEqual([...find('tbody').rows].map((row) =>
+        [...row.querySelectorAll('.rider-flag')].map((flag) => flag.textContent)),
+    [['🟢'], ['🟡'], ['🔴'], ['🔴'], ['🟢'], ['🟢', '🔴']]);
+});
+
 test('8000 riders render one page; views and filters stay local with stable selection', (t) => {
     const {find, change, select, requests} = setup(t, {riders: Array.from({length: 8000}, (_, i) => rider(i + 1))});
     assert.equal(find('tbody').rows.length, 100);
