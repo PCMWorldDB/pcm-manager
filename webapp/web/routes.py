@@ -521,6 +521,19 @@ def _external_sync_type_display(sync_type):
     return EXTERNAL_SYNC_TYPE_LABELS.get(sync_type, sync_type)
 
 
+def _external_sync_types_display(sync_types):
+    return ', '.join(_external_sync_type_display(kind) for kind in (sync_types or []))
+
+
+def _external_task_type_choices(groups):
+    types = {FC_RIDER_SYNC, PCS_RIDER_SYNC}
+    if groups is not None:
+        types.update(kind for kind, in groups.with_entities(
+            func.unnest(ExternalCallTaskGroup.sync_types),
+        ).distinct())
+    return {kind: _external_sync_type_display(kind) for kind in sorted(types)}
+
+
 def _record_external_sync_log(
     *,
     provider,
@@ -8561,6 +8574,13 @@ def _rider_bulk_task_types():
     }
 
 
+def _can_run_rider_group(group, runnable_types):
+    types = set(group.sync_types)
+    types.update(task.sync_type for task in ExternalCallTask.query.filter_by(task_group_id=group.id))
+    return (bool(types) and types.issubset(runnable_types)
+            and (not group.workflow_type or group.workflow_type in runnable_types))
+
+
 def _parse_bulk_rider_ids(value):
     tokens = re.findall(r'[^,\s]+', value)
     if not 1 <= len(tokens) <= MAX_BULK_TASK_RIDERS or any(
@@ -8608,7 +8628,7 @@ def rider_bulk_tasks():
     page = None
     if groups is not None and tab == 'groups':
         if selected_type:
-            groups = groups.filter_by(sync_type=selected_type)
+            groups = groups.filter(ExternalCallTaskGroup.sync_types.contains([selected_type]))
         page = groups.order_by(ExternalCallTaskGroup.timestamp.desc(), ExternalCallTaskGroup.id.desc()).paginate(per_page=50)
     members = []
     search_results = []
@@ -8630,22 +8650,24 @@ def rider_bulk_tasks():
             members = [dict(id=task.id, rider_id=task.related_to_id,
                             name=names.get(task.related_to_id, f'Rider #{task.related_to_id}') if task.related_to_table == 'rider' else task.endpoint,
                             provider=task.provider, status=task.status) for task in tasks]
-            if group.status == 'draft' and group.sync_type in runnable_types:
+            if group.status == 'draft' and _can_run_rider_group(group, runnable_types):
                 search_results = _search_stat_list_riders(namespace, rider_ids, rider_term, team_term)
     editor_types = {kind: label for kind, label in runnable_types.items()
-                    if kind in (FC_RIDER_SYNC, PCS_RIDER_SYNC) or (group and kind == group.sync_type)}
+                    if kind in (FC_RIDER_SYNC, PCS_RIDER_SYNC)}
+    can_run_group = bool(group and _can_run_rider_group(group, runnable_types))
     response = make_response(render_template(
         'rider_bulk_tasks.html', selected_namespace=namespace, page=page, runnable_types=runnable_types,
         max_riders=MAX_BULK_TASK_RIDERS, sync_type_display=_external_sync_type_display,
-        tab=tab, group=group, members=members,
-        editor_types=editor_types, selected_type=selected_type, task_types=EXTERNAL_SYNC_TYPE_LABELS,
+        tab=tab, group=group, members=members, can_run_group=can_run_group,
+        editor_types=editor_types, selected_type=selected_type, task_types=_external_task_type_choices(groups),
         rider_search=rider_term, team_search=team_term, search_results=search_results,
+        sync_types_display=_external_sync_types_display,
     ))
     response.cache_control.no_store = True
     return response
 
 
-def _rider_task_requests(namespace, rider_ids, sync_type):
+def _rider_task_requests(namespace, rider_ids, sync_types):
     with rider_database(namespace) as conn:
         riders = conn.execute(text("""
             SELECT id, first_name, last_name, first_cycling_id, pcs_slug
@@ -8655,7 +8677,8 @@ def _rider_task_requests(namespace, rider_ids, sync_type):
         raise ValueError('One or more riders are unavailable in this namespace.')
     requests = []
     for rider in riders:
-        for provider in RIDER_BULK_TASK_PROVIDERS[sync_type]:
+        for sync_type in sync_types:
+            provider, endpoint = sync_type.split('.', 1)
             if provider == 'pcs':
                 slug = request_rider_slug(rider['pcs_slug'], rider['first_name'], rider['last_name'])
                 params = {'rider_slug': slug} if slug else None
@@ -8666,7 +8689,7 @@ def _rider_task_requests(namespace, rider_ids, sync_type):
                 identifier = 'FirstCycling ID'
             if params is None:
                 raise ValueError(f"Rider #{rider['id']} needs a valid {identifier}.")
-            requests.append(dict(provider=provider, endpoint=PROFILE_ENDPOINT, params=params,
+            requests.append(dict(provider=provider, endpoint=endpoint, params=params,
                                  related_to_table='rider', related_to_id=rider['id']))
     return requests
 
@@ -8679,14 +8702,12 @@ def _run_rider_data_sync(namespace, runnable_types):
         rider_ids = _parse_bulk_rider_ids(request.form.get('rider_ids', ''))
         if not rider_ids:
             raise ValueError(f'Select between 1 and {MAX_BULK_TASK_RIDERS} valid riders.')
-        # Validate both providers before staging either group; commit them together.
-        requests = _rider_task_requests(namespace, rider_ids, ACTIVITY_CHECK)
-        groups = [enqueue_group(
-            [item for item in requests if item['provider'] == provider],
-            namespace_id=namespace.id, executed_by_id=current_user.id,
-            provider=provider, sync_type=sync_type, message='Bulk Run Data Sync',
-        ) for provider, sync_type in (('pcs', PCS_RIDER_SYNC), ('firstcycling', FC_RIDER_SYNC))]
-        group_ids = [group.id for group in groups]
+        requests = _rider_task_requests(namespace, rider_ids, [PCS_RIDER_SYNC, FC_RIDER_SYNC])
+        group = enqueue_group(
+            requests, namespace_id=namespace.id, executed_by_id=current_user.id,
+            message='Fetch Rider Data',
+        )
+        group_ids = [group.id]
         db.session.commit()
     except (ValueError, SQLAlchemyError) as exc:
         db.session.rollback()
@@ -8699,7 +8720,7 @@ def _run_rider_data_sync(namespace, runnable_types):
             db.session.rollback()
             logger.exception('Could not submit rider task group %s', group_id)
             flash('The group is queued and will be retried by the dispatcher.', 'warning')
-    flash('PCS and FirstCycling rider data sync groups queued.', 'success')
+    flash('PCS and FirstCycling rider data sync group queued.', 'success')
     return redirect(url_for('web.rider_bulk_tasks', tab='groups'))
 
 
@@ -8711,10 +8732,21 @@ def _save_rider_task_group(namespace, group, runnable_types):
         abort(400)
     if action == 'create' and group is not None:
         abort(400)
-    sync_type = request.form.get('sync_type', group.sync_type if group else None)
-    if sync_type not in RIDER_BULK_TASK_PROVIDERS:
+    workflow_type = request.form.get('workflow_type', group.workflow_type if group else None) or None
+    if workflow_type and workflow_type not in RIDER_CHECK_JOBS:
         abort(400)
-    if sync_type not in runnable_types or (group and group.sync_type not in runnable_types):
+    sync_types = sorted(set(request.form.getlist('sync_types'))) if 'sync_types' in request.form else (
+        list(group.sync_types) if group else []
+    )
+    if workflow_type:
+        sync_types = sorted(
+            f'{provider}.{PROFILE_ENDPOINT}' for provider in RIDER_BULK_TASK_PROVIDERS[workflow_type]
+        )
+    if not sync_types or any(kind not in (FC_RIDER_SYNC, PCS_RIDER_SYNC) for kind in sync_types):
+        abort(400)
+    if (any(kind not in runnable_types for kind in sync_types)
+            or (workflow_type and workflow_type not in runnable_types)
+            or (group and not _can_run_rider_group(group, runnable_types))):
         abort(403)
     if group and group.status != 'draft' and action != 'cancel':
         abort(409, description='Only draft groups can be edited or queued.')
@@ -8729,7 +8761,10 @@ def _save_rider_task_group(namespace, group, runnable_types):
             ).delete()
             if not removed:
                 abort(404)
-            group.requested_count = ExternalCallTask.query.filter_by(task_group_id=group.id).count()
+            remaining = ExternalCallTask.query.filter_by(task_group_id=group.id).all()
+            group.requested_count = len(remaining)
+            if remaining:
+                group.sync_types = sorted({task.sync_type for task in remaining})
         else:
             tasks = ExternalCallTask.query.filter_by(task_group_id=group.id).all() if group else []
             rider_ids = list(dict.fromkeys(task.related_to_id for task in tasks if task.related_to_table == 'rider'))
@@ -8743,19 +8778,21 @@ def _save_rider_task_group(namespace, group, runnable_types):
                 raise ValueError(f'A group can contain up to {MAX_BULK_TASK_RIDERS} riders.')
             if action == 'queue' and not rider_ids:
                 raise ValueError('Add at least one rider before queuing this group.')
-            requests = _rider_task_requests(namespace, rider_ids, sync_type)
+            requests = _rider_task_requests(namespace, rider_ids, sync_types)
             message = (request.form.get('name', group.message if group else '') or '').strip()
             if len(message) > 255:
                 raise ValueError('Enter a group name of up to 255 characters.')
-            providers = RIDER_BULK_TASK_PROVIDERS[sync_type]
             if group is None:
                 group = enqueue_group(requests, namespace_id=namespace.id, executed_by_id=current_user.id,
-                                      draft=True, sync_type=sync_type)
+                                      draft=True, workflow_type=workflow_type)
             else:
                 replace_draft_requests(group, requests)
-            group.message = message or f'{_external_sync_type_display(sync_type)} bulk request'
-            group.sync_type = sync_type
-            group.provider = providers[0] if len(providers) == 1 else None
+            group.message = message or f'{_external_sync_types_display(sync_types)} bulk request'
+            group.workflow_type = workflow_type
+            # Empty drafts retain the requested methods until riders are added.
+            group.sync_types = sync_types
+            providers = {kind.split('.', 1)[0] for kind in sync_types}
+            group.provider = next(iter(providers)) if len(providers) == 1 else None
             if action == 'queue':
                 group.status = 'queued'
                 ExternalCallTask.query.filter_by(task_group_id=group.id).update(
@@ -12187,6 +12224,7 @@ def admin_integrations_index():
         'can_view_manual': can_view_manual,
         'can_view_scheduler': can_view_scheduler,
         'sync_type_display': _external_sync_type_display,
+        'sync_types_display': _external_sync_types_display,
         'sync_views': EXTERNAL_SYNC_TYPE_LABELS,
     }
     if tab == 'manual':
@@ -12251,6 +12289,7 @@ def admin_integrations_index():
         if not can_view_groups:
             abort(403)
         groups = _visible_external_call_groups(selected_namespace)
+        context['sync_views'] = {**EXTERNAL_SYNC_TYPE_LABELS, **_external_task_type_choices(groups)}
         filters = {
             name: request.args.get(name, '').strip()
             for name in ('provider', 'status', 'origin', 'priority', 'sync_view', 'year', 'gender')
@@ -12264,7 +12303,10 @@ def admin_integrations_index():
             if filters[name]:
                 groups = groups.filter(column == filters[name])
         if filters['sync_view'] and filters['sync_view'] != 'all':
-            groups = groups.filter_by(sync_type=filters['sync_view'])
+            groups = groups.filter(or_(
+                ExternalCallTaskGroup.sync_types.contains([filters['sync_view']]),
+                ExternalCallTaskGroup.workflow_type == filters['sync_view'],
+            ))
         if filters['year']:
             year = request.args.get('year', type=int)
             if year is None or not 1 <= year <= 9999:
@@ -12451,7 +12493,7 @@ def external_call_group_detail(group_id):
         'admin/external_call_group.html',
         group=group,
         tasks=tasks,
-        sync_type_label=_external_sync_type_display(group.sync_type),
+        sync_type_label=_external_sync_types_display(group.sync_types),
         details=details if isinstance(details, dict) else {},
     ))
     response.cache_control.no_store = True

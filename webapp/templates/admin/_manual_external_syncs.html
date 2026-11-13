@@ -1,5 +1,5 @@
 {% from "admin/_integration_season_fields.html" import season_fields %}
-{% set is_pcs = active_sync_view == 'pcs_rider' %}
+{% set is_pcs = active_sync_view == 'pcs.get_rider_profile' %}
 <nav class="nav nav-tabs nav-subtabs mb-3" aria-label="Manual sync types">
     {% for sync_type, label in manual_types.items() %}
     <a class="nav-link{% if active_sync_view == sync_type %} active{% endif %}"

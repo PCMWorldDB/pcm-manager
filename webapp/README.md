@@ -152,7 +152,7 @@ The worker consumes control jobs (`celery`), high groups (`external.high`), then
 low groups (`external.low`) with Redis's sorted queue ordering. Groups within
 each queue execute in publication order. Late acknowledgement on group tasks and
 prefetch one keep later groups in Redis while the current group runs. Starting
-a group changes its status to `running` and clears `is_worker_queued`. It finishes
+a group clears `is_worker_queued` and retains its `worker_message_id` ownership token. It finishes
 the entire group, including PCS spacing and retry waits, before taking another
 group; high priority never interrupts an active group. FirstCycling tasks within
 that group may proceed during a PCS wait. Empty waiting slots are filled only
@@ -217,8 +217,9 @@ Stop web and the combined worker/Beat, back up and confirm main, apply with
 restart the services. Drain or remove old per-request/drain messages before
 switching versions; the old per-request entry point intentionally does no work.
 No schema scripts are applied automatically. Do not clear Redis queues independently
-of submission metadata: groups marked `is_worker_queued` are not republished by
-the heartbeat. An operator must reconcile affected groups after broker data loss.
+of submission metadata: groups marked `is_worker_queued` or holding a
+`worker_message_id` ownership token are not republished by the heartbeat.
+An operator must reconcile affected groups after broker data loss.
 
 PCS supports only `get_rider_profile`, fetching a validated canonical slug's
 `/road` page with redirects disabled. The independent parser preserves profile
@@ -226,11 +227,20 @@ facts and result rows. Parsed responses are retained in the task's `result_json`
 this does not yet upsert shared PCS rider/result tables or match Namespace riders.
 Failures remain explicit, including blocked or unrecognized HTML. Interrupted
 running requests become failed for operator review, rather than silently fetching
-again. Groups aggregate queued/running/retry, success, failed and partial outcomes.
+again. Groups are `running` while a task executes, and `queued` while requests are
+pending or waiting to retry, even when some tasks have succeeded. Only completed
+groups become `success`, `failed`, or `partial` (mixed success and failure).
+The ownership token prevents a waiting active group from being dispatched again.
 
 Existing FC sync routes keep their original behavior through compatibility model
-aliases. The group `provider` and `sync_type` columns are nullable legacy audit
-metadata; new queue groups do not assign a provider. Historical API logs have
+aliases. The group `provider` column is nullable legacy audit metadata.
+Groups store a deduplicated `sync_types` list of `provider.endpoint` values
+derived from their tasks. Empty drafts retain their intended methods.
+`workflow_type` separately identifies workflows such as `rider_activity_check`
+and legacy FC bulk syncs; it does not control individual queue task execution.
+Fetch Rider Data and scheduled activity checks each create one mixed-provider group.
+Editing, queuing and cancellation require permission for every included method
+and the workflow, where applicable. Historical API logs have
 `status=historical` and never execute. FC bulk syncs still run through their
 existing workflow; they are not expanded into queue tasks by this change.
 
@@ -335,3 +345,18 @@ unknown when either date is missing. The override stays separate from the
 fetch result and is editable through rider attribute approval. A changed
 slug clears the old identity evidence and override. FC Rider tasks refresh
 the shared FirstCycling profile linked by `first_cycling_id`.
+
+### Task group types: manual main schema update
+
+After the existing external-call queue migrations, review
+[external_call_group_sync_types_main.sql](../migrations/external_call_group_sync_types_main.sql).
+Stop web, workers and Beat, back up and confirm **main**, then have an operator run:
+
+```text
+psql -v ON_ERROR_STOP=1 -d <main-database> -f migrations/external_call_group_sync_types_main.sql
+```
+
+This migration requires an empty task-group table, renames `sync_type` to
+`workflow_type`, and adds the `sync_types` array and membership index.
+It includes no history backfill. Deploy matching code before restarting services.
+No Namespace schema changes are needed; scripts are never applied automatically.

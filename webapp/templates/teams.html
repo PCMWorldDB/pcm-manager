@@ -287,7 +287,7 @@
     <div class="card-body">
         {% set can_create_stat_list = can_start_stat_list %}
         {% set can_open_attribute_editor = can_create_rider_list and can_bulk_edit_attributes %}
-        {% set can_run_data_sync = 'pcs_rider' in rider_task_types and 'fc_rider' in rider_task_types %}
+        {% set can_run_data_sync = 'pcs.get_rider_profile' in rider_task_types and 'firstcycling.get_rider_profile' in rider_task_types %}
         {% set can_select_riders = can_create_stat_list or can_open_attribute_editor or can_run_data_sync %}
         <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
             <h5 class="mb-0" id="rider-table-title">Riders ({{ rider_pagination.total }})</h5>

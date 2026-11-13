@@ -1,5 +1,5 @@
 <div class="panel-card card"><div class="card-body">
-    {% set can_run_data_sync = 'pcs_rider' in rider_task_types and 'fc_rider' in rider_task_types %}
+    {% set can_run_data_sync = 'pcs.get_rider_profile' in rider_task_types and 'firstcycling.get_rider_profile' in rider_task_types %}
     <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
         <h5 class="mb-0">Identity review ({{ identity_review.total }})</h5>
         {% if can_run_data_sync %}

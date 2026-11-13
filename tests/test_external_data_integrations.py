@@ -11,6 +11,7 @@ from webapp import worker
 from webapp.extensions import db
 from webapp.models import ExternalCallTask, ExternalCallTaskGroup, ScheduledJob, Namespace, Role, User
 from webapp.web import routes
+from webapp.integrations.firstcycling.api import FirstCyclingClient
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def integration_data(app):
         selected = Namespace(name=f'Selected {suffix}', slug=f'selected-{suffix}', database_name=f'selected_{suffix}')
         other = Namespace(name=f'Other {suffix}', slug=f'other-{suffix}', database_name=f'other_{suffix}')
         firstcycling = ExternalCallTaskGroup(
-            provider='firstcycling', sync_type='fc_race_results', status='partial',
+            provider='firstcycling', workflow_type='fc_race_results', status='partial',
             season_year=2026, gender='Men', executed_by=manager, message='Race results sync complete',
             requested_count=2, synced_count=1, failed_count=1,
             details_json=json.dumps({'start_date': '2026-05-01', 'end_date': '2026-05-31', 'rows_synced': 30}),
@@ -57,6 +58,22 @@ def integration_data(app):
         db.session.delete(db.session.get(User, manager_id))
         db.session.delete(db.session.get(User, viewer_id))
         db.session.commit()
+
+
+def test_api_audit_adds_unique_provider_endpoint_types(app, integration_data):
+    _, _, (group_id, _, _, _), _ = integration_data
+    with app.app_context():
+        api = FirstCyclingClient(api_path='synthetic', external_sync_log_id=group_id)
+        for endpoint in ('rider/123.json', 'team/456.json', 'rider/123.json'):
+            api._record_api_call(
+                endpoint_path=endpoint, params={}, request_url=f'https://example.test/synthetic/{endpoint}',
+                attempt=1, max_attempts=1, outcome='success', duration_ms=1, http_status=200,
+            )
+        db.session.expire_all()
+        group = db.session.get(ExternalCallTaskGroup, group_id)
+        assert set(group.sync_types) == {'firstcycling.rider/123.json', 'firstcycling.team/456.json'}
+        assert len(group.sync_types) == 2
+        assert group.workflow_type == 'fc_race_results'
 
 
 def test_task_groups_filters_and_detail(app, client, integration_data, monkeypatch):
@@ -177,7 +194,7 @@ def test_manual_tab_starts_existing_firstcycling_sync(app, client, integration_d
     assert dispatched[0]['end_date'] == form['end_date']
     with app.app_context():
         group = db.session.get(ExternalCallTaskGroup, dispatched[0]['log_id'])
-        assert (group.provider, group.sync_type, group.status) == ('firstcycling', 'fc_race_results', 'queued')
+        assert (group.provider, group.workflow_type, group.status) == ('firstcycling', 'fc_race_results', 'queued')
         assert group.namespace_id is None
 
 
@@ -189,7 +206,7 @@ def test_manual_sync_inputs_and_pcs_rider_queue(app, client, integration_data, m
     monkeypatch.setattr(worker, 'submit_external_group', submitted.append)
     dispatched = []
     monkeypatch.setattr(routes.run_external_sync_task, 'delay', lambda **kwargs: dispatched.append(kwargs))
-    form = {'provider': 'pcs', 'sync_type': 'pcs_rider', 'rider_slug': 'jane-doe'}
+    form = {'provider': 'pcs', 'sync_type': 'pcs.get_rider_profile', 'rider_slug': 'jane-doe'}
     with client.session_transaction() as session:
         session['_user_id'] = str(viewer_id)
     assert client.post(f'{path}/run', data=form).status_code == 403
@@ -201,7 +218,7 @@ def test_manual_sync_inputs_and_pcs_rider_queue(app, client, integration_data, m
         ('fc_teams', {'year', 'gender', 'limit'}),
         ('fc_riders', {'year', 'gender', 'limit'}),
         ('fc_race_results', {'year', 'gender', 'start_date', 'end_date'}),
-        ('pcs_rider', {'rider_slug'}),
+        ('pcs.get_rider_profile', {'rider_slug'}),
     ):
         response = client.get(f'{path}?tab=manual&sync_view={kind}')
         assert response.status_code == 200
@@ -293,7 +310,7 @@ def test_named_race_jobs_run_independently_and_start_empty(app, client, integrat
             assert [(call['start_date'], call['end_date']) for call in calls] == [
                 ('2026-05-01', '2026-05-02'), ('2026-05-01', '2026-05-01'),
             ]
-            groups = ExternalCallTaskGroup.query.filter_by(origin='scheduled', sync_type='fc_race_results').all()
+            groups = ExternalCallTaskGroup.query.filter_by(origin='scheduled', workflow_type='fc_race_results').all()
             assert {group.scheduled_job_id for group in groups} == {job.id for job in jobs}
         page = client.get(f'{path}?tab=scheduler').get_data(as_text=True)
         assert 'Morning races' in page and '>Edit</a>' in page

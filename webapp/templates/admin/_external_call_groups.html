@@ -3,7 +3,7 @@
     ('status', 'Status', [('draft', 'Draft'), ('queued', 'Queued'), ('running', 'Running'), ('success', 'Success'), ('partial', 'Partial'), ('failed', 'Failed'), ('cancelled', 'Cancelled')]),
     ('origin', 'Origin', [('manual', 'Manual'), ('scheduled', 'Scheduled')]),
     ('priority', 'Priority', [('high', 'High'), ('low', 'Low')]),
-    ('sync_view', 'Sync Type', sync_views.items())
+    ('sync_view', 'Task Type / Workflow', sync_views.items())
 ] %}
 {% set provider_labels = dict(filter_choices[0][2]) %}
 <form method="get" action="{{ url_for('web.admin_integrations_index') }}" class="row g-2 align-items-end mb-3">
@@ -47,7 +47,7 @@
                 <th scope="col">Created (UTC)</th>
                 <th scope="col">Providers</th>
                 <th scope="col">Namespace</th>
-                <th scope="col">Sync Type</th>
+                <th scope="col">Task Types / Workflow</th>
                 <th scope="col">Season</th>
                 <th scope="col">Status</th>
                 <th scope="col">Origin</th>
@@ -66,7 +66,7 @@
                     {% else %}—{% endfor %}
                 </td>
                 <td>{{ selected_namespace.name if group.namespace_id else 'Global' }}</td>
-                <td>{{ sync_type_display(group.sync_type) or '—' }}</td>
+                <td>{{ sync_types_display(group.sync_types) or '—' }}{% if group.workflow_type %}<br><small>{{ sync_type_display(group.workflow_type) }}</small>{% endif %}</td>
                 <td>{{ group.season_year or '—' }}{% if group.gender %} [{{ group.gender }}]{% endif %}</td>
                 <td>{{ group.status|replace('_', ' ')|capitalize }}</td>
                 <td>{{ group.origin|capitalize }}</td>

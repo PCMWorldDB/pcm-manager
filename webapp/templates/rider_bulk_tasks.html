@@ -23,7 +23,7 @@
         <form method="get" class="row g-2 align-items-end mb-3">
             <input type="hidden" name="tab" value="groups">
             <div class="col-sm-6 col-lg-4">
-                <label for="group-task-type" class="form-label">Task group type</label>
+                <label for="group-task-type" class="form-label">Task type</label>
                 <select name="sync_type" id="group-task-type" class="form-select">
                     <option value="">All types</option>
                     {% for value, label in task_types.items() if value != 'all' %}
@@ -48,7 +48,7 @@
                     {% for item in page.items %}
                     <tr>
                         <th scope="row"><a href="{{ url_for('web.rider_bulk_tasks', tab='editor', group_id=item.id) }}">#{{ item.id }}</a></th>
-                        <td>{{ item.message or '—' }}</td><td>{{ sync_type_display(item.sync_type) }}</td>
+                        <td>{{ item.message or '—' }}</td><td>{{ sync_types_display(item.sync_types) }}</td>
                         <td>{{ item.status|replace('_', ' ')|capitalize }}</td>
                         {% for count in (item.requested_count, item.synced_count, item.failed_count) %}<td>{{ count if count is not none else '—' }}</td>{% endfor %}
                         <td>{{ item.origin|capitalize }}</td><td class="text-nowrap">{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
@@ -68,7 +68,7 @@
     </div>
 </section>
 {% else %}
-{% set can_edit = group and group.status == 'draft' and group.sync_type in runnable_types %}
+{% set can_edit = group and group.status == 'draft' and can_run_group %}
 {% if not group and editor_types or can_edit %}
 <section class="panel-card card mb-3" aria-labelledby="task-group-heading">
     <div class="card-body">
@@ -81,14 +81,19 @@
                 <input id="task-group-name" name="name" class="form-control" maxlength="255" value="{{ group.message or '' if group else '' }}">
             </div>
             <div class="col-12">
-                <label for="bulk-task-type" class="form-label">Method</label>
-                <select id="bulk-task-type" name="sync_type" class="form-select" required>
-                    {% for value, label in editor_types.items() %}<option value="{{ value }}" {% if group and group.sync_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                {% if group and group.workflow_type %}
+                <label class="form-label">Workflow</label>
+                <p>{{ sync_type_display(group.workflow_type) }}</p>
+                {% else %}
+                <label for="bulk-task-type" class="form-label">Methods</label>
+                <select id="bulk-task-type" name="sync_types" class="form-select" multiple required>
+                    {% for value, label in editor_types.items() %}<option value="{{ value }}" {% if group and value in group.sync_types %}selected{% endif %}>{{ label }}</option>{% endfor %}
                 </select>
+                {% endif %}
             </div>
             <div class="col-12"><button type="submit" name="action" value="{{ 'save' if group else 'create' }}" class="btn btn-primary">{{ 'Save draft' if group else 'Create Group' }}</button></div>
         </form>
-        <p class="form-text mb-0">Only drafts can be edited. Add riders, choose a method, then queue the group.</p>
+        <p class="form-text mb-0">Only drafts can be edited. Add riders, choose methods, then queue the group.</p>
     </div>
 </section>
 {% elif not group %}<p class="alert alert-info">Select a group to view its tasks.</p>{% endif %}
@@ -96,9 +101,9 @@
 <section class="panel-card card mb-3" aria-labelledby="group-riders-heading">
     <div class="card-body">
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-            <h3 class="h5 mb-0" id="group-riders-heading">Group #{{ group.id }} · {{ sync_type_display(group.sync_type) }} · {{ group.status|capitalize }}</h3>
+            <h3 class="h5 mb-0" id="group-riders-heading">Group #{{ group.id }} · {{ sync_types_display(group.sync_types) }}{% if group.workflow_type %} · {{ sync_type_display(group.workflow_type) }}{% endif %} · {{ group.status|capitalize }}</h3>
             <div class="d-flex gap-2">
-                {% if group.sync_type in runnable_types and group.status in ('draft', 'queued', 'running') %}
+                {% if can_run_group and group.status in ('draft', 'queued', 'running') %}
                 <form method="post" class="d-flex gap-2">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="group_id" value="{{ group.id }}">

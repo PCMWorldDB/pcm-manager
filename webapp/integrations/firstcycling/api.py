@@ -9,10 +9,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import current_app, has_app_context
+from sqlalchemy import func, update
 
 from webapp.config import load_config
 from webapp.extensions import db
-from webapp.models.main.base import ExternalCallTask
+from webapp.models.main.base import ExternalCallTask, ExternalCallTaskGroup
 from webapp.models.main.firstcycling import (
     FirstCyclingRace,
     FirstCyclingRaceResult,
@@ -229,6 +230,12 @@ class FirstCyclingClient:
             }
             with db.engines['main'].begin() as conn:
                 conn.execute(ExternalCallTask.__table__.insert().values(**values))
+                if self.external_sync_log_id is not None:
+                    sync_type = f"{values['provider']}.{values['endpoint']}"
+                    conn.execute(update(ExternalCallTaskGroup).where(
+                        ExternalCallTaskGroup.id == self.external_sync_log_id,
+                        ~ExternalCallTaskGroup.sync_types.any(sync_type),
+                    ).values(sync_types=func.array_append(ExternalCallTaskGroup.sync_types, sync_type)))
         except Exception:
             logger.exception('Failed to record FirstCycling API call log for endpoint %s', endpoint_path)
 

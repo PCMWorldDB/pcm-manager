@@ -828,7 +828,7 @@ def test_rider_selection_creates_lists_in_the_selected_namespace(app, client, ri
         assert conn.scalar(text('SELECT COUNT(*) FROM rider_list')) == 0
 
 
-def test_bulk_data_sync_queues_two_provider_groups_in_selected_namespace(app, client, rider_views, monkeypatch):
+def test_bulk_data_sync_queues_one_mixed_group_in_selected_namespace(app, client, rider_views, monkeypatch):
     namespaces, (alpha, beta) = rider_views
     with app.app_context():
         db.session.add_all(namespaces)
@@ -876,21 +876,21 @@ def test_bulk_data_sync_queues_two_provider_groups_in_selected_namespace(app, cl
     with beta.begin() as conn:
         conn.execute(text('UPDATE rider SET first_cycling_id=9000+id'))
     response = client.post(path, data=data)
-    assert response.status_code == 302 and len(submitted) == 2
+    assert response.status_code == 302 and len(submitted) == 1
     with app.app_context():
         import json
 
         groups = [db.session.get(ExternalCallTaskGroup, group_id) for group_id in submitted]
-        assert [(group.namespace_id, group.provider, group.sync_type, group.status, group.requested_count)
+        assert [(group.namespace_id, group.provider, group.sync_types, group.status, group.requested_count)
                 for group in groups] == [
-                    (70001, 'pcs', 'pcs_rider', 'queued', 2),
-                    (70001, 'firstcycling', 'fc_rider', 'queued', 2),
+                    (70001, None, ['firstcycling.get_rider_profile', 'pcs.get_rider_profile'], 'queued', 4),
                 ]
-        tasks = ExternalCallTask.query.filter_by(task_group_id=groups[1].id).order_by(ExternalCallTask.id).all()
+        assert groups[0].workflow_type is None
+        tasks = ExternalCallTask.query.filter_by(task_group_id=groups[0].id, provider='firstcycling').order_by(ExternalCallTask.id).all()
         assert [(task.related_to_id, json.loads(task.request_params_json)) for task in tasks] == [
             (1, {'rider_id': 9001}), (2, {'rider_id': 9002}),
         ]
-        pcs_tasks = ExternalCallTask.query.filter_by(task_group_id=groups[0].id).all()
+        pcs_tasks = ExternalCallTask.query.filter_by(task_group_id=groups[0].id, provider='pcs').all()
         assert all('view-beta' in task.request_url or 'untracked' in task.request_url for task in pcs_tasks)
         for group in groups:
             ExternalCallTask.query.filter_by(task_group_id=group.id).delete()

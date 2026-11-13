@@ -46,13 +46,47 @@ def test_mixed_group_and_duplicate_delivery(queue_context, monkeypatch):
     assert pcs.related_to_id is None and pcs.related_to_table is None
     assert fc.related_to_id is None and fc.related_to_table is None
     assert group.provider is None
+    assert group.sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
+    assert [task.sync_type for task in (pcs, fc)] == ['pcs.get_rider_profile', 'firstcycling.get_rider_profile']
     assert queue.execute_task(pcs.id)
+    assert group.status == 'queued'
     assert not queue.execute_task(pcs.id)
     assert queue.execute_task(fc.id)
     db.session.refresh(group)
     assert calls == [('pcs', pcs.request_url), ('firstcycling', {'rider_id': 123})]
     assert group.status == 'success' and group.synced_count == 2
     assert json.loads(pcs.result_json) == {'name': 'Rider'}
+
+
+@pytest.mark.parametrize(('states', 'expected'), [
+    (['queued', 'success'], 'queued'),
+    (['retry_wait', 'success'], 'queued'),
+    (['failed', 'queued'], 'queued'),
+    (['running', 'success'], 'running'),
+    (['success', 'failed'], 'partial'),
+    (['failed', 'failed'], 'failed'),
+    (['success', 'success'], 'success'),
+])
+def test_group_completion_requires_all_tasks_terminal(queue_context, states, expected):
+    group = queue.enqueue_group([request(), request('firstcycling')], workflow_type='rider_activity_check')
+    for task, state in zip(tasks(group), states):
+        task.status = state
+    db.session.flush()
+    queue._refresh_group(group.id)
+    assert group.status == expected
+    assert group.workflow_type == 'rider_activity_check'
+    assert group.synced_count == states.count('success')
+    assert group.failed_count == states.count('failed')
+
+
+def test_replacing_draft_recalculates_unique_types(queue_context):
+    group = queue.enqueue_group([request(), request('firstcycling'), request(slug='another-rider')], draft=True)
+    assert group.sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
+    queue.replace_draft_requests(group, [request(), request(slug='another-rider')])
+    assert group.sync_types == ['pcs.get_rider_profile']
+    assert group.requested_count == 2
+    queue.replace_draft_requests(group, [])
+    assert group.sync_types == []
 
 
 def test_legacy_pcs_task_stores_url_when_executed(queue_context, monkeypatch):
@@ -352,7 +386,9 @@ def test_group_keeps_ownership_during_cooldown_and_retry(queue_context, monkeypa
 
     def advance_clock(seconds):
         waits.append(seconds)
-        assert high.status == 'running' and low.status == 'queued'
+        assert high.status == 'queued' and low.status == 'queued'
+        assert not queue.submit_external_group(high.id)
+        assert queue.poll_external_calls.run() == []
         assert db.session.get(ExternalCallTask, low_task_id).status == 'queued'
         pcs.available_at = datetime.utcnow() - timedelta(seconds=1)
         pcs.started_at = datetime.utcnow() - timedelta(minutes=1)

@@ -121,6 +121,9 @@ def test_scheduled_identity_selects_bounded_unknown_riders(namespaces, monkeypat
     assert rows[0][0].id == rows[1][0].id
     assert rows[0][0].requested_count == 2
     assert rows[2][1].request_url == 'https://www.procyclingstats.com/rider/b-rider-3/road'
+    assert rows[2][0].id == rows[3][0].id
+    assert rows[2][0].workflow_type == ACTIVITY_CHECK
+    assert rows[2][0].sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
     assert all(job.last_run_on == NOW.date() for job in jobs)
 
 
@@ -228,6 +231,14 @@ def test_rider_job_form_checks_namespace_and_links(namespaces, client, monkeypat
 ])
 def test_pcs_check_uses_applied_dob_while_attribute_proposal_is_pending(
         namespaces, monkeypatch, decision, expected_dob, expected_identity):
+    class Clock(datetime):
+        offset = timedelta()
+
+        @classmethod
+        def utcnow(cls):
+            return datetime.utcnow() + cls.offset
+
+    monkeypatch.setattr(worker, 'datetime', Clock)
     (namespace, first), (_, second) = namespaces
     with first.begin() as conn:
         field_configuration.seed_fields(conn, 'PCM2026')
@@ -250,6 +261,8 @@ def test_pcs_check_uses_applied_dob_while_attribute_proposal_is_pending(
                             {'id': change_id}).one() == ('pending', None)
         attribute_changes.decide(conn, 'rider', change_id, decision, None)
         assert conn.scalar(text('SELECT birth_date FROM rider WHERE id=1')) == expected_dob
+    # The second synthetic fetch occurs after the queue's mandatory PCS spacing.
+    Clock.offset = timedelta(seconds=10)
     task = enqueue(namespace, 1)
     assert worker.execute_task(task.id)
     with first.connect() as conn:
@@ -375,11 +388,11 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
     reader = User(username=uuid4().hex, is_active=True, roles=[read_role])
     runner = User(username=uuid4().hex, is_active=True, roles=[read_role, run_role])
     viewer = User(username=uuid4().hex, is_active=True, roles=[viewer_role])
-    pcs = ExternalCallTaskGroup(namespace=second, provider='pcs', sync_type='pcs_rider', status='running')
-    fc = ExternalCallTaskGroup(namespace=second, provider='firstcycling', sync_type='fc_rider', status='success')
-    other = ExternalCallTaskGroup(namespace=first, provider='pcs', sync_type='pcs_rider')
-    unrelated = ExternalCallTaskGroup(namespace=second, provider='firstcycling', sync_type='fc_race_results')
-    global_pcs = ExternalCallTaskGroup(provider='pcs', sync_type='pcs_rider')
+    pcs = ExternalCallTaskGroup(namespace=second, provider='pcs', sync_types=['pcs.get_rider_profile'], status='running')
+    fc = ExternalCallTaskGroup(namespace=second, provider='firstcycling', sync_types=['firstcycling.get_rider_profile'], status='success')
+    other = ExternalCallTaskGroup(namespace=first, provider='pcs', sync_types=['pcs.get_rider_profile'])
+    unrelated = ExternalCallTaskGroup(namespace=second, provider='firstcycling', workflow_type='fc_race_results')
+    global_pcs = ExternalCallTaskGroup(provider='pcs', sync_types=['pcs.get_rider_profile'])
     db.session.add_all([reader, runner, viewer, pcs, fc, other, unrelated, global_pcs])
     db.session.commit()
     with second_engine.begin() as conn:
@@ -408,7 +421,7 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         return group
 
     try:
-        form = {'sync_type': 'pcs_rider', 'rider_ids': '1, 2\n1'}
+        form = {'sync_types': ['pcs.get_rider_profile'], 'rider_ids': '1, 2\n1'}
         assert request().status_code == 302
         login(viewer)
         assert request().status_code == 403
@@ -423,17 +436,17 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         assert markup.select_one('#bulk-task-type') is None
         links = markup.select('tbody th a')
         assert {link.get_text(strip=True) for link in links} == {f'#{pcs.id}', f'#{fc.id}', f'#{unrelated.id}'}
-        filtered = BeautifulSoup(request(f'{path}?sync_type=pcs_rider').data, 'html.parser')
+        filtered = BeautifulSoup(request(f'{path}?sync_type=pcs.get_rider_profile').data, 'html.parser')
         assert [link.get_text(strip=True) for link in filtered.select('tbody th a')] == [f'#{pcs.id}']
         assert request(links[0]['href']).status_code == 200
         assert request(method='POST', data=form).status_code == 403
-        assert request(method='POST', data={**form, 'sync_type': IDENTITY_CHECK}).status_code == 403
+        assert request(method='POST', data={**form, 'workflow_type': IDENTITY_CHECK}).status_code == 403
 
         login(runner)
         assert request('/n/missing/riders/bulk-tasks').status_code == 404
-        assert request(method='POST', data={**form, 'sync_type': 'fc_race_results'}).status_code == 400
+        assert request(method='POST', data={**form, 'sync_types': ['fc_race_results']}).status_code == 400
         assert request(method='POST', data={**form, 'rider_ids': '1,7'}).status_code == 302
-        activity_form = {**form, 'sync_type': ACTIVITY_CHECK}
+        activity_form = {**form, 'workflow_type': ACTIVITY_CHECK}
         assert request(method='POST', data=activity_form).status_code == 403
         with monkeypatch.context() as patch:
             patch.setattr(Namespace, 'build_connection_string', lambda self: first_engine.url)
@@ -441,11 +454,11 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         assert not submitted
 
         create_and_queue(form)
-        create_and_queue({**form, 'sync_type': 'fc_rider', 'rider_ids': '2'})
+        create_and_queue({**form, 'sync_types': ['firstcycling.get_rider_profile'], 'rider_ids': '2'})
         assert len(submitted) == 2
         groups = [db.session.get(ExternalCallTaskGroup, group_id) for group_id in submitted]
-        assert [(group.namespace_id, group.executed_by_id, group.sync_type, group.requested_count)
-                for group in groups] == [(second.id, runner.id, 'pcs_rider', 2), (second.id, runner.id, 'fc_rider', 1)]
+        assert [(group.namespace_id, group.executed_by_id, group.sync_types, group.requested_count)
+                for group in groups] == [(second.id, runner.id, ['pcs.get_rider_profile'], 2), (second.id, runner.id, ['firstcycling.get_rider_profile'], 1)]
         tasks = ExternalCallTask.query.filter_by(task_group_id=groups[0].id).order_by(ExternalCallTask.id).all()
         assert [(task.related_to_table, task.related_to_id, task.request_url.rsplit('/', 2)[1]) for task in tasks] == [
             ('rider', 1, 'b-rider-1'), ('rider', 2, 'b-rider-2'),
@@ -453,9 +466,9 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         task = ExternalCallTask.query.filter_by(task_group_id=groups[1].id).one()
         assert json.loads(task.request_params_json) == {'rider_id': 991002}
 
-        create_and_queue({**form, 'sync_type': IDENTITY_CHECK})
+        create_and_queue({**form, 'workflow_type': IDENTITY_CHECK})
         identity = db.session.get(ExternalCallTaskGroup, submitted[-1])
-        assert (identity.namespace_id, identity.sync_type, identity.requested_count) == (
+        assert (identity.namespace_id, identity.workflow_type, identity.requested_count) == (
             second.id, IDENTITY_CHECK, 2,
         )
 
@@ -480,7 +493,7 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         create_and_queue(activity_form)
         assert len(submitted) == 4
         activity = db.session.get(ExternalCallTaskGroup, submitted[-1])
-        assert (activity.namespace_id, activity.sync_type, activity.requested_count) == (
+        assert (activity.namespace_id, activity.workflow_type, activity.requested_count) == (
             second.id, ACTIVITY_CHECK, 4,
         )
         tasks = ExternalCallTask.query.filter_by(task_group_id=activity.id).all()
@@ -549,8 +562,8 @@ def test_rider_page_queues_only_one_pcs_task_in_selected_namespace(app, namespac
         assert response.location == profile_url
         group = ExternalCallTaskGroup.query.filter_by(executed_by_id=admin.id).one()
         assert submitted == [group.id]
-        assert (group.namespace_id, group.provider, group.sync_type, group.origin, group.requested_count) == (
-            second.id, 'pcs', 'pcs_rider', 'manual', 1,
+        assert (group.namespace_id, group.provider, group.sync_types, group.origin, group.requested_count) == (
+            second.id, 'pcs', ['pcs.get_rider_profile'], 'manual', 1,
         )
         task = ExternalCallTask.query.filter_by(task_group_id=group.id).one()
         assert (task.provider, task.endpoint, task.related_to_table, task.related_to_id) == (
@@ -567,6 +580,54 @@ def test_rider_page_queues_only_one_pcs_task_in_selected_namespace(app, namespac
     finally:
         db.session.delete(viewer)
         db.session.delete(admin)
+        db.session.commit()
+
+
+@pytest.mark.parametrize('denied_provider', ['pcs', 'firstcycling'])
+def test_mixed_group_requires_every_method_permission(app, namespaces, client, monkeypatch, denied_provider):
+    (_, _), (namespace, _) = namespaces
+    user = User(username=uuid4().hex, is_active=True, roles=[
+        Role.query.filter_by(name='viewer').one(),
+        Role.query.filter_by(name='integrations_manager').one(),
+    ])
+    db.session.add(user)
+    db.session.flush()
+    group = worker.enqueue_group([
+        dict(provider=provider, endpoint='get_rider_profile', params=params,
+             related_to_table='rider', related_to_id=1)
+        for provider, params in [('pcs', {'rider_slug': 'b-rider-1'}),
+                                 ('firstcycling', {'rider_id': 991001})]
+    ], namespace_id=namespace.id, executed_by_id=user.id, draft=True)
+    db.session.commit()
+    group_id = group.id
+    path = f'/n/{namespace.slug}/riders/bulk-tasks'
+    with client.session_transaction() as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+    permission = '_can_check_rider_identity' if denied_provider == 'pcs' else '_can_run_firstcycling_integrations'
+    monkeypatch.setattr(routes, permission, lambda: False)
+    allowed_type = 'firstcycling.get_rider_profile' if denied_provider == 'pcs' else 'pcs.get_rider_profile'
+    monkeypatch.setattr(routes, 'submit_external_group', lambda *args: pytest.fail('Denied group was submitted'))
+    try:
+        with app.app_context():
+            page = BeautifulSoup(client.get(f'{path}?tab=editor&group_id={group_id}').data, 'html.parser')
+            assert not page.select('button[value="queue"], button[value="cancel"], #task-group-form')
+            for action in ('save', 'add', 'remove', 'queue', 'cancel'):
+                response = client.post(path, data={
+                    'action': action, 'group_id': group_id, 'sync_types': [allowed_type],
+                    'rider_ids': '2', 'rider_id': 1,
+                })
+                assert response.status_code == 403
+            assert client.post(path, data={
+                'action': 'create', 'sync_types': ['pcs.get_rider_profile', 'firstcycling.get_rider_profile'],
+                'rider_ids': '1',
+            }).status_code == 403
+        db.session.expire_all()
+        assert group.status == 'draft' and group.requested_count == 2
+        assert group.sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
+        assert ExternalCallTask.query.filter_by(task_group_id=group_id).count() == 2
+    finally:
+        db.session.delete(user)
         db.session.commit()
 
 
@@ -598,13 +659,13 @@ def test_bulk_task_draft_editor_and_queue_are_namespace_scoped(app, namespaces, 
         return request(method='POST', data={'action': action, 'group_id': group_id, **data})
 
     try:
-        response = request(method='POST', data={'action': 'create', 'sync_type': 'pcs_rider', 'name': 'My draft'})
+        response = request(method='POST', data={'action': 'create', 'sync_types': ['pcs.get_rider_profile'], 'name': 'My draft'})
         group_id = int(parse_qs(urlsplit(response.location).query)['group_id'][0])
         group = db.session.get(ExternalCallTaskGroup, group_id)
         assert (group.status, group.requested_count, group.message) == ('draft', 0, 'My draft')
         markup = BeautifulSoup(request(response.location).data, 'html.parser')
         assert [tab.get_text(strip=True) for tab in markup.select('nav[aria-label="Bulk Tasks sections"] a')] == ['Groups', 'Editor']
-        assert {option['value'] for option in markup.select('#bulk-task-type option')} == {'pcs_rider', 'fc_rider'}
+        assert {option['value'] for option in markup.select('#bulk-task-type option')} == {'pcs.get_rider_profile', 'firstcycling.get_rider_profile'}
         assert markup.select_one('button[value="queue"][disabled]')
         assert post('queue').status_code == 302 and group.status == 'draft'
         assert not submitted
@@ -623,19 +684,25 @@ def test_bulk_task_draft_editor_and_queue_are_namespace_scoped(app, namespaces, 
         # A method change rebuilds every request from this namespace's riders.
         with engine.begin() as conn:
             conn.execute(text('UPDATE rider SET first_cycling_id=NULL WHERE id=2'))
-        assert post('save', sync_type='fc_rider').status_code == 302
-        assert group.sync_type == 'pcs_rider'
+        assert post('save', sync_types=['firstcycling.get_rider_profile']).status_code == 302
+        assert group.sync_types == ['pcs.get_rider_profile']
         assert {task.provider for task in ExternalCallTask.query.filter_by(task_group_id=group_id)} == {'pcs'}
         with engine.begin() as conn:
             conn.execute(text('UPDATE rider SET first_cycling_id=991002 WHERE id=2'))
-        assert post('save', sync_type='fc_rider', name='FC draft').status_code == 302
-        assert (group.sync_type, group.message) == ('fc_rider', 'FC draft')
+        assert post('save', sync_types=['firstcycling.get_rider_profile'], name='FC draft').status_code == 302
+        assert (group.sync_types, group.message) == (['firstcycling.get_rider_profile'], 'FC draft')
         tasks = ExternalCallTask.query.filter_by(task_group_id=group_id).all()
         assert {task.provider for task in tasks} == {'firstcycling'}
         assert {json.loads(task.request_params_json)['rider_id'] for task in tasks} == {990001, 991002}
         assert post('remove', rider_id=1).status_code == 302
         assert group.requested_count == 1
         assert post('add', rider_ids='1').status_code == 302
+        assert post('save', sync_types=['pcs.get_rider_profile', 'firstcycling.get_rider_profile']).status_code == 302
+        assert group.sync_types == ['firstcycling.get_rider_profile', 'pcs.get_rider_profile']
+        assert group.workflow_type is None and group.requested_count == 4
+        for kind in group.sync_types:
+            filtered = BeautifulSoup(request(f'{path}?sync_type={kind}').data, 'html.parser')
+            assert f'#{group_id}' in [link.get_text(strip=True) for link in filtered.select('tbody th a')]
 
         def queue_once(_):
             with app.test_client() as concurrent_client:

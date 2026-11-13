@@ -178,7 +178,7 @@ class ExternalCallTaskGroup(MainDBModel):
     scheduled_job_id = db.Column(db.Integer, db.ForeignKey('scheduled_jobs.id', ondelete='SET NULL'), index=True)
     scheduled_job = db.relationship('ScheduledJob')
 
-    # Compatibility metadata for old FC sync screens; queue groups have no provider.
+    # Legacy provider metadata; mixed groups have no single provider.
     provider = db.Column(db.String(50), nullable=True, index=True)
     workflow_type = db.Column(db.String(80), nullable=True, index=True)
     sync_types = db.Column(ARRAY(db.String(320)), nullable=False, default=list, server_default='{}')
@@ -204,6 +204,7 @@ class ExternalCallTaskGroup(MainDBModel):
         db.CheckConstraint("priority IN ('high', 'low')", name='ck_external_group_priority'),
         db.CheckConstraint("origin IN ('manual', 'scheduled')", name='ck_external_group_origin'),
         Index('ix_external_group_dispatch', 'status', 'is_worker_queued', 'priority', 'timestamp', 'id'),
+        Index('ix_external_group_sync_types', 'sync_types', postgresql_using='gin'),
     )
 
     def __repr__(self):

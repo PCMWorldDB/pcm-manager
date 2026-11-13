@@ -231,6 +231,9 @@ def _refresh_group(group_id):
         group.status = 'partial' if group.synced_count else 'failed'
     else:
         group.status = 'success'
+    if group.status in {'success', 'partial', 'failed'}:
+        group.worker_message_id = None
+        group.is_worker_queued = False
 
 
 def execute_task(task_id):
@@ -349,7 +352,7 @@ def submit_external_group(group_id):
     group = db.session.scalar(select(ExternalCallTaskGroup).where(
         ExternalCallTaskGroup.id == group_id,
     ).with_for_update())
-    if group is None or group.status != 'queued' or group.is_worker_queued:
+    if group is None or group.status != 'queued' or group.is_worker_queued or group.worker_message_id:
         db.session.rollback()
         return False
     if not db.session.scalar(select(ExternalCallTask.id).where(
@@ -430,6 +433,7 @@ def dispatch_queued_external_groups():
     ids = db.session.scalars(select(ExternalCallTaskGroup.id).where(
         ExternalCallTaskGroup.status == 'queued',
         ExternalCallTaskGroup.is_worker_queued.is_(False),
+        ExternalCallTaskGroup.worker_message_id.is_(None),
     ).order_by(ExternalCallTaskGroup.timestamp, ExternalCallTaskGroup.id)).all()
     db.session.rollback()
     submitted = []
@@ -489,7 +493,6 @@ def run_external_group(self, group_id, submission_id):
                     or group.status not in {'queued', 'running'}):
                 db.session.rollback()
                 return 0
-            group.status = 'running'
             group.is_worker_queued = False
             # Owning the execution lock proves any shared-queue running request
             # was interrupted, including one from a different redelivered group.

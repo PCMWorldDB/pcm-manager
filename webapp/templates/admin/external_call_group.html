@@ -19,6 +19,7 @@
                 {{ sync_type_label or 'External Calls' }}
                 <span class="badge {{ status_colors.get(group.status, 'bg-secondary') }}">{{ group.status|replace('_', ' ')|capitalize }}</span>
             </p>
+            {% if group.workflow_type %}<p>Workflow: {{ group.workflow_type }}</p>{% endif %}
             {% if group.message %}<p>{{ group.message }}</p>{% endif %}
             <dl class="row mb-0">
                 {% if group.scheduled_job %}
