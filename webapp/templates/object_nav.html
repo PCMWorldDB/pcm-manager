@@ -9,8 +9,10 @@
     {% set section = 'teams' if is_team else 'riders' if is_rider else 'races' %}
     {% if current_user.is_superadmin or current_user.has_permission('teams' if is_team or is_rider else 'stats', 'read') %}
     <a class="nav-link {{ 'active' if not endpoint.endswith('_review') and not endpoint.endswith('_change_log') and not is_bulk_editor and not is_bulk_tasks and endpoint != 'web.stat_edit_log' else '' }}" href="{{ url_for('web.' ~ section) }}">{{ section|title }}</a>
-    <a class="nav-link {{ 'active' if endpoint.endswith('_review') else '' }}" href="{{ url_for('web.' ~ section ~ '_review') }}">Review</a>
+    <a class="nav-link {{ 'active' if endpoint.endswith('_review') or (is_rider and endpoint.endswith('_change_log')) else '' }}" href="{{ url_for('web.' ~ section ~ '_review') }}">Review</a>
+    {% if not is_rider %}
     <a class="nav-link {{ 'active' if endpoint.endswith('_change_log') else '' }}" href="{{ url_for('web.' ~ section ~ '_change_log') }}">Change Log</a>
+    {% endif %}
     {% endif %}
     {% if is_rider and (current_user.is_superadmin or current_user.has_permission('stats', 'read')) %}
     <a class="nav-link {{ 'active' if is_bulk_editor else '' }}" href="{{ url_for('web.bulk_editor') }}">Bulk Editor</a>

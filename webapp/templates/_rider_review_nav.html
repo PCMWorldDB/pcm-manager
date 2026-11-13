@@ -1,0 +1,6 @@
+<nav class="nav nav-tabs mb-3" aria-label="Rider review areas">
+    {% for tab, label in [('stats', 'Stats'), ('identity', 'Identity'), ('activity', 'Activity'), ('attributes', 'Attributes')] %}
+    <a class="nav-link{% if review_tab == tab %} active{% endif %}" {% if review_tab == tab %}aria-current="page"{% endif %} href="{{ url_for('web.riders_review', tab=tab) }}">{{ label }}</a>
+    {% endfor %}
+    <a class="nav-link{% if review_tab == 'change_log' %} active{% endif %}" {% if review_tab == 'change_log' %}aria-current="page"{% endif %} href="{{ url_for('web.riders_change_log') }}">Change Log</a>
+</nav>

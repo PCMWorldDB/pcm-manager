@@ -1,6 +1,7 @@
 """Base model classes for main and namespace databases"""
 from datetime import datetime
 from sqlalchemy import Index
+from sqlalchemy.dialects.postgresql import ARRAY
 from webapp.extensions import db
 
 
@@ -179,7 +180,8 @@ class ExternalCallTaskGroup(MainDBModel):
 
     # Compatibility metadata for old FC sync screens; queue groups have no provider.
     provider = db.Column(db.String(50), nullable=True, index=True)
-    sync_type = db.Column(db.String(80), nullable=True, index=True)
+    workflow_type = db.Column(db.String(80), nullable=True, index=True)
+    sync_types = db.Column(ARRAY(db.String(320)), nullable=False, default=list, server_default='{}')
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     season_year = db.Column(db.Integer, nullable=True, index=True)
     gender = db.Column(db.String(20), nullable=True, index=True)
@@ -246,6 +248,10 @@ class ExternalCallTask(MainDBModel):
     error_message = db.Column(db.Text, nullable=True)
 
     task_group = db.relationship('ExternalCallTaskGroup', foreign_keys=[task_group_id])
+
+    @property
+    def sync_type(self):
+        return f'{self.provider}.{self.endpoint}'
 
     __table_args__ = (
         Index('ix_external_call_task_related_record',

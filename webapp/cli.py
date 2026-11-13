@@ -11,7 +11,7 @@ from flask import current_app
 from flask.cli import with_appcontext
 from webapp.extensions import db, bcrypt
 from webapp.models import User, Role, Namespace
-from webapp.rbac_seed import sync_rbac_metadata
+from webapp.seeds.rbac import sync_rbac_metadata
 from webapp.config import (
     get_setting,
     get_base_data_path,
@@ -211,11 +211,26 @@ def seed_roles_command():
     _seed_roles()
 
 
-
 @click.group()
 def namespace():
     """Namespace database management commands"""
     pass
+
+
+@namespace.command('publish-identities')
+@click.argument('namespace_slug')
+@click.option('--retry-conflicts', is_flag=True, help='Retry pairs flagged for review after correcting main.')
+@with_appcontext
+def publish_identities_command(namespace_slug, retry_conflicts):
+    """Publish queued FC/PCS pairs without copying any namespace object IDs."""
+    from webapp.integrations.identity import publish_namespace_pairs
+    selected = Namespace.query.filter_by(slug=namespace_slug, is_deleted=False).one_or_none()
+    if selected is None:
+        raise click.ClickException('Namespace not found.')
+    result = publish_namespace_pairs(selected.build_connection_string(), retry_conflicts=retry_conflicts)
+    click.echo(f"Published {result['published']} pair(s); {result['conflicts']} conflict(s).")
+    if result['failed']:
+        raise click.ClickException('Publication deferred; the namespace outbox is retained.')
 
 
 @namespace.command('seed-field-configuration')

@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% from '_attribute_editor.html' import additional_attributes with context %}
+{% block title %}{{ race.race_name or 'CDB Race' }} - WDB{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3">
+    <div><h2>{{ race.race_name or ('CDB race #' ~ race.id) }}</h2><p class="text-muted">Namespace CDB race #{{ race.id }}</p></div>
+    <a href="{{ url_for('web.races') }}" class="btn btn-outline-secondary align-self-start">Races</a>
+</div>
+<div class="card card-body mb-3">
+    <h3 class="h5">Attributes</h3>
+    <dl class="row">
+    {% for key, value in race.items() %}
+    {% if key != 'is_deleted' %}<dt class="col-sm-4">{{ key.replace('_', ' ')|title }}</dt><dd class="col-sm-8">{{ value if value is not none else '-' }}</dd>{% endif %}
+    {% endfor %}
+    </dl>
+</div>
+{{ additional_attributes([]) }}
+{% endblock %}

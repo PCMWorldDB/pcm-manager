@@ -7,6 +7,7 @@ from webapp.models.ns.cdb import CDB_TABLES
 
 
 SYSTEM_FIELDS = {
+    'pcs_slug_is_assumed',
     'is_deleted', 'pcs_identity_status', 'has_pending_stat_changes', 'has_pending_attribute_changes',
     'pcs_birth_date', 'pcs_latest_updated_at',
 }

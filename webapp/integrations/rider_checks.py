@@ -23,8 +23,8 @@ from webapp.models.ns.cdb import Rider
 IDENTITY_CHECK = 'rider_identity_check'
 ACTIVITY_CHECK = 'rider_activity_check'
 RIDER_CHECK_JOBS = {IDENTITY_CHECK: 'Rider Identity Check', ACTIVITY_CHECK: 'Rider Activity Check'}
-PCS_RIDER_SYNC = 'pcs_rider'
-FC_RIDER_SYNC = 'fc_rider'
+PCS_RIDER_SYNC = 'pcs.get_rider_profile'
+FC_RIDER_SYNC = 'firstcycling.get_rider_profile'
 PROFILE_ENDPOINT = 'get_rider_profile'
 ACTIVE_TASKS = ('queued', 'retry_wait', 'running')
 RIDER = Rider.__table__
@@ -175,7 +175,7 @@ def enqueue_rider_check(job, now, enqueue_group, namespace, params, *, job_id=No
                  related_to_table='rider', related_to_id=rider.id)
             for rider in selected
         ], namespace_id=namespace.id, origin=origin, provider='pcs', executed_by_id=executed_by_id,
-            sync_type=PCS_RIDER_SYNC, message=RIDER_CHECK_JOBS[job], scheduled_job_id=job_id)
+            workflow_type=job, message=RIDER_CHECK_JOBS[job], scheduled_job_id=job_id)
         return [group.id]
 
     rider = scheduled_rider(namespace, params['rider_id'])
@@ -208,18 +208,19 @@ def enqueue_rider_check(job, now, enqueue_group, namespace, params, *, job_id=No
         return []
 
     origin = 'scheduled' if executed_by_id is None else 'manual'
-    groups = []
-    for provider, sync_type, request_params in (
-        ('pcs', PCS_RIDER_SYNC, {'rider_slug': rider_slug}),
-        ('firstcycling', FC_RIDER_SYNC, {'rider_id': rider.first_cycling_id}),
-    ):
-        group = enqueue_group([
-            dict(provider=provider, endpoint=PROFILE_ENDPOINT, params=request_params,
-                 related_to_table='rider', related_to_id=rider.id),
-        ], namespace_id=namespace.id, origin=origin, provider=provider, executed_by_id=executed_by_id,
-            sync_type=sync_type, message=RIDER_CHECK_JOBS[job], scheduled_job_id=job_id)
-        groups.append(group.id)
-    return groups
+    requests = [
+        dict(provider=provider, endpoint=PROFILE_ENDPOINT, params=request_params,
+             related_to_table='rider', related_to_id=rider.id)
+        for provider, request_params in (
+            ('pcs', {'rider_slug': rider_slug}),
+            ('firstcycling', {'rider_id': rider.first_cycling_id}),
+        )
+    ]
+    group = enqueue_group(
+        requests, namespace_id=namespace.id, origin=origin, executed_by_id=executed_by_id,
+        workflow_type=job, message=RIDER_CHECK_JOBS[job], scheduled_job_id=job_id,
+    )
+    return [group.id]
 
 
 def _date(value):

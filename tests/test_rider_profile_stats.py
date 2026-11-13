@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
 from webapp.models import AuditLog, Role, User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 
@@ -83,7 +83,8 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert stats_card is not None
         assert stats_card.select_one('#rider-stats-title').get_text(strip=True) == 'Stats'
         assert markup.select_one('#rider-stats-view').find_parent('section') is stats_card
-        assert not markup.select('#rider-review h4')
+        assert markup.select_one('#rider-review-title').get_text(strip=True) == 'Review (0)'
+        assert markup.select_one('#rider-review #rider-history') is not None
         actions = [form['action'].rsplit('/', 1)[-1] for form in editor.select('form[action*="/stats/"]')]
         assert actions == (['save', 'approve'] if role == 'admin' else ['save'])
         assert editor.select_one('#save-stat-delta-btn').get_text(strip=True) == 'Save & Submit'
@@ -113,7 +114,8 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert history.status_code == 200
         markup = BeautifulSoup(history.data, 'html.parser')
         review = markup.select_one('#rider-review')
-        assert [heading.get_text(strip=True) for heading in review.select('h4')] == ['Reviews Needed']
+        assert review.h3.get_text(strip=True) == 'Review (1)'
+        assert [heading.get_text(strip=True) for heading in review.select('h4')] == ['Reviews Needed', 'History']
         assert review.find('td', string='Individual') is not None
         assert review.find('td', string='MO') is not None
         assert markup.select_one('#rider-history').find('td', string='MO') is None
@@ -131,7 +133,8 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
             with engine.connect() as conn:
                 assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 73
             markup = BeautifulSoup(client.get('/riders/1').data, 'html.parser')
-            assert markup.select_one('#rider-review').find('td', string='MO') is None
+            assert markup.select_one('#rider-pending-reviews').find('td', string='MO') is None
+            assert markup.select_one('#rider-review-tab').get_text(strip=True) == 'Review (0)'
             event = markup.select_one('#rider-history tbody tr')
             assert [cell.get_text(strip=True) for cell in event.select('td')][1:5] == ['Applied', 'MO', '70', '73']
             with engine.begin() as conn:

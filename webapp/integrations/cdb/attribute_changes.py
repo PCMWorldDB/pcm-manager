@@ -13,7 +13,8 @@ from webapp.integrations.cdb.editability import get_editable_fields
 from webapp.integrations.cdb.field_configuration import can_edit_column, field_slug, stored_fields
 from webapp.integrations.cdb.rider_state import PCS_IDENTITY_RESET, pcs_dob_identity_status, refresh_pending_flags
 from webapp.models.ns.cdb import CDB_TABLES, CDBChange, CDBChangeEvent
-from webapp.models.ns.schema import RiderListItem
+from webapp.models.ns.base import RiderListItem
+from webapp.integrations.identity import mark_identity_sync
 
 
 class AttributeConflict(ValueError):
@@ -46,6 +47,12 @@ def serialize(value):
 
 
 def parse_value(column, raw):
+    if column.name in ('pcs_slug', 'first_cycling_id'):
+        from webapp.integrations.identity import identity_values
+        if raw in (None, ''):
+            return None
+        key = 'firstcycling_id' if column.name == 'first_cycling_id' else 'pcs_slug'
+        return identity_values('rider', {key: raw})[key]
     if raw == '' and not isinstance(column.type, String):
         raw = None
     if raw is None:
@@ -151,7 +158,9 @@ def propose(conn, entity_type, entity_id, attribute, raw_value, actor_id, *, sta
         raise LookupError('Object not found.')
     value = parse_value(column, raw_value)
     before, after = serialize(row[attribute]), serialize(value)
-    if before == after:
+    confirming_assumed_slug = (entity_type == 'rider' and attribute == 'pcs_slug'
+                               and row['pcs_slug_is_assumed'] and value is not None)
+    if before == after and not confirming_assumed_slug:
         raise ValueError('The proposed value matches the current value.')
     changes = CDBChange.__table__
     existing = conn.execute(select(changes.c.id).where(
@@ -268,6 +277,8 @@ def decide(conn, entity_type, change_id, action, actor_id, *, authorize=None, im
         raise AttributeConflict('The current value changed. Reject this proposal and submit a fresh one.')
     value = parse_value(column, change['after_value'])
     values = {column.name: value}
+    if entity_type == 'rider' and column.name == 'pcs_slug':
+        values['pcs_slug_is_assumed'] = False
     if entity_type == 'rider' and current != change['after_value']:
         if column.name == 'pcs_slug':
             values.update(PCS_IDENTITY_RESET, pcs_identity_verified_override=False)
@@ -277,6 +288,8 @@ def decide(conn, entity_type, change_id, action, actor_id, *, authorize=None, im
             elif row['pcs_identity_status'] in ('verified', 'review'):
                 values['pcs_identity_status'] = pcs_dob_identity_status(value, row['pcs_birth_date'])
     conn.execute(update(table).where(table.c.id == change['entity_id']).values(values))
+    if entity_type in ('race', 'rider') and column.name in ('first_cycling_id', 'pcs_slug'):
+        mark_identity_sync(conn)
     conn.execute(update(changes).where(changes.c.id == change_id).values(
         status='approved', approved_by_id=None if immediate else actor_id,
         approved_at=None if immediate else now, applied_at=now))

@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}{{ kind|title }} source identities - WDB{% endblock %}
+{% block content %}
+<h2>{{ kind|title }} FC / PCS identities</h2>
+<p class="text-muted">Shared source links contributed by namespace seeds and applied namespace mappings. CDB object IDs and names stay in each namespace.</p>
+<nav class="mb-3 d-flex gap-3">
+    <a href="{{ url_for('web.settings') }}">Settings</a>
+    <a href="{{ url_for('web.identities', kind='race') }}">Race source links</a>
+    <a href="{{ url_for('web.identities', kind='rider') }}">Rider source links</a>
+    <a href="{{ url_for('web.races') }}">Races</a>
+</nav>
+<form method="get" class="d-flex gap-2 mb-3">
+    <input name="q" aria-label="Search source identities" class="form-control" value="{{ request.args.get('q', '') }}" placeholder="Search FC ID or PCS slug">
+    <button class="btn btn-outline-secondary">Search</button>
+</form>
+{% if sync_conflicts %}
+<div class="card card-body mb-3">
+    <h3 class="h5">{{ selected_namespace.name }}: source links awaiting publication</h3>
+    <table class="table"><thead><tr><th>FC ID</th><th>PCS slug</th><th>Status</th><th>Details</th></tr></thead>
+    <tbody>{% for row in sync_conflicts %}<tr><td>{{ row.firstcycling_id }}</td><td>{{ row.pcs_slug }}</td><td>{{ row.status }}</td><td>{{ row.error or 'Ready to publish' }}</td></tr>{% endfor %}</tbody></table>
+    {% if can_update %}<form method="post" action="{{ url_for('web.retry_identity_sync', kind=kind) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="namespace_id" value="{{ selected_namespace.id }}">
+        <button class="btn btn-outline-primary">Retry namespace contributions</button>
+    </form>{% endif %}
+</div>
+{% endif %}
+<div class="table-responsive">
+<table class="table align-middle">
+    <thead><tr><th>FC ID</th><th>PCS slug</th><th></th></tr></thead>
+    <tbody>{% for identity in identities %}
+    {% set form_id = 'identity-' ~ identity.id %}
+    <tr>
+        <td>{% if can_update %}<input form="{{ form_id }}" name="firstcycling_id" aria-label="FC ID for mapping {{ identity.id }}" value="{{ identity.firstcycling_id or '' }}" type="number" min="1" max="2147483647" class="form-control">{% else %}{{ identity.firstcycling_id or '-' }}{% endif %}</td>
+        <td>{% if can_update %}<input form="{{ form_id }}" name="pcs_slug" aria-label="PCS slug for mapping {{ identity.id }}" value="{{ identity.pcs_slug or '' }}" maxlength="500" class="form-control">{% else %}{{ identity.pcs_slug or '-' }}{% endif %}</td>
+        <td>{% if can_update %}<form id="{{ form_id }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="identity_id" value="{{ identity.id }}">
+            <button class="btn btn-sm btn-outline-primary">Correct mapping</button>
+        </form>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+</table>
+</div>
+{% endblock %}

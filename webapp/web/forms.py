@@ -78,6 +78,13 @@ class NamespaceMetadataForm(FlaskForm):
 
 class NamespaceForm(FlaskForm):
     """Namespace creation/edit form"""
+    creation_method = SelectField('Creation method', choices=[
+        ('import', 'Import CDB'), ('clone', 'Clone Existing Namespace')], default='import')
+    source_namespace = SelectField('Source namespace', choices=[], validators=[Optional()])
+    copy_rider_stats = BooleanField('Rider Stats', default=True)
+    copy_rider_attributes = BooleanField('Rider Attributes', default=True)
+    copy_teams = BooleanField('Teams', default=True)
+    copy_races = BooleanField('Races', default=True)
     name = StringField('Name', default='WDBO', validators=[
         DataRequired(message='Name is required'),
         Length(min=3, max=100, message='Name must be between 3 and 100 characters')

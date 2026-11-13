@@ -8,7 +8,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy_utils import create_database, drop_database
 
 from webapp.models import Namespace
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web.routes import _ensure_namespace_database_connection, _load_namespace_roster_rider
 
 

@@ -5,8 +5,37 @@ from sqlalchemy import text
 RIDER_VIEWS = {
     'stats': 'Stats',
     'activity': 'Activity',
-    'attributes': 'Attribute',
+    'attributes': 'Attributes',
+    'identity': 'Identity',
 }
+
+IDENTITY_FILTERS = {
+    '': 'All flags',
+    'verified': 'PCS identity verified',
+    'review': 'PCS identity needs review',
+    'failed': 'PCS identity error',
+    'unknown': 'PCS identity unknown',
+    'override': 'Verified by manual override',
+    'missing_fc': 'Missing FirstCycling ID',
+}
+
+IDENTITY_REVIEW_FILTERS = {key: label for key, label in IDENTITY_FILTERS.items() if key}
+DEFAULT_IDENTITY_REVIEW_FLAGS = ('review', 'failed', 'unknown', 'missing_fc')
+
+
+def identity_flag_condition(flag):
+    """Match the effective identity flag, including DOB changes and overrides."""
+    override = "COALESCE((to_jsonb(c)->>'pcs_identity_verified_override')::boolean, FALSE)"
+    if flag == 'missing_fc':
+        return 'COALESCE(c.first_cycling_id, 0) = 0'
+    if flag == 'override':
+        return override
+    status = """(CASE
+        WHEN COALESCE(to_jsonb(c)->>'pcs_identity_status', 'unknown') IN ('verified', 'review')
+        THEN CASE WHEN REPLACE(c.birth_date::text, '-', '') = REPLACE(to_jsonb(c)->>'pcs_birth_date', '-', '')
+                  THEN 'verified' ELSE 'review' END
+        ELSE COALESCE(to_jsonb(c)->>'pcs_identity_status', 'unknown') END)"""
+    return f'NOT {override} AND {status} = :identity_flag'
 
 
 ACTIVITY_FILTERS = {
@@ -78,3 +107,47 @@ ACTIVITY_CONDITIONS = {
     'recent': "activity.latest_result_date >= CURRENT_DATE - 90",
     'inactive': "activity.latest_result_date < CURRENT_DATE - 90",
 }
+
+
+def filter_snapshot(riders, filters, normalize):
+    """Apply the same filters to every column view, before pagination."""
+    query = normalize(filters.get('q'))
+    team = normalize(filters.get('team'))
+
+    def matches(rider):
+        if query and query not in normalize(rider.search_name) and query not in (
+                str(rider.rider_id), str(rider.first_cycling_id)):
+            return False
+        if team and team not in normalize(rider.search_team):
+            return False
+        for key in ('country', 'division'):
+            if filters.get(key) and str(getattr(rider, key + '_id')) != filters[key]:
+                return False
+        if filters.get('stat_key'):
+            value = getattr(rider, 'stat_' + filters['stat_key'], None)
+            for key, below in (('stat_min', True), ('stat_max', False)):
+                if filters.get(key) and (value is None or (
+                        value < int(filters[key]) if below else value > int(filters[key]))):
+                    return False
+        flag = filters.get('identity_flag')
+        if flag == 'missing_fc':
+            if rider.first_cycling_id:
+                return False
+        elif flag == 'override':
+            if not rider.pcs_identity_verified_override:
+                return False
+        elif flag and (rider.pcs_identity_verified_override or rider.pcs_identity_status != flag):
+            return False
+        activity = filters.get('activity_status')
+        days = rider.days_since_last_race
+        checks = {
+            'untracked': rider.monitor_id is None,
+            'awaiting': rider.monitor_id is not None and rider.latest_check_at is None,
+            'checked': rider.latest_check_at is not None,
+            'no_race': rider.monitor_id is not None and days is None,
+            'recent': days is not None and days <= 90,
+            'inactive': days is not None and days > 90,
+        }
+        return not activity or checks.get(activity, False)
+
+    return [rider for rider in riders if matches(rider)]

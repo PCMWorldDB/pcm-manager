@@ -24,7 +24,8 @@ def _rider_pcs_slug(first_name, last_name):
     return assumed_rider_slug(first_name, last_name)
 
 
-def build_plan(sqlite, connection, pcm_version, table_types=None, *, lock_configuration=False):
+def build_plan(sqlite, connection, pcm_version, table_types=None, *, lock_configuration=False,
+               assumed_rider_slug_ids=None):
     plan = {'tables': {}, 'errors': [], 'changes': []}
     operations = []
     state = []
@@ -110,11 +111,18 @@ def build_plan(sqlite, connection, pcm_version, table_types=None, *, lock_config
                 slug = _rider_pcs_slug(effective.get('first_name'), effective.get('last_name'))
                 if slug:
                     values['pcs_slug'] = slug
+                    values['pcs_slug_is_assumed'] = True
+                    if assumed_rider_slug_ids is not None:
+                        assumed_rider_slug_ids.add(key)
                     if old is None:
                         incoming['pcs_slug'] = slug
                     else:
                         plan['changes'].append(dict(table=kind, id=key, field='pcs_slug',
                                                     old=old['pcs_slug'], new=slug, action='overwrite'))
+            if (kind == 'rider' and incoming.get('pcs_slug') and 'pcs_slug_is_assumed' not in values
+                    and (old is None or old['pcs_slug_is_assumed'])):
+                if old is None or values.get('pcs_slug', old['pcs_slug']) == incoming['pcs_slug']:
+                    values['pcs_slug_is_assumed'] = False
             if kind == 'rider' and old is not None and 'pcs_slug' in values:
                 reset = {**PCS_IDENTITY_RESET, 'pcs_identity_verified_override': False}
                 for field, value in reset.items():
@@ -222,6 +230,9 @@ class CDBImporter:
             if plan['errors']:
                 raise ValueError('; '.join(plan['errors'][:20]))
             apply_plan(connection, operations)
+        if table_type in ('race', 'rider'):
+            from webapp.integrations.identity import publish_or_defer
+            self.identity_sync_result = publish_or_defer(self.postgres_connection_string)
         counts = plan['tables'][table_type]
         return counts['inserted'] + counts['updated']
 
@@ -275,19 +286,34 @@ class CDBImporter:
         with self.pg_engine.connect() as connection:
             return build_plan(self.sqlite_conn, connection, self.pcm_version)[0]
 
-    def import_all_tables(self, *, replace_existing=True, expected_fingerprint=None):
-        """Upsert mapped records atomically and soft-delete absent records."""
+    def import_all_tables(self, *, replace_existing=True, expected_fingerprint=None, seed_initial_identities=False):
+        """Upsert mapped records atomically and soft-delete absent records.
+
+        Only namespace creation from a CDB enables identity seeds. They run
+        after mapped rows are imported, within this same transaction. Clones
+        and subsequent uploads retain the default without seeds.
+        """
         with self.pg_engine.begin() as connection:
             # Also prevents app writes between comparison and application.
             tables = ', '.join(model.__tablename__ for _, model in MODELS)
             connection.execute(text(f'LOCK TABLE {tables} IN EXCLUSIVE MODE'))
+            assumed_slug_ids = set()
             plan, operations = build_plan(self.sqlite_conn, connection, self.pcm_version,
-                                          lock_configuration=True)
+                                          lock_configuration=True,
+                                          assumed_rider_slug_ids=assumed_slug_ids)
             if expected_fingerprint and plan['fingerprint'] != expected_fingerprint:
                 raise ValueError('Import review is stale. Analyze the file again.')
             if plan['errors']:
                 raise ValueError('; '.join(plan['errors'][:20]))
+            if seed_initial_identities and any(
+                connection.execute(select(model.id).limit(1)).first() for _, model in MODELS
+            ):
+                raise ValueError('Identity seeds require a new, empty namespace')
             apply_plan(connection, operations)
+            if seed_initial_identities:
+                from webapp.seeds import race_identity, rider_identity
+                rider_identity.seed(connection, assumed_slug_ids=assumed_slug_ids)
+                race_identity.seed(connection)
             for _, model in MODELS:
                 name = model.__tablename__
                 connection.execute(text(f"""
@@ -295,6 +321,8 @@ class CDBImporter:
                         COALESCE((SELECT MAX(id) FROM {name}), 1),
                         EXISTS (SELECT 1 FROM {name}))
                 """))
+        from webapp.integrations.identity import publish_or_defer
+        self.identity_sync_result = publish_or_defer(self.postgres_connection_string)
         return {kind: counts['inserted'] + counts['updated']
                 for kind, counts in plan['tables'].items()}
 

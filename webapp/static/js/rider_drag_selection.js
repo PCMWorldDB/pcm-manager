@@ -1,6 +1,6 @@
 function bindRiderDragSelection(form, {cellSelector, boxes, maxSelected, getSelection, setSelection}) {
-    const eligibleBoxes = boxes.filter((box) => !box.disabled);
-    const rowBoxes = new Map(eligibleBoxes.map((box, index) => [box.closest('tr'), index]));
+    let eligibleBoxes;
+    let rowBoxes;
     let drag = null;
 
     function applyRange(end) {
@@ -15,6 +15,8 @@ function bindRiderDragSelection(form, {cellSelector, boxes, maxSelected, getSele
 
     form.addEventListener('pointerdown', (event) => {
         if (event.button !== 0 || !event.target.closest(cellSelector)) return;
+        eligibleBoxes = (typeof boxes === 'function' ? boxes() : boxes).filter((box) => !box.disabled);
+        rowBoxes = new Map(eligibleBoxes.map((box, index) => [box.closest('tr'), index]));
         const start = rowBoxes.get(event.target.closest('tr'));
         if (start === undefined) return;
         event.preventDefault();

@@ -18,7 +18,11 @@ rider:
   - stat_att
   - birth_date
   - pcs_slug
+  - first_cycling_id
   - pcs_identity_verified_override
 team: []
-# Race has no mapped namespace CDB model yet; keep it read-only.
-race: []
+# Only namespace-local source identity fields are editable; CDB race fields
+# retain their existing read-only policy.
+race:
+  - first_cycling_id
+  - pcs_slug

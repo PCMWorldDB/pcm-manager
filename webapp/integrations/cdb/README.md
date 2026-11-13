@@ -8,7 +8,7 @@ field mappings. The one-to-one namespace PostgreSQL models (`Rider`, `Team`,
 `division`, and `region`. Race definitions also use the namespace tables
 `race`, `stage`, and `race_class` (models `Race`, `Stage`, and `RaceClass`).
 Workflow models remain in
-[schema.py](../../models/ns/schema.py). Workflow references use `rider_id`.
+[base.py](../../models/ns/base.py). Workflow references use `rider_id`.
 Existing namespace databases require the manual
 [soft-delete migration](../../../migrations/cdb_import_soft_delete.sql).
 Run it separately against each namespace database before deploying this change;
@@ -138,7 +138,7 @@ finally:
     connection.close()
 ```
 
-The legacy mapping imports from `webapp.models.ns.schema` remain available.
+Namespace workflow models and table lookup helpers are defined in `webapp.models.ns.base`.
 Rider lookup currently targets the `DYN_cyclist` fields used by the original
 inspection script, rather than adapting its SQL to each PCM mapping version.
 

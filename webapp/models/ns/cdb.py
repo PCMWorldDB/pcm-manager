@@ -6,6 +6,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 
 from webapp.models.ns.base import NamespaceBase
+from webapp.models.ns.identity import register_identity_trigger
 
 
 class CDBRecord:
@@ -24,6 +25,7 @@ class Rider(CDBRecord, NamespaceBase):
     id = Column(Integer, primary_key=True)
     first_cycling_id = Column(Integer, index=True)
     pcs_slug = Column(String(500))
+    pcs_slug_is_assumed = Column(Boolean, nullable=False, default=False, server_default=false())
     region_id = Column(Integer)
     team_id = Column(Integer)
 
@@ -43,7 +45,6 @@ class Rider(CDBRecord, NamespaceBase):
     first_name = Column(String(100))
     last_name = Column(String(100))
     first_last_name = Column(String(200))
-    pcs_rider_path = Column(String(500), index=True)
 
     #photo = Column(String(255))
     birth_date = Column(Integer)
@@ -176,6 +177,8 @@ class Race(CDBRecord, NamespaceBase):
     __tablename__ = 'race'
 
     id = Column(Integer, primary_key=True)
+    first_cycling_id = Column(Integer, index=True)
+    pcs_slug = Column(String(500))
     race_name = Column(String(500))
     abbreviation = Column(String(255))
     filename = Column(String(500))
@@ -295,5 +298,8 @@ class CDBChangeEvent(NamespaceBase):
 # Only mapped objects belong here: import/export iterates this collection.
 CDB_TABLES = [Country, Division, Region, Team, RaceClass, Race, Stage, Rider]
 CDB_HISTORY_TABLES = [CDBChange, CDBChangeEvent]
+
+for _identity_model in (Race, Rider):
+    register_identity_trigger(_identity_model.__table__)
 
 

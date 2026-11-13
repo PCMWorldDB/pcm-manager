@@ -1,3 +1,4 @@
+{% from '_pending_approval.html' import pending_approval %}
 {% macro attribute_field(name, label, display) %}
 {% set field = (attribute_field_map or {}).get(name) %}
 <div class="object-attribute">
@@ -11,10 +12,10 @@
 {% macro attribute_value(field, display, entity_type, entity_id, namespace_slug, can_edit, list_id=none) %}
     {% if field and field.pending %}
         {% if field.pending.stat_list_id is not none %}
-        <a class="object-attribute-pending" href="{{ url_for('web.bulk_editor', namespace_slug=namespace_slug, tab='editor', list_id=field.pending.stat_list_id) }}" aria-label="{{ field.label }} pending list approval">Pending list approval</a>
+        {{ pending_approval(field.label ~ ' pending list approval', field.label ~ ' is awaiting list approval. Proposed: ' ~ (field.pending.after_value if field.pending.after_value is not none else 'Empty'), url_for('web.bulk_editor', namespace_slug=namespace_slug, tab='editor', list_id=field.pending.stat_list_id)) }}
         <span>{{ display }} &rarr; {{ field.pending.after_value if field.pending.after_value is not none else 'Empty' }}</span>
         {% else %}
-        <a class="object-attribute-pending" href="{{ url_for('web.' ~ entity_type ~ 's_review', namespace_slug=namespace_slug, **({'tab': 'attributes'} if entity_type == 'rider' else {})) }}" aria-label="{{ field.label }} pending approval" title="Proposed: {{ field.pending.after_value if field.pending.after_value is not none else 'Empty' }}">Pending review</a>
+        {{ pending_approval(field.label ~ ' pending approval', field.label ~ ' is awaiting approval. Proposed: ' ~ (field.pending.after_value if field.pending.after_value is not none else 'Empty'), url_for('web.' ~ entity_type ~ 's_review', namespace_slug=namespace_slug, **({'tab': 'attributes'} if entity_type == 'rider' else {}))) }}
         <span>{{ display }}</span>
         {% endif %}
     {% elif field and field.editable and can_edit %}
@@ -31,6 +32,7 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M7 3v6h10V3M7 21v-8h10v8"/></svg>
                 </button>
                 <input class="form-control form-control-sm" type="{{ field.type }}" name="value" value="{{ field.value if field.value is not none else '' }}" aria-label="New {{ field.label }}">
+                <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" aria-label="Cancel editing {{ field.label }}" title="Cancel" onclick="this.form.reset(); this.closest('details').open = false;">&times;</button>
             </form>
         </details>
     {% else %}{{ display }}{% endif %}

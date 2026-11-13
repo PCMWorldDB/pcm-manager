@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event, text
 from webapp.extensions import db
 from webapp.models import Action, AuditLog, Resource, Role, RolePermission, User
 from webapp.integrations.cdb import attribute_changes
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 

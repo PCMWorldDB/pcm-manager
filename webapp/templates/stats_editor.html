@@ -51,8 +51,9 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h2 class="mb-1">{{ 'Races' if active_method == 'by_race' else 'Stat Edit Log' }}</h2>
-        <p class="text-muted mb-0">Make changes to rider stats</p>
+        <p class="text-muted mb-0">{{ 'Browse CDB races and linked results sources' if active_method == 'by_race' else 'Make changes to rider stats' }}</p>
     </div>
+    {% if active_method == 'by_race' and can_manage_identities %}<a class="btn btn-outline-secondary" href="{{ url_for('web.identities', kind='race') }}">Manage identities</a>{% endif %}
 </div>
 {% endif %}
 
@@ -147,6 +148,7 @@
                         <th style="width: 96px;">Status</th>
                         <th style="width: 82px;" class="sortable-col" data-sort-type="number">Stages</th>
                         <th class="sortable-col" data-sort-type="text" style="width: 260px;">Name</th>
+                        <th>Sources</th>
                         <th class="sortable-col" data-sort-type="text">Class.</th>
                         <th class="sortable-col" data-sort-type="date">Start Date</th>
                         <th class="sortable-col" data-sort-type="date">End Date</th>
@@ -179,9 +181,15 @@
                             {% endif %}
                         </td>
                         <td class="race-name-cell" data-sort-value="{{ (race.name or '')|lower }}">
-                            <a href="{{ url_for('web.race_detail', race_id=race.race_id) }}">
+                            {% if race.race_id %}<a href="{{ url_for('web.race_detail', race_id=race.race_id) }}">
                                 {{ race.name or '-' }}
-                            </a>
+                            </a>{% elif race.cdb_id %}<a href="{{ url_for('web.cdb_race_detail', race_id=race.cdb_id) }}">{{ race.name or '-' }}</a>{% else %}{{ race.name or race.pcs_slug or ('FC #' ~ race.firstcycling_id) }}{% endif %}
+                        </td>
+                        <td class="text-nowrap">
+                            {% if race.cdb_id %}<a class="badge bg-secondary" href="{{ url_for('web.cdb_race_detail', race_id=race.cdb_id) }}">CDB</a>{% endif %}
+                            {% if race.firstcycling_id %}<a class="badge bg-secondary" href="https://firstcycling.com/race.php?r={{ race.firstcycling_id }}&amp;y={{ selected_year }}" target="_blank" rel="noopener noreferrer">FC</a>{% endif %}
+                            {% if race.pcs_slug %}<a class="badge bg-secondary" href="https://www.procyclingstats.com/race/{{ race.pcs_slug }}" target="_blank" rel="noopener noreferrer">PCS</a>{% endif %}
+                            {% if race.mapping_conflict %}<span class="badge bg-warning text-dark" title="Conflicting source mappings; records have been kept separate">Mapping conflict</span>{% endif %}
                         </td>
                         <td data-sort-value="{{ (race.classification or '')|lower }}">{{ race.classification or '-' }}</td>
                         <td data-sort-value="{{ race.start_date.isoformat() if race.start_date else '' }}">{{ race.start_date or '-' }}</td>
@@ -208,6 +216,7 @@
                                 Stage {{ stage.stage_number or '?' }} - {{ stage.stage_start_location or '-' }} to {{ stage.stage_end_location or '-' }}
                             </a>
                         </td>
+                        <td>-</td>
                         <td>-</td>
                         <td>{{ stage.stage_date or '-' }}</td>
                         <td>{{ stage.stage_date or '-' }}</td>

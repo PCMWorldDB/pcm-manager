@@ -1,0 +1,3 @@
+{% macro pending_approval(label, help_text, href) -%}
+<a href="{{ href }}" class="pending-approval" data-bs-toggle="tooltip" aria-label="{{ label }}" title="{{ help_text }}"><span aria-hidden="true">⏳</span></a>
+{%- endmacro %}

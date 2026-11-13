@@ -90,8 +90,21 @@ summary = client.sync_race_results_from_html(html=html, source_url=source_url)
 stores parsed rows in the main database, and maintains race result mappings.
 It commits by default; pass `commit=False` to leave the transaction to the caller.
 `PcsRiderMatcher` reads the Namespace CDB to match riders, with a configurable
-`fuzzy_threshold` (default `0.84`). Parsing requires BeautifulSoup, installed via
+`fuzzy_threshold` (default `0.84`). Exact matches use the namespace rider's
+`pcs_slug` to build `https://www.procyclingstats.com/rider/{slug}/road` dynamically.
+Result links with or without `/road` resolve to the same rider; deleted namespace
+riders are excluded. Name matching remains the fallback when there is no exact
+source-link match. The connection must address the selected isolated namespace.
+Parsing requires BeautifulSoup, installed via
 `beautifulsoup4` in the project requirements.
+
+The legacy namespace `rider.pcs_rider_path` column is no longer used or created.
+For existing namespaces, review and run
+[`drop_rider_pcs_rider_path_namespace.sql`](../../../migrations/drop_rider_pcs_rider_path_namespace.sql)
+manually against each namespace database, never main. Back up and export any
+legacy path values first, compare them with `pcs_slug`, pause writes, apply the
+script, then deploy/restart. It removes the obsolete field configuration entry
+and column, preserving `pcs_slug` and Activity Monitor's separate path field.
 
 ## Activity Monitor profile parser
 

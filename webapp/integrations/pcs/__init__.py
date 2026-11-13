@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 from webapp.extensions import db
 from webapp.models.main.race_result_map import RaceResultMap
 from webapp.models.main.pcs import PcsRaceResult
+from webapp.integrations.pcs.slug import rider_profile_url, valid_rider_slug
 
 logger = logging.getLogger('pcs')
 
@@ -80,13 +81,19 @@ def _normalize_pcs_rider_path(value):
     if not uri:
         return None
 
-    absolute_uri = urljoin('https://www.procyclingstats.com', uri)
-    parsed = urlparse(absolute_uri)
-    path = parsed.path.rstrip('/')
-    if not path:
+    try:
+        parsed = urlparse(urljoin('https://www.procyclingstats.com', uri))
+        if parsed.scheme not in ('http', 'https') or parsed.hostname not in (
+            'www.procyclingstats.com', 'procyclingstats.com',
+        ):
+            return None
+    except ValueError:
         return None
-
-    return path.lower()
+    parts = parsed.path.strip('/').lower().split('/')
+    if (len(parts) not in (2, 3) or parts[0] != 'rider'
+            or (len(parts) == 3 and parts[2] != 'road') or not valid_rider_slug(parts[1])):
+        return None
+    return urlparse(rider_profile_url(parts[1])).path
 
 
 def _title_from_slug(value):
@@ -302,20 +309,29 @@ class PcsRiderMatcher:
 
         engine = create_engine(self.namespace.build_connection_string())
         try:
+            if (engine.url.database != self.namespace.database_name
+                    or engine.url.database == db.engines['main'].url.database):
+                raise ValueError('PCS rider database does not match the selected namespace.')
             with engine.connect() as conn:
+                if conn.scalar(text('SELECT current_database()')) != self.namespace.database_name:
+                    raise ValueError('PCS rider database does not match the selected namespace.')
                 rows = conn.execute(text("""
                     SELECT
                         id,
                         first_name,
                         last_name,
                         first_last_name,
-                        pcs_rider_path
+                        pcs_slug
                     FROM rider
+                    WHERE NOT is_deleted
                 """)).mappings().all()
         finally:
             engine.dispose()
 
         self._cyclists = [dict(row) for row in rows]
+        for cyclist in self._cyclists:
+            slug = (cyclist.get('pcs_slug') or '').strip()
+            cyclist['pcs_rider_url'] = rider_profile_url(slug) if valid_rider_slug(slug) else None
         return self._cyclists
 
     def match(self, rider_name, pcs_rider_path=None):
@@ -327,7 +343,7 @@ class PcsRiderMatcher:
         cyclists = self._load_cyclists()
         if normalized_path:
             for cyclist in cyclists:
-                cyclist_path = _normalize_pcs_rider_path(cyclist.get('pcs_rider_path'))
+                cyclist_path = _normalize_pcs_rider_path(cyclist.get('pcs_rider_url'))
                 if cyclist_path and cyclist_path == normalized_path:
                     return PcsRiderMatch(
                         cyclist_id=cyclist['id'],

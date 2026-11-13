@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ object_type|title }} Change Log - WDB{% endblock %}
 {% block content %}
+{% if object_type == 'riders' %}
+<h2>Riders Review</h2>
+{% with review_tab='change_log' %}{% include '_rider_review_nav.html' %}{% endwith %}
+{% else %}
 <h2>{{ object_type|title }} Change Log</h2>
+{% endif %}
 <p class="text-muted">Attribute changes and lifecycle events for {{ object_type }} in the selected namespace.</p>
 <div class="panel-card card">
     <div class="card-body">

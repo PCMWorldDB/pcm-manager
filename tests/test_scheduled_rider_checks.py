@@ -15,13 +15,14 @@ from webapp import worker
 from webapp.web import routes
 from webapp.extensions import db
 from webapp.integrations.rider_checks import ACTIVITY_CHECK, IDENTITY_CHECK
+from webapp.integrations.cdb import attribute_changes, field_configuration
 from webapp.models import (
     Action, ExternalCallTask, ExternalCallTaskGroup, ScheduledJob, Namespace,
     PcsRider, PcsRiderResult, Resource, Role, RolePermission, User,
 )
 from webapp.models.main.firstcycling import FirstCyclingRace, FirstCyclingRaceResult, FirstCyclingRider
 from webapp.models.ns.cdb import Rider
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 
 
 NOW = datetime(2026, 5, 20, 12, tzinfo=timezone.utc)
@@ -220,6 +221,45 @@ def test_rider_job_form_checks_namespace_and_links(namespaces, client, monkeypat
     finally:
         db.session.delete(user)
         db.session.commit()
+
+
+@pytest.mark.parametrize('decision, expected_dob, expected_identity', [
+    ('approve', 20010101, 'review'), ('reject', 20000101, 'verified'),
+])
+def test_pcs_check_uses_applied_dob_while_attribute_proposal_is_pending(
+        namespaces, monkeypatch, decision, expected_dob, expected_identity):
+    (namespace, first), (_, second) = namespaces
+    with first.begin() as conn:
+        field_configuration.seed_fields(conn, 'PCM2026')
+        policy = field_configuration.stored_fields(conn, 'rider')[('rider', 'birth_date')]
+        assert policy['is_require_approval']
+        change_id = attribute_changes.propose(conn, 'rider', 1, 'birth_date', '2001-01-01', None)
+        assert conn.scalar(text('SELECT birth_date FROM rider WHERE id=1')) == 20000101
+        assert conn.execute(text('SELECT status,applied_at FROM cdb_changes WHERE id=:id'),
+                            {'id': change_id}).one() == ('pending', None)
+    monkeypatch.setattr(worker, 'fetch_profile', lambda *args: {
+        'profile': {'birthdate': '2000-01-01', 'display_name': 'A Rider'}, 'rows': [],
+    })
+    task = enqueue(namespace, 1)
+    assert worker.execute_task(task.id)
+    with first.begin() as conn:
+        assert conn.execute(text('SELECT birth_date,pcs_identity_status FROM rider WHERE id=1')).one() == (
+            20000101, 'verified',
+        )
+        assert conn.execute(text('SELECT status,applied_at FROM cdb_changes WHERE id=:id'),
+                            {'id': change_id}).one() == ('pending', None)
+        attribute_changes.decide(conn, 'rider', change_id, decision, None)
+        assert conn.scalar(text('SELECT birth_date FROM rider WHERE id=1')) == expected_dob
+    task = enqueue(namespace, 1)
+    assert worker.execute_task(task.id)
+    with first.connect() as conn:
+        assert conn.execute(text('SELECT birth_date,pcs_identity_status FROM rider WHERE id=1')).one() == (
+            expected_dob, expected_identity,
+        )
+    with second.connect() as conn:
+        assert conn.execute(text('SELECT birth_date,pcs_identity_status FROM rider WHERE id=1')).one() == (
+            20000101, 'unknown',
+        )
 
 
 @pytest.mark.parametrize('pcs_dob, expected_status, stored_dob', [
@@ -428,7 +468,8 @@ def test_rider_bulk_tasks_permissions_history_and_namespace(app, namespaces, cli
         riders_path = f'/n/{second.slug}/riders'
         request(riders_path, method='POST', data={'action': 'set_view', 'view': 'activity'})
         markup = BeautifulSoup(request(riders_path).data, 'html.parser')
-        assert markup.select_one('button[value="rider_activity_check"]')['formaction'] == path
+        assert markup.select_one('.dropdown-menu button[value="run_data_sync"]')['formaction'] == path
+        assert not markup.select_one('button[value="rider_activity_check"]')
         assert not markup.select_one('button[value="rider_identity_check"]')
         with second_engine.begin() as conn:
             conn.execute(text('UPDATE rider SET first_cycling_id=NULL WHERE id=1'))

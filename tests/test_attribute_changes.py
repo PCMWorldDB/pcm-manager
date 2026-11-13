@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from webapp.extensions import db
 from webapp.integrations.cdb import attribute_changes as changes
 from webapp.models import AuditLog, FirstCyclingRace, RaceResultMap, Role, User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 from webapp.integrations.cdb.rider_state import refresh_pending_flags
 
@@ -74,6 +74,13 @@ def test_attribute_proposal_review_and_namespace_isolation(app, client, attribut
     assert b'aria-label="Edit Birth Date"' in page.data
     assert b'aria-label="Save Birth Date for review"' in page.data
     assert b'aria-label="Edit PCS Slug"' in page.data
+    identifiers = BeautifulSoup(page.data, 'html.parser').select_one('#rider-identifiers')
+    for name in ('pcs_slug', 'first_cycling_id'):
+        form = identifiers.select_one(f'input[name="attribute_name"][value="{name}"]').find_parent('form')
+        assert form.select_one('button[title="Cancel"]')['type'] == 'button'
+    pcs_link = identifiers.select_one('#rider-pcs-identifier summary a')
+    assert pcs_link['href'] == 'https://www.procyclingstats.com/rider/test'
+    assert pcs_link['target'] == '_blank'
     for ns in namespaces:
         result = client.post(f'/n/{ns.slug}/attributes/rider/1/propose',
                              data={'attribute_name': 'birth_date', 'value': '2001-02-03'})
@@ -94,6 +101,11 @@ def test_attribute_proposal_review_and_namespace_isolation(app, client, attribut
     assert b'2026-11-07 02:08:02' in page.data and b'831958' not in page.data
     profile = client.get('/n/attribute-alpha/riders/1')
     assert b'aria-label="Birth Date pending approval"' in profile.data
+    indicator = BeautifulSoup(profile.data, 'html.parser').select_one('.pending-approval[aria-label="Birth Date pending approval"]')
+    assert indicator.get_text(strip=True) == '⏳'
+    assert 'awaiting approval. Proposed: 20010203' in indicator['title']
+    assert indicator['data-bs-toggle'] == 'tooltip'
+    assert b'Pending review</a>' not in profile.data
     assert b'aria-label="Edit Birth Date"' not in profile.data
     assert b'aria-label="Approve Birth Date"' not in profile.data
     assert b'/n/attribute-alpha/attributes/rider/review/1/approve' in profile.data
@@ -112,6 +124,17 @@ def test_attribute_proposal_review_and_namespace_isolation(app, client, attribut
     result = client.post('/n/attribute-beta/attributes/rider/review/1/approve')
     assert result.status_code == 302
     assert result.location == '/n/attribute-beta/riders/review?tab=attributes'
+    for slug, pending in [('attribute-alpha', True), ('attribute-beta', False)]:
+        # Overlapping rider IDs keep their own pending status in every list view.
+        for view in ('stats', 'attributes', 'identity', 'activity'):
+            client.post(f'/n/{slug}/riders', data={'action': 'set_view', 'view': view})
+            roster = BeautifulSoup(client.get(f'/n/{slug}/riders').data, 'html.parser')
+            badge = roster.select_one('.riders-table .pending-approval')
+            assert bool(badge) is pending
+            if badge:
+                assert badge.get_text(strip=True) == '⏳'
+                assert badge['title'] == 'This rider has attribute changes awaiting approval.'
+                assert badge['href'] == f'/n/{slug}/riders/1#rider-attribute-approvals'
     assert b'PCS identity verified. DOB matches.' in client.get('/n/attribute-beta/riders/1').data
     history = client.get('/n/attribute-beta/riders/change-log')
     assert history.status_code == 200
@@ -157,7 +180,8 @@ def test_attribute_review_from_rider_returns_to_profile(app, client, attribute_n
     page = client.get(rider_url)
     assert page.status_code == 200
     markup = BeautifulSoup(page.data, 'html.parser')
-    assert [heading.get_text(strip=True) for heading in markup.select('#rider-review h4')] == ['Pending Attribute Approvals']
+    assert markup.select_one('#rider-review-title').get_text(strip=True) == 'Review (1)'
+    assert [heading.get_text(strip=True) for heading in markup.select('#rider-review h4')] == ['Reviews Needed', 'History']
     action_url = f'{base}/attributes/rider/review/1/{action}'
     form = markup.select_one(f'#rider-attribute-approvals form[action="{action_url}"]')
     assert form is not None
@@ -169,7 +193,8 @@ def test_attribute_review_from_rider_returns_to_profile(app, client, attribute_n
     markup = BeautifulSoup(client.get(result.location).data, 'html.parser')
     review = markup.select_one('#rider-review')
     assert review.find('p', string='No reviews needed') is not None
-    assert not review.select('h4, table')
+    assert not review.select_one('#rider-pending-reviews').select('h4, table')
+    assert review.select_one('#rider-history table') is not None
     events = [cell.get_text(strip=True) for cell in markup.select('#rider-history tbody td:nth-child(2)')]
     assert events == (['Approved', 'Submitted'] if action == 'approve' else [])
     other_rider = BeautifulSoup(client.get('/n/attribute-beta/riders/1').data, 'html.parser')
@@ -206,6 +231,29 @@ def test_stats_roles_cannot_write_or_approve_attributes(app, client, role):
     assert client.post('/attributes/rider/review/1/approve').status_code == 403
 
 
+def test_profile_review_card_combines_pending_and_contains_history(app, client, attribute_namespaces):
+    _, engines = attribute_namespaces
+    login(app, client, 'admin')
+    with engines[0].begin() as conn:
+        conn.execute(text('''INSERT INTO stat_changes
+            (rider_id,stat_name,original_value,final_value,delta_value,is_confilict_override,is_approved)
+            VALUES (1,'mo',70,71,1,FALSE,FALSE), (1,'mm',70,72,2,FALSE,TRUE)'''))
+    assert client.post('/n/attribute-alpha/attributes/rider/1/propose',
+                       data={'attribute_name': 'birth_date', 'value': '2001-02-03'}).status_code == 302
+    markup = BeautifulSoup(client.get('/n/attribute-alpha/riders/1').data, 'html.parser')
+    review = markup.select_one('#rider-review')
+    assert review.h3.get_text(strip=True) == 'Review (2)'
+    pending = review.select_one('table')
+    assert len(pending.select('tbody tr')) == 2
+    assert pending.find('td', string='MO') and pending.find('td', string='birth_date')
+    assert pending.select_one('form[action$="/approve"]')
+    history = review.select_one('#rider-history')
+    assert history.find('td', string='MM')
+    assert not history.find('td', string='MO')
+    beta = BeautifulSoup(client.get('/n/attribute-beta/riders/1').data, 'html.parser')
+    assert beta.select_one('#rider-review-title').get_text(strip=True) == 'Review (0)'
+
+
 def test_rider_review_tabs_separate_pending_history_and_namespaces(app, client, attribute_namespaces):
     _, engines = attribute_namespaces
     login(app, client, 'admin')
@@ -228,7 +276,7 @@ def test_rider_review_tabs_separate_pending_history_and_namespaces(app, client, 
     beta = client.get('/n/attribute-beta/riders/review?tab=stats')
     assert b'No pending stat approvals.' in beta.data
     assert b'No historical or applied stat changes.' in beta.data
-    for tab, text_value in [('identity', b'Identity review is coming soon.'),
+    for tab, text_value in [('identity', b'Identity review ('),
                             ('activity', b'Rider race participation counts are coming soon.')]:
         response = client.get('/n/attribute-alpha/riders/review?tab=' + tab)
         assert response.status_code == 200 and text_value in response.data
@@ -414,6 +462,8 @@ def test_rider_pending_flags_track_remaining_changes_and_manual_migration(app, a
         assert conn.execute(text('SELECT has_pending_stat_changes FROM rider WHERE id=1')).scalar() is True
     # Simulate a pre-migration namespace, then verify the reviewed SQL backfill.
     with engine.begin() as conn:
+        # Legacy namespaces also predate the provider-contribution trigger.
+        conn.execute(text('DROP TRIGGER IF EXISTS queue_external_identity_pair ON rider'))
         conn.execute(text('''ALTER TABLE rider DROP CONSTRAINT ck_rider_pcs_identity_status,
             DROP COLUMN pcs_identity_status, DROP COLUMN pcs_slug, DROP COLUMN has_pending_stat_changes,
             DROP COLUMN has_pending_attribute_changes'''))

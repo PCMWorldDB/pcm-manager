@@ -28,7 +28,8 @@ from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException, NotFound
 
 from webapp.web import web_bp
-from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, RIDER_VIEWS, activity_sql
+from webapp.web.race_catalog import unified_races, filter_races
+from webapp.web.rider_views import ACTIVITY_FILTERS, ACTIVITY_CONDITIONS, RIDER_VIEWS, IDENTITY_FILTERS, IDENTITY_REVIEW_FILTERS, DEFAULT_IDENTITY_REVIEW_FLAGS, activity_sql, identity_flag_condition, filter_snapshot
 from webapp.web.forms import (
     AdminPasswordResetForm,
     LoginForm,
@@ -40,6 +41,7 @@ from webapp.web.forms import (
 )
 from webapp.models import User, UserSecurityToken, Resource, Namespace, Role, DiscordSettings, DISCORD_WORKFLOW_CHOICES, AuditLog, AuditAction, FirstCyclingRace, RaceResultMap
 from webapp.models import Action, ExternalCallTask, ExternalCallTaskGroup, RolePermission, ScheduledJob
+from webapp.integrations.identity import MODELS as IDENTITY_MODELS, save_identity, publish_namespace_pairs
 from webapp.integrations.cdb import apply_updates_to_sqlite as _apply_release_updates_to_sqlite
 from webapp.integrations.cdb.converter import convert_sqlite_to_cdb as _convert_release_sqlite_to_cdb
 from webapp.integrations.discord import (
@@ -53,6 +55,7 @@ from webapp.integrations.discord import (
 from webapp.integrations.firstcycling.api import FirstCyclingClient, FirstCyclingAPIError
 from webapp.models.main.firstcycling import FirstCyclingRider, FirstCyclingTeam
 from webapp.models.main.firstcycling import FirstCyclingRaceResult, FirstCyclingRaceStage
+from webapp.models.main.pcs import PcsRider
 from webapp.integrations.cdb import get_field_mapping
 from webapp.integrations.cdb.editability import get_editable_fields
 from webapp.integrations.cdb import attribute_changes, field_configuration
@@ -539,7 +542,7 @@ def _record_external_sync_log(
 
     row = ExternalCallTaskGroup(
         provider=provider,
-        sync_type=sync_type,
+        workflow_type=sync_type,
         season_year=season_year,
         gender=gender,
         status=status,
@@ -1306,10 +1309,10 @@ def _namespace_roster_team_from_row(row):
     return SimpleNamespace(
         team_id=row.get('team_id'),
         team_name=row.get('team_name'),
-        short_name=row.get('short_name'),
-        abbreviation=row.get('abbreviation') or row.get('uci_code'),
         country_id=row.get('country_id'),
         division_id=row.get('division_id'),
+        short_name=row.get('short_name'),
+        abbreviation=row.get('abbreviation') or row.get('uci_code'),
         nation_name=row.get('nation_name'),
         division=row.get('division'),
         uci_code=row.get('uci_code'),
@@ -1334,11 +1337,16 @@ def _namespace_roster_rider_from_row(row):
         pcs_identity_verified_override=row.get('pcs_identity_verified_override', False),
         pcs_slug=row.get('pcs_slug'),
         is_deleted=row.get('is_deleted', False),
+        has_pending_attribute_changes=row.get('has_pending_attribute_changes', False),
         name=_cdb_rider_display_name(row),
         first_name=row.get('first_name'),
         last_name=row.get('last_name'),
         birth_date=birth_date,
         birth_date_display=_format_date_for_display(birth_date),
+        country_id=row.get('country_id'),
+        division_id=row.get('division_id'),
+        search_name=row.get('search_name'),
+        search_team=row.get('search_team'),
         region_id=row.get('region_id'),
         nation_name=row.get('nation_name'),
         team_id=row.get('team_id'),
@@ -1570,7 +1578,7 @@ def _load_namespace_roster_teams(namespace, selected_division='', selected_count
     return teams, division_options, country_options, rider_counts
 
 
-def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
+def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100, *, snapshot=False, include_activity=False):
     if namespace is None:
         return [], 0, [], []
 
@@ -1585,7 +1593,20 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
     selected_country = (filters.get('country') or '').strip()
     selected_division = (filters.get('division') or '').strip()
     view = filters.get('view', 'stats')
-    activity_view = view == 'activity'
+    activity_view = include_activity if snapshot else view == 'activity'
+    if filters.get('identity_review'):
+        conditions = []
+        for index, flag in enumerate(filters.get('identity_flags', DEFAULT_IDENTITY_REVIEW_FLAGS)):
+            if flag not in IDENTITY_REVIEW_FILTERS:
+                raise ValueError('Invalid identity review flag')
+            key = f'identity_flag_{index}'
+            conditions.append(identity_flag_condition(flag).replace(':identity_flag', ':' + key))
+            params[key] = flag
+        where_clauses.append('(' + ' OR '.join(conditions) + ')' if conditions else 'FALSE')
+        where_clauses.append("NOT COALESCE((to_jsonb(c)->>'is_deleted')::boolean, FALSE)")
+    if view == 'identity' and filters.get('identity_flag') in IDENTITY_FILTERS and filters['identity_flag']:
+        where_clauses.append(identity_flag_condition(filters['identity_flag']))
+        params['identity_flag'] = filters['identity_flag']
     if view == 'stats' and filters.get('stat_key') in STAT_COLUMN_MAP:
         column = STAT_COLUMN_MAP[filters['stat_key']]
         for bound, operator in (('stat_min', '>='), ('stat_max', '<=')):
@@ -1633,7 +1654,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
             _ensure_namespace_database_connection(conn, namespace)
             activity_join = activity_sql(conn) if activity_view else ''
             activity_columns = 'activity.*,' if activity_view else ''
-            activity_order = 'activity.latest_result_date DESC NULLS LAST,' if activity_view else ''
+            activity_order = 'activity.latest_result_date DESC NULLS LAST,' if activity_view and not snapshot else ''
             country_rows = conn.execute(
                 text(
                     """
@@ -1662,7 +1683,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                     """
                 )
             ).mappings().all()
-            total = conn.execute(
+            total = None if snapshot else conn.execute(
                 text(
                     f"""
                     SELECT COUNT(*) AS total
@@ -1682,15 +1703,26 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         {activity_columns}
                         c.id AS cyclist_id,
                         c.first_cycling_id,
+                        to_jsonb(c)->>'pcs_slug' AS pcs_slug,
+                        to_jsonb(c)->>'pcs_identity_status' AS pcs_identity_status,
+                        (to_jsonb(c)->>'pcs_birth_date')::date AS pcs_birth_date,
+                        COALESCE((to_jsonb(c)->>'pcs_identity_verified_override')::boolean, FALSE) AS pcs_identity_verified_override,
+                        COALESCE((to_jsonb(c)->>'pcs_slug_is_assumed')::boolean, FALSE) AS pcs_slug_is_assumed,
                         c.first_name,
                         c.last_name,
                         c.first_last_name,
                         c.birth_date,
                         c.region_id,
                         c.team_id,
+                        region.country_id,
+                        t.division_id,
+                        CONCAT_WS(' ', c.first_last_name, c.first_name, c.last_name,
+                                  CONCAT_WS(' ', c.first_name, c.last_name)) AS search_name,
+                        CONCAT_WS(' ', t.team_name, t.short_name, t.abbreviation) AS search_team,
                         c.size_cm,
                         c.weight_kg,
                         COALESCE((to_jsonb(c)->>'is_deleted')::boolean, FALSE) AS is_deleted,
+                        COALESCE((to_jsonb(c)->>'has_pending_attribute_changes')::boolean, FALSE) AS has_pending_attribute_changes,
                         COALESCE(t.team_name, t.short_name) AS team_name,
                         COALESCE(NULLIF(BTRIM(country.flag_name), ''), NULLIF(BTRIM(country.constant), ''), country.id::text) AS nation_name,
                         {_snapshot_stat_select_list('c')}
@@ -1707,7 +1739,7 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
                         c.first_last_name ASC NULLS LAST,
                         c.first_cycling_id ASC NULLS LAST,
                         c.id ASC
-                    LIMIT :limit OFFSET :offset
+                    {'' if snapshot else 'LIMIT :limit OFFSET :offset'}
                     """
                 ),
                 {
@@ -1718,13 +1750,33 @@ def _load_namespace_roster_riders(namespace, filters, page=1, per_page=100):
             ).mappings().all()
     except Exception:
         logger.exception('Failed to load CDB riders from namespace %s', namespace.slug)
+        if snapshot:
+            abort(503, description='Could not load riders. Please try again.')
         return [], 0, [], []
     finally:
         engine.dispose()
 
     country_options = [{'value': row['value'], 'label': row['label']} for row in country_rows]
     division_options = [{'value': row['value'], 'label': row['label']} for row in division_rows]
-    return [_namespace_roster_rider_from_row(row) for row in rows], int(total), country_options, division_options
+    riders = [_namespace_roster_rider_from_row(row) for row in rows]
+    if (snapshot or view == 'identity') and riders:
+        model = IDENTITY_MODELS['rider']
+        fc_ids = {rider.first_cycling_id for rider in riders if rider.first_cycling_id}
+        slugs = {row['pcs_slug'] for row in rows if row['pcs_slug'] and not row['pcs_slug_is_assumed']}
+        identities = model.query.filter(or_(model.firstcycling_id.in_(fc_ids), model.pcs_slug.in_(slugs))).all()
+        by_fc = {identity.firstcycling_id: identity for identity in identities if identity.firstcycling_id}
+        by_pcs = {identity.pcs_slug: identity for identity in identities if identity.pcs_slug}
+        for rider, row in zip(riders, rows):
+            fc_identity = by_fc.get(rider.first_cycling_id)
+            pcs_identity = by_pcs.get(rider.pcs_slug) if not row['pcs_slug_is_assumed'] else None
+            identity = fc_identity or pcs_identity
+            rider.mapping_conflict = bool(identity and (
+                (fc_identity and pcs_identity and fc_identity.id != pcs_identity.id)
+                or (rider.first_cycling_id and identity.firstcycling_id and rider.first_cycling_id != identity.firstcycling_id)
+                or (rider.pcs_slug and not row['pcs_slug_is_assumed'] and identity.pcs_slug and rider.pcs_slug != identity.pcs_slug)
+            ))
+            rider.identity_id = identity.id if identity and not rider.mapping_conflict else None
+    return riders, len(riders) if snapshot else int(total), country_options, division_options
 
 
 def _load_namespace_roster_team(namespace, team_id):
@@ -1828,6 +1880,7 @@ def _load_namespace_roster_rider(namespace, rider_id):
                 text(
                     f"""
                     SELECT
+                        to_jsonb(c) AS debug_columns,
                         c.id AS cyclist_id,
                         c.first_cycling_id,
                         to_jsonb(c)->>'pcs_identity_status' AS pcs_identity_status,
@@ -1861,7 +1914,11 @@ def _load_namespace_roster_rider(namespace, rider_id):
     finally:
         engine.dispose()
 
-    return _namespace_roster_rider_from_row(row) if row else None
+    if row is None:
+        return None
+    rider = _namespace_roster_rider_from_row(row)
+    rider.debug_columns = row['debug_columns']
+    return rider
 
 
 def _stat_change_status_label(row):
@@ -8003,6 +8060,7 @@ def object_review(object_type=None):
     if object_type == 'riders' and review_tab == 'stats' and not _can_access_panel('stat_editor'):
         abort(403)
     changes, attribute_history, pending_stats, historical_stats = [], [], [], []
+    identity_review = None
     if selected_namespace is not None and review_tab == 'attributes':
         changes = _load_attribute_review(selected_namespace, object_type[:-1])
         if object_type == 'riders':
@@ -8010,6 +8068,23 @@ def object_review(object_type=None):
     elif selected_namespace is not None and review_tab == 'stats':
         pending_stats = _load_namespace_rider_stat_edits(selected_namespace, approved=False, limit=200)
         historical_stats = _load_namespace_rider_stat_edits(selected_namespace, approved=True, limit=200)
+    elif selected_namespace is not None and review_tab == 'identity':
+        flags = list(dict.fromkeys(request.args.getlist('flag'))) if 'filtered' in request.args or 'flag' in request.args else list(DEFAULT_IDENTITY_REVIEW_FLAGS)
+        if any(flag not in IDENTITY_REVIEW_FILTERS for flag in flags):
+            abort(400)
+        query = (request.args.get('q') or '').strip()
+        page = max(request.args.get('page', 1, type=int) or 1, 1)
+        per_page = 50
+        filters = dict(view='identity', identity_review=True, identity_flags=flags, q=query)
+        riders, total, _, _ = _load_namespace_roster_riders(selected_namespace, filters, page, per_page)
+        pages = max((total + per_page - 1) // per_page, 1)
+        if page > pages:
+            return redirect(url_for('web.riders_review', namespace_slug=selected_namespace.slug,
+                                    tab='identity', flag=flags, filtered=1, q=query, page=pages))
+        for rider in riders:
+            rider.identity_check_slug = request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name)
+            rider.identity_saved_slug = rider.pcs_slug if valid_rider_slug(rider.pcs_slug) else None
+        identity_review = dict(riders=riders, total=total, page=page, pages=pages, flags=flags, q=query)
     return render_template(
         'object_review.html', object_type=object_type,
         selected_namespace=selected_namespace, changes=changes,
@@ -8017,6 +8092,9 @@ def object_review(object_type=None):
         pending_stats=pending_stats, historical_stats=historical_stats,
         can_approve_stats=_can_approve_stats(),
         can_approve_attributes=_can_attribute_action('approve'),
+        identity_review=identity_review, identity_review_filters=IDENTITY_REVIEW_FILTERS,
+        identity_flag_labels=IDENTITY_FILTERS, can_check_identity=_can_check_rider_identity(),
+        rider_task_types=_rider_bulk_task_types(), rider_selection_limit=MAX_BULK_TASK_RIDERS,
     )
 
 
@@ -8137,7 +8215,7 @@ def propose_attribute(entity_type, entity_id):
         engine.dispose()
     if list_id is not None:
         return redirect(url_for('web.bulk_editor', namespace_slug=namespace.slug, tab='editor', list_id=list_id))
-    return redirect(url_for('web.' + entity_type + '_detail',
+    return redirect(url_for('web.' + ('cdb_race' if entity_type == 'race' else entity_type) + '_detail',
                             **{entity_type + '_id': entity_id}, namespace_slug=namespace.slug))
 
 
@@ -8218,6 +8296,7 @@ def teams():
     rider_filters = _load_riders_state(selected_namespace)
     riders = []
     rider_total = 0
+    snapshot_riders = []
     rider_country_options = []
     rider_division_options = []
 
@@ -8254,10 +8333,16 @@ def teams():
                 activity_status = request.form.get('activity_status', rider_filters['activity_status'])
                 if activity_status not in ACTIVITY_FILTERS:
                     abort(400)
+                if activity_status and not _can_access_panel('activity_monitor'):
+                    abort(403)
+                identity_flag = request.form.get('identity_flag', rider_filters['identity_flag'])
+                if identity_flag not in IDENTITY_FILTERS:
+                    abort(400)
                 rider_filters.update({
                     'stat_key': stat_key,
                     **stat_bounds,
                     'activity_status': activity_status,
+                    'identity_flag': identity_flag,
                     'q': (request.form.get('q', type=str) or '').strip(),
                     'country': (request.form.get('country', type=str) or '').strip(),
                     'division': (request.form.get('division', type=str) or '').strip(),
@@ -8312,44 +8397,16 @@ def teams():
         page = rider_filters['page']
         per_page = rider_filters['per_page']
 
-        riders, rider_total, rider_country_options, rider_division_options = _load_namespace_roster_riders(
-            selected_namespace,
-            filters,
-            page,
-            per_page,
+        snapshot_riders, _, rider_country_options, rider_division_options = _load_namespace_roster_riders(
+            selected_namespace, {}, snapshot=True, include_activity=_can_access_panel('activity_monitor'),
         )
-        country_option_values = {option['value'] for option in rider_country_options}
-        division_option_values = {option['value'] for option in rider_division_options}
-        filters_changed = False
-        if filters['country'] and filters['country'] not in country_option_values:
-            filters['country'] = ''
-            filters_changed = True
-        if filters['division'] and filters['division'] not in division_option_values:
-            filters['division'] = ''
-            filters_changed = True
-        if filters_changed:
-            page = 1
-            rider_filters.update(filters)
-            rider_filters['page'] = page
-            _save_riders_state(selected_namespace, rider_filters)
-            riders, rider_total, rider_country_options, rider_division_options = _load_namespace_roster_riders(
-                selected_namespace,
-                filters,
-                page,
-                per_page,
-            )
-
+        if rider_filters['activity_status'] and not _can_access_panel('activity_monitor'):
+            abort(403)
+        filtered_riders = filter_snapshot(snapshot_riders, filters, _normalize_name_search_term)
+        rider_total = len(filtered_riders)
         total_pages = max((rider_total + per_page - 1) // per_page, 1)
-        if page > total_pages:
-            page = total_pages
-            rider_filters['page'] = page
-            _save_riders_state(selected_namespace, rider_filters)
-            riders, rider_total, rider_country_options, rider_division_options = _load_namespace_roster_riders(
-                selected_namespace,
-                filters,
-                page,
-                per_page,
-            )
+        page = min(page, total_pages)
+        riders = filtered_riders[(page - 1) * per_page:page * per_page]
     else:
         page = rider_filters['page']
         per_page = rider_filters['per_page']
@@ -8382,7 +8439,7 @@ def teams():
             'end': 0,
         }
 
-    return render_template(
+    response = make_response(render_template(
         'teams.html',
         selected_namespace=selected_namespace,
         selected_year=selected_year,
@@ -8399,19 +8456,62 @@ def teams():
         rider_division_options=rider_division_options,
         rider_filters=rider_filters,
         rider_views=RIDER_VIEWS,
+        rider_snapshot=_rider_snapshot_payload(snapshot_riders, selected_namespace) if active_method == 'riders' and season_selected else None,
         rider_pagination=rider_pagination,
         per_page_options=(50, 100, 150, 250),
         stat_fields=STAT_DELTA_FIELDS,
         rider_stats_map={rider.rider_id: _namespace_roster_stats_from_rider(rider) for rider in riders},
         can_view_activity=_can_access_panel('activity_monitor'),
         activity_filter_options=ACTIVITY_FILTERS,
+        identity_filter_options=IDENTITY_FILTERS,
         can_create_rider_list=_can_access_panel('stat_editor') and (
             _can_create_stats() or _can_attribute_action('update')),
         can_start_stat_list=_can_access_panel('stat_editor') and _can_create_stats(),
         can_bulk_edit_attributes=_can_attribute_action('update'),
         rider_task_types=_rider_bulk_task_types(),
         rider_selection_limit=MAX_BULK_TASK_RIDERS,
+    ))
+    if active_method == 'riders':
+        response.cache_control.no_store = True
+    return response
+
+
+def _rider_snapshot_payload(riders, namespace):
+    can_view_activity = _can_access_panel('activity_monitor')
+    activity_fields = {'monitor_id', 'activity_available', 'latest_check_at', 'latest_check_status',
+                       'latest_result_date', 'latest_race_name', 'days_since_last_race'}
+    records = []
+    omitted_fields = {'cyclist_id', 'birth_date', 'pcs_birth_date', 'region_id', 'first_name', 'last_name'}
+    for rider in riders:
+        record = {key: value.isoformat() if isinstance(value, (date, datetime)) else value
+                  for key, value in vars(rider).items()
+                  if value is not None and key not in omitted_fields
+                  and (can_view_activity or key not in activity_fields)}
+        record['rider_url'] = url_for('web.rider_detail', namespace_slug=namespace.slug, rider_id=rider.rider_id)
+        record['team_url'] = url_for('web.team_detail', namespace_slug=namespace.slug, team_id=rider.team_id) if rider.team_id else None
+        if can_view_activity:
+            record['check_display'] = _activity_datetime_label(rider.latest_check_at) if rider.latest_check_at else '-'
+            record['check_status_display'] = _activity_check_status_label(rider.latest_check_status) if rider.latest_check_status else (
+                'History unavailable' if rider.activity_available is False else
+                'Awaiting check' if rider.monitor_id else 'Not monitored')
+        records.append(record)
+    return dict(riders=records, namespace_id=namespace.id, updated_at=datetime.utcnow().isoformat() + 'Z')
+
+
+@web_bp.route('/riders/snapshot')
+@login_required
+def rider_snapshot():
+    if not _can_access_panel('team_manager'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    riders, _, countries, divisions = _load_namespace_roster_riders(
+        namespace, {}, snapshot=True, include_activity=_can_access_panel('activity_monitor'),
     )
+    response = jsonify(**_rider_snapshot_payload(riders, namespace), countries=countries, divisions=divisions)
+    response.cache_control.no_store = True
+    return response
 
 
 @web_bp.route('/teams/<int:team_id>')
@@ -8498,6 +8598,10 @@ def rider_bulk_tasks():
     if request.method == 'POST':
         if namespace is None:
             abort(404)
+        if request.form.get('action') == 'run_data_sync':
+            if group_id is not None:
+                abort(400)
+            return _run_rider_data_sync(namespace, runnable_types)
         return _save_rider_task_group(namespace, group, runnable_types)
 
     selected_type = request.args.get('sync_type', '').strip()
@@ -8565,6 +8669,38 @@ def _rider_task_requests(namespace, rider_ids, sync_type):
             requests.append(dict(provider=provider, endpoint=PROFILE_ENDPOINT, params=params,
                                  related_to_table='rider', related_to_id=rider['id']))
     return requests
+
+
+def _run_rider_data_sync(namespace, runnable_types):
+    if PCS_RIDER_SYNC not in runnable_types or FC_RIDER_SYNC not in runnable_types:
+        abort(403)
+    return_url = url_for('web.riders', namespace_slug=namespace.slug)
+    try:
+        rider_ids = _parse_bulk_rider_ids(request.form.get('rider_ids', ''))
+        if not rider_ids:
+            raise ValueError(f'Select between 1 and {MAX_BULK_TASK_RIDERS} valid riders.')
+        # Validate both providers before staging either group; commit them together.
+        requests = _rider_task_requests(namespace, rider_ids, ACTIVITY_CHECK)
+        groups = [enqueue_group(
+            [item for item in requests if item['provider'] == provider],
+            namespace_id=namespace.id, executed_by_id=current_user.id,
+            provider=provider, sync_type=sync_type, message='Bulk Run Data Sync',
+        ) for provider, sync_type in (('pcs', PCS_RIDER_SYNC), ('firstcycling', FC_RIDER_SYNC))]
+        group_ids = [group.id for group in groups]
+        db.session.commit()
+    except (ValueError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, ValueError) else 'Could not queue rider data sync.', 'error')
+        return redirect(return_url)
+    for group_id in group_ids:
+        try:
+            submit_external_group(group_id)
+        except Exception:
+            db.session.rollback()
+            logger.exception('Could not submit rider task group %s', group_id)
+            flash('The group is queued and will be retried by the dispatcher.', 'warning')
+    flash('PCS and FirstCycling rider data sync groups queued.', 'success')
+    return redirect(url_for('web.rider_bulk_tasks', tab='groups'))
 
 
 def _save_rider_task_group(namespace, group, runnable_types):
@@ -8653,6 +8789,13 @@ def check_rider_identity(rider_id):
         abort(404)
 
     return_url = url_for('web.rider_detail', namespace_slug=namespace.slug, rider_id=rider_id)
+    if request.form.get('return_to') == 'identity_review':
+        flags = list(dict.fromkeys(request.form.getlist('return_flag')))
+        if any(flag not in IDENTITY_REVIEW_FILTERS for flag in flags):
+            abort(400)
+        return_url = url_for('web.riders_review', namespace_slug=namespace.slug, tab='identity',
+                             filtered=1, flag=flags, q=(request.form.get('return_q') or '').strip(),
+                             page=max(request.form.get('return_page', 1, type=int) or 1, 1))
     slug = request_rider_slug(rider.pcs_slug, rider.first_name, rider.last_name)
     if not slug:
         flash('Save a valid PCS slug before checking this rider’s identity.', 'error')
@@ -8662,7 +8805,7 @@ def check_rider_identity(rider_id):
         [dict(provider='pcs', endpoint=PROFILE_ENDPOINT, params={'rider_slug': slug},
               related_to_table='rider', related_to_id=rider.cyclist_id)],
         namespace_id=namespace.id, executed_by_id=current_user.id, provider='pcs',
-        sync_type=PCS_RIDER_SYNC, message=f'PCS rider profile for {slug}'[:255],
+        message=f'PCS rider profile for {slug}'[:255],
     )
     flash('PCS identity check queued.', 'info')
     return redirect(return_url)
@@ -8737,15 +8880,27 @@ def rider_detail(rider_id):
         if pcs_slug_field is not None:
             pcs_slug_field['value'] = pcs_slug_display
 
+    pcs_profile = PcsRider.query.filter_by(rider_slug=rider.pcs_slug).first() if valid_rider_slug(rider.pcs_slug) else None
+    debug_sources = {'CDB': getattr(rider, 'debug_columns', {})}
+    for label, profile in [('FC', getattr(rider, 'firstcycling_rider', None)), ('PCS', pcs_profile)]:
+        if profile is not None:
+            debug_sources[label] = {
+                column.name: value.isoformat() if isinstance(value, (date, datetime)) else value
+                for column in profile.__table__.columns
+                for value in [getattr(profile, column.key)]
+            }
+
     profile_context = dict(
         **attribute_context,
         rider=rider,
+        rider_debug_sources=debug_sources,
         pcs_slug_display=pcs_slug_display,
         team=team,
         rider_stats=rider_stats,
         rider_measurements=rider_measurements,
         pending_stats=[edit for edit in rider_stat_edits if not edit['is_approved']],
         rider_results=_load_firstcycling_rider_results(getattr(rider, 'first_cycling_id', None)),
+        pcs_activity=_rider_pcs_activity(rider.pcs_slug),
         rider_external_calls=rider_external_calls,
         rider_history=rider_history,
         attribute_history_at_limit=attribute_history_at_limit,
@@ -8776,6 +8931,33 @@ def rider_detail(rider_id):
 
 
 INDIVIDUAL_STAT_SCOPE = 'race_result_id IS NULL AND stat_list_id IS NULL AND rider_id = :rider_id'
+
+
+def _rider_pcs_activity(slug):
+    """Show saved source facts only for the selected rider's exact PCS mapping."""
+    if not valid_rider_slug(slug):
+        return []
+    profile = PcsRider.query.filter_by(rider_slug=slug).first()
+    if profile is None:
+        return []
+    race_class = ' '.join(value.strip() for value in (
+        profile.latest_participation_race_type, profile.latest_participation_race_category,
+    ) if value and value.strip())
+    race_name = (profile.latest_participation_race_name or '').strip()
+    last_race = ' - '.join(value for value in (race_class, race_name) if value)
+    stage = ' - '.join(str(value) for value in (
+        profile.latest_participation_stage_number, profile.latest_participation_stage_name,
+    ) if value is not None and value != '')
+    return [
+        ('Days since last race', (date.today() - profile.latest_participation_date).days
+         if profile.latest_participation_date and profile.latest_participation_date <= date.today() else None),
+        ('Last race date', profile.latest_participation_date),
+        ('Last race', last_race),
+        ('Stage', stage),
+        ('Position', profile.latest_participation_result_position),
+        ('Participation status', profile.latest_participation_status),
+        ('Last PCS sync (UTC)', profile.last_synced_at.strftime('%Y-%m-%d %H:%M:%S') if profile.last_synced_at else None),
+    ]
 
 
 def _individual_pending_fingerprint(conn, rider_id):
@@ -9038,6 +9220,7 @@ def _default_riders_state():
         'stat_min': '',
         'stat_max': '',
         'activity_status': '',
+        'identity_flag': '',
         'q': '',
         'country': '',
         'division': '',
@@ -9051,7 +9234,7 @@ def _load_riders_state(namespace):
     states = session.get('riders_state_by_namespace') or {}
     saved_state = states.get(_stats_editor_session_key(namespace)) or {}
     state = _default_riders_state()
-    for key in ('q', 'country', 'division', 'team', 'stat_key', 'stat_min', 'stat_max', 'activity_status'):
+    for key in ('q', 'country', 'division', 'team', 'stat_key', 'stat_min', 'stat_max', 'activity_status', 'identity_flag'):
         state[key] = (saved_state.get(key, state[key]) or '').strip()
     if saved_state.get('view') in RIDER_VIEWS:
         state['view'] = saved_state['view']
@@ -9081,6 +9264,116 @@ def _save_team_panel_active_method(namespace, active_method):
     states = dict(session.get('team_panel_state_by_namespace') or {})
     states[_stats_editor_session_key(namespace)] = {'active_method': active_method}
     session['team_panel_state_by_namespace'] = states
+
+
+
+def _load_namespace_catalog_races(namespace):
+    if namespace.database_name == db.engines['main'].url.database:
+        raise RuntimeError('A race catalog requires an isolated namespace database.')
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            return conn.execute(text('SELECT * FROM race WHERE NOT is_deleted ORDER BY id')).mappings().all()
+    finally:
+        engine.dispose()
+
+
+@web_bp.after_request
+def publish_committed_identity_pairs(response):
+    namespace_url = getattr(g, 'identity_sync_url', None)
+    if namespace_url is not None and response.status_code < 400:
+        result = publish_namespace_pairs(namespace_url)
+        if result['conflicts']:
+            flash('Source mapping saved locally; a conflicting shared FC/PCS pair needs review.', 'warning')
+        elif result['failed']:
+            flash('Source mapping saved locally; shared identity publication will need a retry.', 'warning')
+    return response
+
+
+@web_bp.route('/identities/<kind>/retry', methods=['POST'])
+@login_required
+def retry_identity_sync(kind):
+    if kind not in IDENTITY_MODELS:
+        abort(404)
+    if not current_user.has_permission('identities', 'update'):
+        abort(403)
+    namespace_id = request.form.get('namespace_id', type=int)
+    namespace = next((item for item in _get_accessible_namespaces() if item.id == namespace_id), None)
+    if namespace is None:
+        abort(404)
+    result = publish_namespace_pairs(namespace.build_connection_string(), retry_conflicts=True)
+    flash(f"Published {result['published']} source pair(s); {result['conflicts']} conflict(s).",
+          'warning' if result['failed'] or result['conflicts'] else 'success')
+    return redirect(url_for('web.identities', kind=kind))
+
+
+@web_bp.route('/identities/<kind>', methods=['GET', 'POST'])
+@login_required
+def identities(kind):
+    """Review shared provider links; this table has no namespace object IDs."""
+    if kind not in IDENTITY_MODELS:
+        abort(404)
+    if not current_user.has_permission('identities', 'read'):
+        abort(403)
+    model = IDENTITY_MODELS[kind]
+    if request.method == 'POST':
+        if not current_user.has_permission('identities', 'update'):
+            abort(403)
+        identity_id = request.form.get('identity_id', type=int)
+        if identity_id is None:
+            abort(400)
+        table = model.__table__
+        try:
+            conn = db.session.connection(bind_arguments={'mapper': model})
+            conn.execute(text(f'LOCK TABLE {table.name} IN SHARE ROW EXCLUSIVE MODE'))
+            before = conn.execute(table.select().where(table.c.id == identity_id)).mappings().first()
+            save_identity(conn, kind, request.form, identity_id=identity_id)
+            after = conn.execute(table.select().where(table.c.id == identity_id)).mappings().one()
+            fields = ('firstcycling_id', 'pcs_slug')
+            AuditLog.log_action(
+                'identity_updated', current_user, resource_type=table.name, resource_id=identity_id,
+                details={'before': {key: before[key] for key in fields},
+                         'after': {key: after[key] for key in fields}},
+                ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
+        except LookupError:
+            db.session.rollback()
+            abort(404)
+        except (ValueError, IntegrityError) as exc:
+            db.session.rollback()
+            flash(str(exc) if isinstance(exc, ValueError) else 'A source ID is already linked to another identity.', 'error')
+        else:
+            flash('Shared FC/PCS mapping corrected. Namespace source values are unchanged.', 'success')
+        return redirect(url_for('web.identities', kind=kind))
+    query = model.query
+    term = (request.args.get('q') or '').strip()
+    if term:
+        conditions = [model.pcs_slug.ilike(f'%{term}%')]
+        if term.isdigit() and int(term) < 2**31:
+            conditions.append(model.firstcycling_id == int(term))
+        query = query.filter(or_(*conditions))
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    conflicts = []
+    if namespace is not None:
+        engine = create_engine(namespace.build_connection_string())
+        try:
+            with engine.connect() as conn:
+                _ensure_namespace_database_connection(conn, namespace)
+                if namespace.database_name == db.engines['main'].url.database:
+                    abort(400)
+                from sqlalchemy import inspect
+                if inspect(conn).has_table('identity_sync_outbox'):
+                    conflicts = conn.execute(text('''
+                        SELECT firstcycling_id, pcs_slug, status, error FROM identity_sync_outbox
+                        WHERE entity_type = :kind AND status IN ('pending', 'conflict') ORDER BY id
+                    '''), {'kind': kind}).mappings().all()
+        finally:
+            engine.dispose()
+    return render_template('identities.html', kind=kind, identities=query.order_by(model.id).all(),
+                           sync_conflicts=conflicts, selected_namespace=namespace,
+                           can_update=current_user.has_permission('identities', 'update'))
 
 
 @web_bp.route('/races', methods=['GET', 'POST'], endpoint='races')
@@ -9200,67 +9493,11 @@ def stats_editor():
             gender=selected_gender,
         )
 
-        filter_choices['classifications'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.classification).distinct().order_by(FirstCyclingRace.classification).all()
-            if value
-        ]
-        filter_choices['nations'] = [
-            value for (value,) in base_query.with_entities(FirstCyclingRace.nation_name).distinct().order_by(FirstCyclingRace.nation_name).all()
-            if value
-        ]
-
-        if selected_filters['classification'] and selected_filters['classification'] != '__unclassified__':
-            wanted = selected_filters['classification'].replace(' ', '').strip().lower()
-            default_classification_match = next(
-                (
-                    value
-                    for value in filter_choices['classifications']
-                    if value.replace(' ', '').strip().lower() == wanted
-                ),
-                None,
-            )
-            selected_filters['classification'] = default_classification_match or ''
-
-        query = base_query.options(selectinload(FirstCyclingRace.race_stages))
-
-        if selected_filters['race_name']:
-            race_term = _normalize_name_search_term(selected_filters['race_name'])
-            query = query.filter(_normalized_name_expr(FirstCyclingRace.name).like(f"%{race_term}%"))
-        if selected_filters['classification']:
-            query = query.filter(FirstCyclingRace.classification == selected_filters['classification'])
-        if selected_filters['nation']:
-            query = query.filter(FirstCyclingRace.nation_name == selected_filters['nation'])
-
-        parsed_start_date_from = None
-        parsed_start_date_to = None
-        if selected_filters['start_date_from']:
-            try:
-                parsed_start_date_from = datetime.strptime(selected_filters['start_date_from'], '%Y-%m-%d').date()
-            except ValueError:
-                pass
-        if selected_filters['start_date_to']:
-            try:
-                parsed_start_date_to = datetime.strptime(selected_filters['start_date_to'], '%Y-%m-%d').date()
-            except ValueError:
-                pass
-
-        if parsed_start_date_from is not None:
-            query = query.filter(FirstCyclingRace.start_date >= parsed_start_date_from)
-        if parsed_start_date_to is not None:
-            query = query.filter(
-                func.coalesce(FirstCyclingRace.end_date, FirstCyclingRace.start_date)
-                < parsed_start_date_to
-            )
-
-        if selected_filters['is_stage_race'] == 'true':
-            query = query.filter(FirstCyclingRace.stage_count > 1)
-        elif selected_filters['is_stage_race'] == 'false':
-            query = query.filter((FirstCyclingRace.stage_count.is_(None)) | (FirstCyclingRace.stage_count <= 1))
-
-        races = query.order_by(
-            FirstCyclingRace.start_date.asc().nullslast(),
-            FirstCyclingRace.name.asc(),
-        ).all()
+        fc_races = base_query.options(selectinload(FirstCyclingRace.race_stages)).all()
+        cdb_races = _load_namespace_catalog_races(selected_namespace)
+        catalog = unified_races(cdb_races, fc_races, IDENTITY_MODELS['race'].query.all())
+        filter_choices['nations'] = sorted({race.nation_name for race in catalog if race.nation_name})
+        races = filter_races(catalog, selected_filters, _normalize_name_search_term)
 
         race_ids = {
             race.race_id
@@ -9423,6 +9660,7 @@ def stats_editor():
         list_scope_status=list_scope_status,
         filter_choices=filter_choices,
         selected_filters=selected_filters,
+        can_manage_identities=current_user.has_permission('identities', 'read'),
         can_create_stats=_can_create_stats() or _can_attribute_action('update'),
     )
 
@@ -10875,6 +11113,30 @@ def legacy_race_detail(race_id, stage_id=None):
     return redirect(target, code=301)
 
 
+@web_bp.route('/races/cdb/<int:race_id>')
+@login_required
+def cdb_race_detail(race_id):
+    if not _can_access_panel('stat_editor'):
+        abort(403)
+    namespace = _get_selected_namespace(_get_accessible_namespaces())
+    if namespace is None:
+        abort(404)
+    if namespace.database_name == db.engines['main'].url.database:
+        abort(400)
+    engine = create_engine(namespace.build_connection_string())
+    try:
+        with engine.connect() as conn:
+            _ensure_namespace_database_connection(conn, namespace)
+            race = conn.execute(text('SELECT * FROM race WHERE id = :id AND NOT is_deleted'),
+                                {'id': race_id}).mappings().first()
+            if race is None:
+                abort(404)
+    finally:
+        engine.dispose()
+    return render_template('cdb_race_detail.html', race=race,
+                           **_attribute_editor_context(namespace, 'race', race_id))
+
+
 @web_bp.route('/races/<int:race_id>')
 @web_bp.route('/races/<int:race_id>/<int:stage_id>')
 @login_required
@@ -10883,10 +11145,15 @@ def race_detail(race_id, stage_id=None):
     if not _can_access_panel('stat_editor'):
         abort(403)
 
+    available_namespaces = _get_accessible_namespaces()
+    selected_namespace = _get_selected_namespace(available_namespaces)
+    selected_year, selected_gender = _resolve_namespace_season(selected_namespace)
+    if selected_namespace is None or selected_year is None:
+        abort(404)
     race = FirstCyclingRace.query.options(
         selectinload(FirstCyclingRace.race_stages),
         selectinload(FirstCyclingRace.race_results),
-    ).filter_by(race_id=race_id).first_or_404()
+    ).filter_by(race_id=race_id, season_year=selected_year, gender=selected_gender).first_or_404()
 
     stage_rows = sorted(
         race.race_stages,
@@ -11676,6 +11943,7 @@ def settings():
     """Central directory of administration and configuration options."""
     return render_template(
         'settings.html',
+        can_read_identities=current_user.has_permission('identities', 'read'),
         can_manage_users=_can_access_user_management(),
         can_manage_namespaces=_can_access_namespace_management(),
         can_read_audit_logs=current_user.has_permission('audit_logs', 'read'),
@@ -12365,7 +12633,7 @@ def admin_integrations_run():
         create_manual_external_group(
             [{'provider': 'pcs', 'endpoint': PROFILE_ENDPOINT, 'params': {'rider_slug': slug}}],
             namespace_id=namespace.id if namespace else None, executed_by_id=current_user.id,
-            message=f'PCS rider profile for {slug}'[:255], provider='pcs', sync_type=PCS_RIDER_SYNC,
+            message=f'PCS rider profile for {slug}'[:255], provider='pcs',
         )
         flash('PCS rider check queued. Progress will appear in History.', 'info')
         return redirect(return_url)
@@ -12532,6 +12800,23 @@ def admin_namespace_create():
     
     # Populate PCM version choices from config
     form.pcm_version.choices = [('', '-- Select Version --')] + current_app.config['PCM_VERSIONS']
+    clone_sources = []
+    if (current_user.has_permission('namespaces', 'read')
+            and current_user.has_permission('releases', 'read')
+            and current_user.has_permission('releases', 'download')):
+        clone_sources = [source for source in Namespace.query.filter_by(
+            is_deleted=False, is_template=False).order_by(Namespace.name).all()
+            if current_user.has_namespace_access(source.id)]
+    form.source_namespace.choices = [('', '-- Select Namespace --')] + [
+        (str(source.id), source.name) for source in clone_sources]
+
+    if request.method == 'POST' and request.form.get('creation_method') == 'clone':
+        if not (current_user.has_permission('namespaces', 'read')
+                and current_user.has_permission('releases', 'read')
+                and current_user.has_permission('releases', 'download')):
+            abort(403)
+        if request.form.get('source_namespace') not in {str(source.id) for source in clone_sources}:
+            abort(403)
     
     if request.method == 'POST':
         form.slug.data = _build_namespace_slug(form.name.data, form.gender.data)
@@ -12555,6 +12840,60 @@ def admin_namespace_create():
         
         # Use slug directly as namespace database name
         database_name = normalized_slug
+
+        if form.creation_method.data == 'clone':
+            from webapp.namespace.clone import CATEGORIES, clone_namespace, load_clone_plan
+
+            source = next(item for item in clone_sources if str(item.id) == form.source_namespace.data)
+            if form.cdb_file.data:
+                flash('Choose either a source namespace or a CDB upload.', 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            if form.pcm_version.data != source.pcm_version:
+                flash('Select the source namespace’s PCM version when cloning.', 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            categories = [kind for kind in CATEGORIES if getattr(form, f'copy_{kind}').data]
+            values = {key: getattr(form, key).data for key in
+                      ('name', 'slug', 'description', 'pcm_version', 'database_year', 'gender', 'status')}
+            if request.form.get('confirm_clone') != 'yes':
+                try:
+                    plan = load_clone_plan(source, categories)
+                except Exception:
+                    logger.exception('Could not preview namespace clone from %s', source.slug)
+                    flash('Could not preview the clone. Verify that the source has a complete published release and compatible schema.', 'error')
+                    return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+                session['namespace_clone_review'] = dict(
+                    user_id=current_user.id, source_id=source.id, values=values, categories=categories,
+                    fingerprint=plan['fingerprint'],
+                    expires=(datetime.utcnow() + timedelta(hours=1)).timestamp(),
+                )
+                return render_template('admin/namespace_form.html', form=form, clone_plan=plan,
+                                       active_section='namespaces')
+            review = session.get('namespace_clone_review', {})
+            if (review.get('user_id') != current_user.id or review.get('source_id') != source.id
+                    or review.get('values') != values or review.get('categories') != categories
+                    or review.get('expires', 0) < datetime.utcnow().timestamp()):
+                flash('The clone preview expired or settings changed. Preview again.', 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            namespace = Namespace(**values, database_name=database_name, created_by_id=current_user.id)
+            try:
+                with clone_namespace(source, namespace, categories, review['fingerprint']) as details:
+                    db.session.add(namespace)
+                    db.session.flush()
+                    AuditLog.log_action(
+                        action=AuditAction.NAMESPACE_CREATED, user=current_user,
+                        resource_type='namespace', resource_id=namespace.id, resource_name=namespace.name,
+                        details={'method': 'clone', **details}, ip_address=request.remote_addr,
+                    )
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
+                logger.exception('Namespace clone failed for %s', normalized_slug)
+                session.pop('namespace_clone_review', None)
+                flash('Cloning failed. Preview again; the source may have changed or the destination may already exist.', 'error')
+                return render_template('admin/namespace_form.html', form=form, active_section='namespaces'), 400
+            session.pop('namespace_clone_review', None)
+            flash('Namespace cloned from the latest published release without pending approvals.', 'success')
+            return redirect(url_for('web.admin_namespace_detail', namespace_id=namespace.id))
         
         # Handle CDB file upload
         sqlite_file_path = None
@@ -12706,7 +13045,9 @@ def admin_namespace_create():
                 if os.path.exists(cdb_path):
                     
                     with CDBImporter(cdb_path, namespace.build_connection_string(), namespace.pcm_version, expected_database=namespace.database_name) as importer:
-                        stats = importer.import_all_tables(expected_fingerprint=initial_fingerprint)
+                        stats = importer.import_all_tables(
+                            expected_fingerprint=initial_fingerprint, seed_initial_identities=True,
+                        )
                     session.pop('namespace_creation_review', None)
 
                     # Log CDB import
@@ -13256,6 +13597,7 @@ def _register_namespace_scoped_routes():
         ('/teams', 'teams', teams, ['GET', 'POST']),
         ('/teams/<int:team_id>', 'team_detail', team_detail, ['GET']),
         ('/riders', 'riders', teams, ['GET', 'POST']),
+        ('/riders/snapshot', 'rider_snapshot', rider_snapshot, ['GET']),
         ('/teams/review', 'teams_review', object_review, ['GET']),
         ('/teams/change-log', 'teams_change_log', object_change_log, ['GET']),
         ('/riders/change-log', 'riders_change_log', object_change_log, ['GET']),
@@ -13263,6 +13605,7 @@ def _register_namespace_scoped_routes():
         ('/riders/review', 'riders_review', object_review, ['GET']),
         ('/races/review', 'races_review', object_review, ['GET']),
         ('/races', 'races', stats_editor, ['GET', 'POST']),
+        ('/races/cdb/<int:race_id>', 'cdb_race_detail', cdb_race_detail, ['GET']),
         ('/riders/bulk-editor', 'bulk_editor', stats_editor, ['GET', 'POST']),
         ('/riders/bulk-editor/new', 'bulk_editor_new', bulk_editor_new, ['GET']),
         ('/riders/bulk-tasks', 'rider_bulk_tasks', rider_bulk_tasks, ['GET', 'POST']),

@@ -1,3 +1,16 @@
+{% macro stat_review_action(edit) %}
+    {% set is_batch = edit.source.type in ('Stat List', 'Race Result') %}
+    {% if is_batch %}
+    {% if can_approve_stats and edit.source.url %}<a href="{{ edit.source.url }}">Review batch</a>
+    {% else %}Batch review required{% endif %}
+    {% elif can_approve_stats and edit.approve_url %}
+    <form method="post" action="{{ edit.approve_url }}" class="m-0">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-success" title="Approve all submitted individual stat changes for this rider">Approve rider stats</button>
+    </form>
+    {% else %}Awaiting approver{% endif %}
+{% endmacro %}
+
 {% macro stat_table(edits, pending, hide_rider=false) %}
 {% if edits %}
 <div class="table-responsive"><table class="table table-sm table-hover align-middle">
@@ -11,16 +24,7 @@
             {% if hide_rider and edit.source.type == 'Individual' %}Individual{% elif edit.source.url %}<a href="{{ edit.source.url }}">{{ edit.source.label }}</a>{% else %}{{ edit.source.label }}{% endif %}</td>
         <td>{{ edit.approval_status }}</td><td>{{ edit.release_status }}</td>
         {% if pending %}<td class="text-nowrap">
-            {% if is_batch %}
-            {% if can_approve_stats and edit.source.url %}
-            <a href="{{ edit.source.url }}">Review batch</a>
-            {% else %}Batch review required{% endif %}
-            {% elif can_approve_stats and edit.approve_url %}
-            <form method="post" action="{{ edit.approve_url }}" class="m-0">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button class="btn btn-sm btn-success" title="Approve all submitted individual stat changes for this rider">Approve rider stats</button>
-            </form>
-            {% else %}Awaiting approver{% endif %}
+            {{ stat_review_action(edit) }}
         </td>{% endif %}
     </tr>{% endfor %}</tbody>
 </table></div>

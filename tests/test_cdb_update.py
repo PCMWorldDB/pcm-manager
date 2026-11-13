@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy_utils import create_database, drop_database
 
 from webapp.integrations.cdb import get_field_mapping
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.namespace.setup import CDBImporter
 
 
@@ -122,6 +122,173 @@ def test_initial_plan_contains_only_counts_and_matches_empty_namespace(import_da
     with CDBImporter(str(path), url, 'PCM2026') as importer:
         assert importer.analyze()['fingerprint'] == analysis['fingerprint']
         importer.import_all_tables(expected_fingerprint=analysis['fingerprint'])
+
+
+@pytest.fixture
+def identity_datasets(tmp_path, monkeypatch):
+    import yaml
+    from webapp.seeds import race_identity, rider_identity
+    for module, kind in ((rider_identity, 'rider'), (race_identity, 'race')):
+        path = tmp_path / f'{kind}.yaml'
+        path.write_text(yaml.safe_dump({f'{kind}s': [
+            {f'{kind}_id': 42, f'{kind}_name': 'Reference label',
+             'firstcycling_id': 123, 'pcs_slug': f'seed-{kind}'},
+            {f'{kind}_id': 999, f'{kind}_name': 'Missing record',
+             'firstcycling_id': None, 'pcs_slug': 'missing'},
+            {f'{kind}_id': None, f'{kind}_name': 'External only',
+             'firstcycling_id': 888, 'pcs_slug': 'external-only'},
+        ]}), encoding='utf-8')
+        monkeypatch.setattr(module, 'DATA_PATH', path)
+
+
+@pytest.mark.parametrize('seed_initial', [False, True])
+def test_identity_seeds_are_opt_in_and_updates_do_not_reseed(
+    import_database, tmp_path, identity_datasets, seed_initial,
+):
+    engine, url = import_database
+    path = tmp_path / 'identities.sqlite'
+    _make_cdb(path, 42)
+    with sqlite3.connect(path) as source:
+        source.execute("UPDATE DYN_cyclist SET CONSTANT='from-cdb', value_f_current_ability=55")
+    original = path.read_bytes()
+    with CDBImporter(str(path), url, 'PCM2026', expected_database=engine.url.database) as importer:
+        importer.import_all_tables(seed_initial_identities=seed_initial)
+    with engine.begin() as conn:
+        for kind in ('rider', 'race'):
+            row = conn.execute(text(f'SELECT first_cycling_id, pcs_slug FROM {kind}')).one()
+            if seed_initial and kind == 'race':
+                assert row == (123, f'seed-{kind}')
+            elif kind == 'rider':
+                assert row == (55, 'from-cdb')
+            else:
+                assert row[0] is None
+                assert row[1] != f'seed-{kind}'
+            assert conn.scalar(text(f'SELECT count(*) FROM {kind}')) == 1
+            conn.execute(text(f"UPDATE {kind} SET first_cycling_id=456, pcs_slug='custom'"))
+    with CDBImporter(str(path), url, 'PCM2026') as importer:
+        importer.import_all_tables()
+        with pytest.raises(ValueError, match='new, empty namespace'):
+            importer.import_all_tables(seed_initial_identities=True)
+    with engine.connect() as conn:
+        for kind in ('rider', 'race'):
+            # Later uploads retain the existing CONSTANT overwrite policy.
+            expected_slug = 'from-cdb' if kind == 'rider' else 'custom'
+            assert conn.execute(text(f'SELECT first_cycling_id, pcs_slug FROM {kind}')).one() == (456, expected_slug)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize('fc_id,slug,expected', [
+    (55, 'from-cdb', (55, 'from-cdb')),
+    (None, 'from-cdb', (123, 'from-cdb')),
+    (55, None, (55, 'seed-rider')),
+    (None, None, (123, 'seed-rider')),
+    (0, '0', (123, 'seed-rider')),
+    (0, '   ', (123, 'seed-rider')),
+    (None, '', (123, 'seed-rider')),
+    (55, 'updated-rider', (55, 'updated-rider')),
+])
+def test_rider_identity_seeds_preserve_cdb_values_per_field(
+    import_database, tmp_path, identity_datasets, fc_id, slug, expected,
+):
+    engine, url = import_database
+    path = tmp_path / 'cdb-wins.sqlite'
+    _make_cdb(path, 42)
+    with sqlite3.connect(path) as source:
+        source.execute('UPDATE DYN_cyclist SET value_f_current_ability=?, CONSTANT=?', (fc_id, slug))
+    original = path.read_bytes()
+    with CDBImporter(str(path), url, 'PCM2026', expected_database=engine.url.database) as importer:
+        review = importer.analyze()
+        importer.import_all_tables(expected_fingerprint=review['fingerprint'], seed_initial_identities=True)
+    with engine.connect() as conn:
+        assert conn.execute(text('SELECT first_cycling_id, pcs_slug FROM rider WHERE id=42')).one() == expected
+    assert path.read_bytes() == original
+
+
+def test_null_rider_seeds_keep_generated_fallback(import_database, tmp_path, identity_datasets):
+    from webapp.seeds import rider_identity
+    engine, url = import_database
+    path = tmp_path / 'fallback.sqlite'
+    _make_cdb(path, 42)
+    rider_identity.DATA_PATH.write_text(
+        'riders: [{rider_id: 42, rider_name: Example, firstcycling_id: null, pcs_slug: null}]',
+        encoding='utf-8',
+    )
+    with CDBImporter(str(path), url, 'PCM2026') as importer:
+        importer.import_all_tables(seed_initial_identities=True)
+    with engine.connect() as conn:
+        assert conn.execute(text('SELECT first_cycling_id, pcs_slug FROM rider WHERE id=42')).one() == (
+            None, 'updated-rider',
+        )
+
+
+def test_identity_projection_failure_rolls_back_import(import_database, tmp_path, identity_datasets, monkeypatch):
+    from webapp.seeds import race_identity
+    engine, url = import_database
+    path = tmp_path / 'rollback.sqlite'
+    _make_cdb(path, 42)
+    def invalid_catalog(connection):
+        raise ValueError('Invalid FirstCycling ID')
+    monkeypatch.setattr(race_identity, 'seed', invalid_catalog)
+    with CDBImporter(str(path), url, 'PCM2026') as importer:
+        with pytest.raises(ValueError, match='Invalid FirstCycling ID'):
+            importer.import_all_tables(seed_initial_identities=True)
+    with engine.connect() as conn:
+        for kind in ('rider', 'race', 'team', 'country', 'stage'):
+            assert conn.scalar(text(f'SELECT count(*) FROM {kind}')) == 0
+
+
+def test_identity_seeds_reject_wrong_namespace(import_database, tmp_path, identity_datasets):
+    engine, url = import_database
+    path = tmp_path / 'wrong-namespace.sqlite'
+    _make_cdb(path, 42)
+    with pytest.raises(ValueError, match='selected namespace'):
+        with CDBImporter(str(path), url, 'PCM2026', expected_database='another_namespace') as importer:
+            importer.import_all_tables(seed_initial_identities=True)
+    with engine.connect() as conn:
+        assert conn.scalar(text('SELECT count(*) FROM rider')) == 0
+
+
+def test_identity_seeds_isolate_overlapping_ids(import_database, tmp_path, identity_datasets):
+    engine, url = import_database
+    other_url = engine.url.set(database=f'worlddb_test_{uuid4().hex}')
+    create_database(other_url)
+    other_engine = create_engine(other_url)
+    try:
+        NamespaceBase.metadata.create_all(other_engine)
+        with other_engine.begin() as conn:
+            for kind in ('rider', 'race'):
+                conn.execute(text(f"INSERT INTO {kind} (id, first_cycling_id, pcs_slug) "
+                                  "VALUES (42, 789, 'other-namespace')"))
+        path = tmp_path / 'isolated.sqlite'
+        _make_cdb(path, 42)
+        with CDBImporter(str(path), url, 'PCM2026', expected_database=engine.url.database) as importer:
+            importer.import_all_tables(seed_initial_identities=True)
+        with engine.connect() as conn, other_engine.connect() as other:
+            for kind in ('rider', 'race'):
+                query = text(f'SELECT first_cycling_id, pcs_slug FROM {kind} WHERE id=42')
+                assert conn.execute(query).one() == (123, f'seed-{kind}')
+                assert other.execute(query).one() == (789, 'other-namespace')
+    finally:
+        other_engine.dispose()
+        drop_database(other_url)
+
+
+def test_shipped_identity_datasets():
+    import yaml
+    from webapp.seeds import race_identity, rider_identity
+    for module, kind in ((rider_identity, 'rider'), (race_identity, 'race')):
+        with module.DATA_PATH.open(encoding='utf-8') as source:
+            entries = yaml.safe_load(source)[f'{kind}s']
+        assert isinstance(entries, list)
+        assert len(entries) == len({entry[f'{kind}_id'] for entry in entries})
+        for entry in entries:
+            assert set(entry) == {f'{kind}_id', f'{kind}_name', 'firstcycling_id', 'pcs_slug'}
+            assert type(entry[f'{kind}_id']) is int and entry[f'{kind}_id'] > 0
+            assert isinstance(entry[f'{kind}_name'], str)
+            fc_id = entry['firstcycling_id']
+            assert fc_id is None or (type(fc_id) is int and fc_id > 0)
+            slug = entry['pcs_slug']
+            assert slug is None or (isinstance(slug, str) and slug.strip() and len(slug) <= 500)
 
 
 @pytest.mark.parametrize('version', ['PCM2024', 'PCM2025', 'PCM2026'])

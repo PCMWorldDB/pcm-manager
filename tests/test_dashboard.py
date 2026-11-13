@@ -140,6 +140,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
     monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: [namespace])
     monkeypatch.setattr(routes, '_get_selected_namespace', lambda namespaces: namespace)
     monkeypatch.setattr(routes, '_load_namespace_stage_delta_status', lambda namespace, ids: {})
+    monkeypatch.setattr(routes, '_load_namespace_catalog_races', lambda namespace: [])
     build_result_state = routes._build_race_result_state
 
     def result_state(race):

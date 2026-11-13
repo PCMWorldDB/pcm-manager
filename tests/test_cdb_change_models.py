@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from webapp.extensions import db
 from webapp.models.ns.cdb import CDBChange, CDBChangeEvent, CDB_TABLES
-from webapp.models.ns.schema import NamespaceBase, Release, get_table_by_name
+from webapp.models.ns.base import NamespaceBase, Release, get_table_by_name
 
 
 @pytest.mark.parametrize('manual_sql', [False, True])

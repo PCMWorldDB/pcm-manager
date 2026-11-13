@@ -1,0 +1,29 @@
+{% from '_rider_review_stats.html' import stat_review_action with context %}
+{% from '_attribute_review_actions.html' import attribute_review_actions with context %}
+<div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+        <caption>Pending rider reviews</caption>
+        <thead><tr><th>Field</th><th>Before</th><th>Proposed</th><th>Source</th><th>Submitted On</th><th>Review</th></tr></thead>
+        <tbody>
+            {% for edit in pending_stats %}
+            <tr>
+                <td>{{ edit.stat }}</td><td>{{ edit.original_value }}</td><td>{{ edit.final_value }}</td>
+                <td>{% if edit.source.type != 'Individual' %}<small class="d-block text-muted">{{ edit.source.type }}</small>{% endif %}{% if edit.source.type == 'Individual' %}Individual{% elif edit.source.url %}<a href="{{ edit.source.url }}">{{ edit.source.label }}</a>{% else %}{{ edit.source.label }}{% endif %}</td>
+                <td>—</td><td>{{ stat_review_action(edit) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tbody id="rider-attribute-approvals" aria-label="Pending Attribute Approvals">
+            {% for change in pending_attribute_changes %}
+            <tr>
+                <td>{{ change.attribute_name }}</td>
+                <td>{{ change.before_value if change.before_value is not none else 'Empty' }}</td>
+                <td>{{ change.after_value if change.after_value is not none else 'Empty' }}</td>
+                <td>{{ 'Attribute list' if change.stat_list_id is not none else 'Individual' }}</td>
+                <td>{{ change.created_at.strftime('%Y-%m-%d %H:%M:%S') if change.created_at else '-' }} &middot; {{ change.submitted_by }}</td>
+                <td>{{ attribute_review_actions(change, true) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

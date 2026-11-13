@@ -1,8 +1,36 @@
 """CDB models share provisioning metadata under their unprefixed table names."""
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
 from webapp.integrations.cdb import get_cdb_mappings, get_cdb_table_name, get_field_mapping
-from webapp.models.ns.base import NamespaceBase
+from webapp.models.ns.base import (
+    NAMESPACE_TABLES, NamespaceBase, RiderList, RiderListItem, get_table_by_name, get_table_names,
+)
 from webapp.models.ns.cdb import CDB_TABLES, Country, Division, Race, RaceClass, Region, Rider, Stage, Team
-from webapp.models.ns.schema import NAMESPACE_TABLES, RiderList, RiderListItem, get_table_by_name, get_table_names
+
+
+@pytest.mark.parametrize('first_module', ['base', 'cdb', 'field_configuration'])
+def test_namespace_model_import_order(first_module):
+    script = f"""
+import importlib
+importlib.import_module('webapp.models.ns.{first_module}')
+from webapp.models.ns.base import NamespaceBase, NAMESPACE_TABLES, get_table_names
+names = get_table_names()
+assert names == [model.__tablename__ for model in NAMESPACE_TABLES]
+assert set(names) == set(NamespaceBase.metadata.tables)
+assert {{'rider', 'field_level_configuration', 'releases', 'stat_changes'}} <= set(names)
+assert all(model.metadata is NamespaceBase.metadata for model in NAMESPACE_TABLES)
+"""
+    subprocess.run(
+        [sys.executable, '-c', script],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_cdb_models_are_registered_with_workflow_metadata():

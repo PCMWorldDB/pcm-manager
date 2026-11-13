@@ -14,9 +14,9 @@ from webapp.extensions import db
 from webapp.integrations.cdb import attribute_changes, cdb_import, get_field_mapping
 from webapp.integrations.cdb import field_configuration as config
 from webapp.models import AuditLog, Namespace, Role, RolePermission, Resource, Action, User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.namespace.setup import NamespaceProvisioner
-from webapp.rbac_seed import sync_rbac_metadata
+from webapp.seeds.rbac import sync_rbac_metadata
 
 
 @pytest.fixture

@@ -1,0 +1,1498 @@
+# Converted from cdb_race_identity_map.json; names are reference labels.
+races:
+  - race_id: 1
+    race_name: "Petronas Le Tour de Langkawi"
+    firstcycling_id: 128
+    pcs_slug: "tour-de-langkawi"
+  - race_id: 2
+    race_name: "Kuurne - Brussel - Kuurne"
+    firstcycling_id: 84
+    pcs_slug: "kuurne-brussel-kuurne"
+  - race_id: 4
+    race_name: "Paris-Roubaix"
+    firstcycling_id: 8
+    pcs_slug: "paris-roubaix"
+  - race_id: 5
+    race_name: "Tour de Suisse"
+    firstcycling_id: 16
+    pcs_slug: "tour-de-suisse"
+  - race_id: 6
+    race_name: "Coppa Bernocchi - GP Banco BPM"
+    firstcycling_id: 196
+    pcs_slug: "coppa-bernocchi"
+  - race_id: 8
+    race_name: "Tour de l'Ain"
+    firstcycling_id: 63
+    pcs_slug: "tour-de-l-ain"
+  - race_id: 11
+    race_name: "Ronde van Vlaanderen"
+    firstcycling_id: 5
+    pcs_slug: "ronde-van-vlaanderen"
+  - race_id: 12
+    race_name: "Itzulia Basque Country"
+    firstcycling_id: 6
+    pcs_slug: "itzulia-basque-country"
+  - race_id: 13
+    race_name: "In Flanders Fields - From Middelkerke to Wevelgem"
+    firstcycling_id: 7
+    pcs_slug: "gent-wevelgem"
+  - race_id: 14
+    race_name: "Midden-Brabant Poort Omloop"
+    firstcycling_id: 2088
+    pcs_slug: "midden-brabant-poort-omloop"
+  - race_id: 15
+    race_name: "La Flèche Wallonne"
+    firstcycling_id: 10
+    pcs_slug: "la-fleche-wallone"
+  - race_id: 18
+    race_name: "La Vuelta Ciclista a España"
+    firstcycling_id: 23
+    pcs_slug: "vuelta-a-espana"
+  - race_id: 19
+    race_name: "Tour de Romandie"
+    firstcycling_id: 12
+    pcs_slug: "tour-de-romandie"
+  - race_id: 24
+    race_name: "Omloop Nieuwsblad"
+    firstcycling_id: 53
+    pcs_slug: "omloop-het-nieuwsblad"
+  - race_id: 25
+    race_name: "Tour de France"
+    firstcycling_id: 17
+    pcs_slug: "tour-de-france"
+  - race_id: 26
+    race_name: "ADAC Cyclassics"
+    firstcycling_id: 20
+    pcs_slug: "cyclassics-hamburg"
+  - race_id: 27
+    race_name: "Tour des Alpes-Maritimes"
+    firstcycling_id: 111
+    pcs_slug: "tour-des-alpes-maritimes"
+  - race_id: 28
+    race_name: "Bretagne Classic - CIC"
+    firstcycling_id: 22
+    pcs_slug: "bretagne-classic"
+  - race_id: 29
+    race_name: "Copenhagen Sprint"
+    firstcycling_id: 24060
+    pcs_slug: "copenhagen-sprint"
+  - race_id: 31
+    race_name: "Tour du Finistère Pays de Quimper"
+    firstcycling_id: 147
+    pcs_slug: "tour-du-finistere"
+  - race_id: 32
+    race_name: "Tro-Bro Léon"
+    firstcycling_id: 148
+    pcs_slug: "tro-bro-leon"
+  - race_id: 36
+    race_name: "Clásica de Ordizia - Ordiziako Klasikoa"
+    firstcycling_id: 207
+    pcs_slug: "prueba-villafranca"
+  - race_id: 38
+    race_name: "Vuelta a Burgos"
+    firstcycling_id: 192
+    pcs_slug: "vuelta-a-burgos"
+  - race_id: 39
+    race_name: "E3 Saxo Classic"
+    firstcycling_id: 47
+    pcs_slug: "e3-harelbeke"
+  - race_id: 40
+    race_name: "Tour of Oman"
+    firstcycling_id: 57
+    pcs_slug: "tour-of-oman"
+  - race_id: 43
+    race_name: "Strade Bianche"
+    firstcycling_id: 54
+    pcs_slug: "strade-bianche"
+  - race_id: 44
+    race_name: "Eschborn-Frankfurt"
+    firstcycling_id: 35
+    pcs_slug: "eschborn-frankfurt"
+  - race_id: 49
+    race_name: "Donostia San Sebastian Klasikoa"
+    firstcycling_id: 18
+    pcs_slug: "donostia-san-sebastian-klasikoa"
+  - race_id: 63
+    race_name: "Volta ao Algarve em Bicicleta"
+    firstcycling_id: 107
+    pcs_slug: "volta-ao-algarve"
+  - race_id: 66
+    race_name: "Ename Samyn Classic"
+    firstcycling_id: 116
+    pcs_slug: "gp-samyn"
+  - race_id: 68
+    race_name: "Settimana Internazionale Coppi e Bartali"
+    firstcycling_id: 114
+    pcs_slug: "settimana-internazionale-coppi-e-bartali"
+  - race_id: 69
+    race_name: "Région Pays de la Loire Tour"
+    firstcycling_id: 217
+    pcs_slug: "region-pays-de-la-loire"
+  - race_id: 72
+    race_name: "Grand Prix de Denain - Porte du Hainaut"
+    firstcycling_id: 146
+    pcs_slug: "gp-de-denain"
+  - race_id: 74
+    race_name: "Tour Auvergne - Rhône-Alpes"
+    firstcycling_id: 15
+    pcs_slug: "tour-auvergne-rhone-alpes"
+  - race_id: 77
+    race_name: "Milano-Sanremo"
+    firstcycling_id: 4
+    pcs_slug: "milano-sanremo"
+  - race_id: 78
+    race_name: "Clasica Castilla y Leon"
+    firstcycling_id: 85
+    pcs_slug: "vuelta-a-castilla-y-leon"
+  - race_id: 83
+    race_name: "ZLM Tour"
+    firstcycling_id: 213
+    pcs_slug: "zlm-tour"
+  - race_id: 84
+    race_name: "Eneco Tour"
+    firstcycling_id: 24921
+    pcs_slug: "tour-of-holland"
+  - race_id: 85
+    race_name: "Tour of Austria"
+    firstcycling_id: 38
+    pcs_slug: "tour-of-austria"
+  - race_id: 87
+    race_name: "Liège-Bastogne-Liège"
+    firstcycling_id: 11
+    pcs_slug: "liege-bastogne-liege"
+  - race_id: 91
+    race_name: "Volta Ciclista a Catalunya"
+    firstcycling_id: 14
+    pcs_slug: "volta-a-catalunya"
+  - race_id: 92
+    race_name: "Paris - Tours Elite"
+    firstcycling_id: 28
+    pcs_slug: "paris-tours"
+  - race_id: 93
+    race_name: "Renewi Tour"
+    firstcycling_id: 21
+    pcs_slug: "renewi-tour"
+  - race_id: 96
+    race_name: "Tour du Limousin-Périgord - Nouvelle Aquitaine"
+    firstcycling_id: 191
+    pcs_slug: "tour-du-limousin"
+  - race_id: 98
+    race_name: "Faun-Ardèche Classic"
+    firstcycling_id: 121
+    pcs_slug: "faun-ardeche-classic"
+  - race_id: 99
+    race_name: "Faun Drôme Classic"
+    firstcycling_id: 432
+    pcs_slug: "la-drome-classic"
+  - race_id: 100
+    race_name: "Grand Prix d'Isbergues - Pas de Calais"
+    firstcycling_id: 171
+    pcs_slug: "gp-d-isbergues"
+  - race_id: 102
+    race_name: "Circuit Franco-Belge"
+    firstcycling_id: 231
+    pcs_slug: "circuit-franco-belge"
+  - race_id: 104
+    race_name: "GP Gippingen"
+    firstcycling_id: 199
+    pcs_slug: "gp-du-canton-d-argovie"
+  - race_id: 105
+    race_name: "Classique Dunkerque / Grand prix des Hauts de France"
+    firstcycling_id: 24917
+    pcs_slug: "classique-dunkerque"
+  - race_id: 106
+    race_name: "4 Jours de Dunkerque / Grand Prix des Hauts de France"
+    firstcycling_id: 175
+    pcs_slug: "4-jours-de-dunkerque"
+  - race_id: 128
+    race_name: "Clasica de Almeria"
+    firstcycling_id: 129
+    pcs_slug: "clasica-de-almeria"
+  - race_id: 129
+    race_name: "Classic Var"
+    firstcycling_id: 21999
+    pcs_slug: "classic-var"
+  - race_id: 133
+    race_name: "Paris-Nice"
+    firstcycling_id: 2
+    pcs_slug: "paris-nice"
+  - race_id: 135
+    race_name: "Giro d'Italia"
+    firstcycling_id: 13
+    pcs_slug: "giro-d-italia"
+  - race_id: 139
+    race_name: "Tirreno-Adriatico"
+    firstcycling_id: 3
+    pcs_slug: "tirreno-adriatico"
+  - race_id: 145
+    race_name: "Scheldeprijs"
+    firstcycling_id: 56
+    pcs_slug: "scheldeprijs"
+  - race_id: 149
+    race_name: "Lotto Grand Prix de Wallonie"
+    firstcycling_id: 93
+    pcs_slug: "gp-de-wallonie"
+  - race_id: 153
+    race_name: "Tre Valli Varesine"
+    firstcycling_id: 190
+    pcs_slug: "tre-valli-varesine"
+  - race_id: 159
+    race_name: "Brussels Cycling Classic"
+    firstcycling_id: 64
+    pcs_slug: "brussels-cycling-classic"
+  - race_id: 160
+    race_name: "GP de Fourmies / La Voix du Nord"
+    firstcycling_id: 92
+    pcs_slug: "gp-de-fourmies"
+  - race_id: 163
+    race_name: "Milano - Torino"
+    firstcycling_id: 89
+    pcs_slug: "milano-torino"
+  - race_id: 165
+    race_name: "Gran Piemonte"
+    firstcycling_id: 61
+    pcs_slug: "gran-piemonte"
+  - race_id: 166
+    race_name: "PostNord Tour of Denmark"
+    firstcycling_id: 32
+    pcs_slug: "tour-of-denmark"
+  - race_id: 167
+    race_name: "Volta a Portugal em Bicicleta"
+    firstcycling_id: 197
+    pcs_slug: "volta-a-portugal"
+  - race_id: 169
+    race_name: "Giro dell'Emilia"
+    firstcycling_id: 9909
+    pcs_slug: "giro-dell-emilia"
+  - race_id: 172
+    race_name: "Il Lombardia"
+    firstcycling_id: 24
+    pcs_slug: "il-lombardia"
+  - race_id: 173
+    race_name: "Amstel Gold Race"
+    firstcycling_id: 9
+    pcs_slug: "amstel-gold-race"
+  - race_id: 179
+    race_name: "Giro della Toscana - Memorial Alfredo Martini"
+    firstcycling_id: 4025
+    pcs_slug: "giro-di-toscana"
+  - race_id: 183
+    race_name: "Tour of Slovenia"
+    firstcycling_id: 211
+    pcs_slug: "tour-of-slovenia"
+  - race_id: 184
+    race_name: "GP Kranj"
+    firstcycling_id: 209
+    pcs_slug: "gp-kranj"
+  - race_id: 186
+    race_name: "Tour of Magnificent Qinghai"
+    firstcycling_id: 127
+    pcs_slug: "tour-of-magnificent-qinghai"
+  - race_id: 189
+    race_name: "Sparkassen Münsterland Giro"
+    firstcycling_id: 158
+    pcs_slug: "munsterland-giro"
+  - race_id: 190
+    race_name: "Lloyds Tour of Britain"
+    firstcycling_id: 45
+    pcs_slug: "tour-of-britain"
+  - race_id: 191
+    race_name: "Chrono des Nations"
+    firstcycling_id: 9911
+    pcs_slug: "chrono-des-nations"
+  - race_id: 192
+    race_name: "Utsunomiya Japan Cup Road Race"
+    firstcycling_id: 95
+    pcs_slug: "japan-cup"
+  - race_id: 193
+    race_name: "Tour de Vendée"
+    firstcycling_id: 94
+    pcs_slug: "tour-de-vendee"
+  - race_id: 200
+    race_name: "Peace Race"
+    firstcycling_id: 14005
+    pcs_slug: "course-de-la-paix-u23"
+  - race_id: 202
+    race_name: "Ronde de l'Isard"
+    firstcycling_id: 241
+    pcs_slug: "ronde-de-l-isard"
+  - race_id: 203
+    race_name: "Liège-Bastogne-Liège U23"
+    firstcycling_id: 42
+    pcs_slug: "liege-bastogne-liege-u23"
+  - race_id: 204
+    race_name: "Tintrio - Omloop van het Waasland"
+    firstcycling_id: 286
+    pcs_slug: "omloop-van-het-waasland"
+  - race_id: 205
+    race_name: "Tour de l'Avenir"
+    firstcycling_id: 44
+    pcs_slug: "tour-de-l-avenir"
+  - race_id: 207
+    race_name: "Mur de Huy Classic"
+    firstcycling_id: 28080
+    pcs_slug: "mur-de-huy-classic"
+  - race_id: 208
+    race_name: "Grand Prix Alaiye"
+    firstcycling_id: 27612
+    pcs_slug: "grand-prix-alaiye1"
+  - race_id: 210
+    race_name: "Giro Ciclistico della Valle d'Aosta - Mont Blanc"
+    firstcycling_id: 229
+    pcs_slug: "giro-ciclistico-della-valle-d-aosta-mont-blanc"
+  - race_id: 214
+    race_name: "Flandrien 0.0 Classic"
+    firstcycling_id: 168
+    pcs_slug: "gp-impanis-van-petegem"
+  - race_id: 216
+    race_name: "Il Lombardia Under 23"
+    firstcycling_id: 390
+    pcs_slug: "piccolo-giro-di-lombardia"
+  - race_id: 219
+    race_name: "Philadelphia Cycling Class p/b AmeriGas"
+    firstcycling_id: 265
+    pcs_slug: "philadelphia-international-championship"
+  - race_id: 220
+    race_name: "Circuito de Getxo - Memorial Hermanos Otxoa"
+    firstcycling_id: 202
+    pcs_slug: "circuito-de-getxo"
+  - race_id: 236
+    race_name: "Lotto Circuit de Wallonie"
+    firstcycling_id: 537
+    pcs_slug: "circuit-de-wallonie"
+  - race_id: 237
+    race_name: "Alpes Isère Tour"
+    firstcycling_id: 315
+    pcs_slug: "rhone-alpes-isere-tour"
+  - race_id: 238
+    race_name: "Metec Olympia's Tour"
+    firstcycling_id: 340
+    pcs_slug: "olympias-tour"
+  - race_id: 239
+    race_name: "Giro Ciclistico della Città Metropolitana di Reggio Calabria"
+    firstcycling_id: 108
+    pcs_slug: "giro-di-reggio-calabria"
+  - race_id: 240
+    race_name: "Trofeo Tessile & Moda - Valdengo Oropa"
+    firstcycling_id: 27048
+    pcs_slug: "trofeo-baracchi"
+  - race_id: 242
+    race_name: "Boucles de la Mayenne - Crédit Mutuel"
+    firstcycling_id: 343
+    pcs_slug: "boucles-de-la-mayenne"
+  - race_id: 243
+    race_name: "Flèche Ardennaise"
+    firstcycling_id: 554
+    pcs_slug: "fleche-ardennaise"
+  - race_id: 244
+    race_name: "Czech Tour"
+    firstcycling_id: 15209
+    pcs_slug: "czech-tour"
+  - race_id: 252
+    race_name: "Tour de la Provence"
+    firstcycling_id: 4396
+    pcs_slug: "tour-cycliste-international-la-provence"
+  - race_id: 254
+    race_name: "Bredene Koksijde Classic"
+    firstcycling_id: 123
+    pcs_slug: "bredene-koksijde-classic"
+  - race_id: 255
+    race_name: "Classic Loire Atlantique"
+    firstcycling_id: 124
+    pcs_slug: "classic-loire-atlantique"
+  - race_id: 260
+    race_name: "Tour of Norway"
+    firstcycling_id: 71
+    pcs_slug: "tour-of-norway"
+  - race_id: 261
+    race_name: "Grand Prix du Morbihan"
+    firstcycling_id: 180
+    pcs_slug: "gp-de-plumelec"
+  - race_id: 262
+    race_name: "Boucles de l'Aulne - Châteaulin"
+    firstcycling_id: 182
+    pcs_slug: "boucles-de-l-aulne"
+  - race_id: 273
+    race_name: "Binche - Chimay - Binche / Mémorial Frank Vandenbroucke"
+    firstcycling_id: 159
+    pcs_slug: "memorial-frank-vandenbroucke"
+  - race_id: 279
+    race_name: "Paris - Troyes"
+    firstcycling_id: 285
+    pcs_slug: "paris-troyes"
+  - race_id: 280
+    race_name: "In Flanders Fields - In Ieper/Kattekoers"
+    firstcycling_id: 3999
+    pcs_slug: "kattekoers"
+  - race_id: 281
+    race_name: "Istrian Spring Tour"
+    firstcycling_id: 276
+    pcs_slug: "istrian-spring-tour"
+  - race_id: 282
+    race_name: "Gran Premio New York City"
+    firstcycling_id: 22007
+    pcs_slug: "gran-premio-new-york-city"
+  - race_id: 283
+    race_name: "Volta ao Alentejo"
+    firstcycling_id: 288
+    pcs_slug: "volta-ao-alentejo"
+  - race_id: 286
+    race_name: "Circuit des Ardennes"
+    firstcycling_id: 293
+    pcs_slug: "circuit-des-ardennes"
+  - race_id: 293
+    race_name: "Etoile de Bessèges - Tour du Gard"
+    firstcycling_id: 106
+    pcs_slug: "etoile-de-besseges"
+  - race_id: 294
+    race_name: "Santos Tour Down Under"
+    firstcycling_id: 9080
+    pcs_slug: "tour-down-under"
+  - race_id: 296
+    race_name: "Arctic Race of Norway"
+    firstcycling_id: 259
+    pcs_slug: "arctic-race-of-norway"
+  - race_id: 297
+    race_name: "UAE Tour"
+    firstcycling_id: 9800
+    pcs_slug: "uae-tour"
+  - race_id: 298
+    race_name: "AlUla Tour"
+    firstcycling_id: 868
+    pcs_slug: "alula-tour"
+  - race_id: 302
+    race_name: "Grand Prix Cycliste de Marseille La Marseillaise"
+    firstcycling_id: 97
+    pcs_slug: "gp-d-ouverture"
+  - race_id: 304
+    race_name: "Vuelta a Andalucía Ruta Ciclista del Sol"
+    firstcycling_id: 110
+    pcs_slug: "ruta-del-sol"
+  - race_id: 305
+    race_name: "Trofeo Laigueglia"
+    firstcycling_id: 112
+    pcs_slug: "trofeo-laigueglia"
+  - race_id: 309
+    race_name: "Volta Comunitat Valenciana"
+    firstcycling_id: 319
+    pcs_slug: "vuelta-a-la-comunidad-valenciana"
+  - race_id: 311
+    race_name: "Vuelta a la Región de Murcia “Costa Cálida”"
+    firstcycling_id: 74
+    pcs_slug: "vuelta-ciclista-a-la-region-de-murcia"
+  - race_id: 312
+    race_name: "Giro della Romagna"
+    firstcycling_id: 163
+    pcs_slug: "giro-di-romagna"
+  - race_id: 314
+    race_name: "Danilith Nokere Koerse"
+    firstcycling_id: 122
+    pcs_slug: "nokere-koerse-mj"
+  - race_id: 316
+    race_name: "Cholet Agglo Tour"
+    firstcycling_id: 125
+    pcs_slug: "cholet-pays-de-loire"
+  - race_id: 317
+    race_name: "Dwars door Vlaanderen - A travers la Flandre"
+    firstcycling_id: 75
+    pcs_slug: "dwars-door-vlaanderen"
+  - race_id: 318
+    race_name: "De Brabantse Pijl - La Flèche Brabançonne"
+    firstcycling_id: 77
+    pcs_slug: "brabantse-pijl"
+  - race_id: 319
+    race_name: "Ronde Van Brugge - Tour of Bruges"
+    firstcycling_id: 9047
+    pcs_slug: "classic-brugge-de-panne"
+  - race_id: 320
+    race_name: "Gran Premio Miguel Indurain"
+    firstcycling_id: 48
+    pcs_slug: "gran-premio-miguel-indurain"
+  - race_id: 322
+    race_name: "Grand Prix Cerami"
+    firstcycling_id: 142
+    pcs_slug: "gp-cerami"
+  - race_id: 323
+    race_name: "Andorra MoraBanc Clàssica"
+    firstcycling_id: 18948
+    pcs_slug: "andorra-morabanc-classica"
+  - race_id: 324
+    race_name: "Paris - Camembert"
+    firstcycling_id: 145
+    pcs_slug: "paris-camembert"
+  - race_id: 325
+    race_name: "Tour of the Alps"
+    firstcycling_id: 62
+    pcs_slug: "tour-of-the-alps"
+  - race_id: 328
+    race_name: "Giro dell'Appennino"
+    firstcycling_id: 149
+    pcs_slug: "giro-dell-appennino"
+  - race_id: 329
+    race_name: "Classique of Mauritius"
+    firstcycling_id: 24928
+    pcs_slug: "classique-of-mauritius"
+  - race_id: 334
+    race_name: "Baloise Belgium Tour"
+    firstcycling_id: 60
+    pcs_slug: "tour-of-belgium"
+  - race_id: 335
+    race_name: "Skoda Tour de Luxembourg"
+    firstcycling_id: 37
+    pcs_slug: "tour-de-luxembourg"
+  - race_id: 338
+    race_name: "Rund um Köln"
+    firstcycling_id: 144
+    pcs_slug: "rund-um-koln"
+  - race_id: 343
+    race_name: "Ethias-Tour de Wallonie"
+    firstcycling_id: 193
+    pcs_slug: "tour-de-wallonie"
+  - race_id: 344
+    race_name: "La Polynormande"
+    firstcycling_id: 203
+    pcs_slug: "la-poly-normande"
+  - race_id: 348
+    race_name: "Coppa Agostoni - Giro delle Brianze"
+    firstcycling_id: 262
+    pcs_slug: "coppa-agostoni"
+  - race_id: 359
+    race_name: "Tour de Pologne"
+    firstcycling_id: 19
+    pcs_slug: "tour-de-pologne"
+  - race_id: 365
+    race_name: "Gran Premio città di Peccioli - Coppa Sabatini"
+    firstcycling_id: 160
+    pcs_slug: "gp-citta-di-peccioli"
+  - race_id: 380
+    race_name: "Classic Velox Adélie de Vitré"
+    firstcycling_id: 134
+    pcs_slug: "route-adelie-de-vitre"
+  - race_id: 381
+    race_name: "La Route d'Occitanie - CIC"
+    firstcycling_id: 212
+    pcs_slug: "la-route-d-occitanie"
+  - race_id: 397
+    race_name: "HLC Omloop van de Braakman"
+    firstcycling_id: 5822
+    pcs_slug: "omloop-van-de-braakman2"
+  - race_id: 398
+    race_name: "Veenendaal-Veenendaal"
+    firstcycling_id: 9907
+    pcs_slug: "veenendaal-veenendaal"
+  - race_id: 399
+    race_name: "Salverda Bouw Ster van Zwolle"
+    firstcycling_id: 283
+    pcs_slug: "ster-van-zwolle"
+  - race_id: 402
+    race_name: "Surf Coast Classic"
+    firstcycling_id: 13182
+    pcs_slug: "race-torquay"
+  - race_id: 403
+    race_name: "Memorial Marco Pantani"
+    firstcycling_id: 68
+    pcs_slug: "memorial-marco-pantani"
+  - race_id: 404
+    race_name: "Trofeo Matteotti"
+    firstcycling_id: 205
+    pcs_slug: "trofeo-matteotti"
+  - race_id: 405
+    race_name: "Grand Prix Cycliste de Québec"
+    firstcycling_id: 59
+    pcs_slug: "gp-quebec"
+  - race_id: 406
+    race_name: "Grand Prix Cycliste de Montréal"
+    firstcycling_id: 58
+    pcs_slug: "gp-montreal"
+  - race_id: 407
+    race_name: "NXT Classic"
+    firstcycling_id: 126
+    pcs_slug: "volta-nxt-classic"
+  - race_id: 408
+    race_name: "Presidential Cycling Tour of Türkiye"
+    firstcycling_id: 152
+    pcs_slug: "tour-of-turkey"
+  - race_id: 410
+    race_name: "Le Tour de Bretagne Cycliste"
+    firstcycling_id: 82
+    pcs_slug: "le-tour-de-bretagne"
+  - race_id: 411
+    race_name: "Rutland-Melton CiCLE Classic"
+    firstcycling_id: 521
+    pcs_slug: "east-midlands-international-cicle-classic"
+  - race_id: 414
+    race_name: "Ringerike GP"
+    firstcycling_id: 49
+    pcs_slug: "ringerike-gp"
+  - race_id: 415
+    race_name: "Sundvolden GP"
+    firstcycling_id: 73
+    pcs_slug: "hadeland-gp"
+  - race_id: 416
+    race_name: "Clàssica Comunitat Valenciana - Gran Premi València"
+    firstcycling_id: 411
+    pcs_slug: "gp-de-valence"
+  - race_id: 419
+    race_name: "Course Cycliste de Solidarnosc et des Champions Olympiques"
+    firstcycling_id: 257
+    pcs_slug: "course-cycliste-de-solidarnosc"
+  - race_id: 420
+    race_name: "Trofeo Ses Salines"
+    firstcycling_id: 102
+    pcs_slug: "trofeo-ses-salines-felanitx"
+  - race_id: 421
+    race_name: "Trofeo Calvià"
+    firstcycling_id: 271
+    pcs_slug: "trofeo-calvia"
+  - race_id: 422
+    race_name: "Trofeo Andratx - Pollença"
+    firstcycling_id: 274
+    pcs_slug: "trofeo-pollenca-port-d-andratx"
+  - race_id: 423
+    race_name: "Trofeo Serra Tramuntana"
+    firstcycling_id: 100
+    pcs_slug: "deia-trophy"
+  - race_id: 424
+    race_name: "Trofeo Palma"
+    firstcycling_id: 83
+    pcs_slug: "trofeo-palma"
+  - race_id: 425
+    race_name: "Grand Prix Antalya"
+    firstcycling_id: 13421
+    pcs_slug: "gp-antalya"
+  - race_id: 426
+    race_name: "Gran Premio Castellón - Ruta de la Cerámica"
+    firstcycling_id: 22183
+    pcs_slug: "ruta-de-la-ceramica-gran-premio-castellon"
+  - race_id: 427
+    race_name: "GP Brda-Collio"
+    firstcycling_id: 22000
+    pcs_slug: "gp-brda-collio"
+  - race_id: 428
+    race_name: "Jamaica International Cycling Classic"
+    firstcycling_id: 22001
+    pcs_slug: "jamaica-international-cycling-classic"
+  - race_id: 429
+    race_name: "Int. Raffeisenbank Kirschblütenrennen"
+    firstcycling_id: 5924
+    pcs_slug: "kirschblutenrennen"
+  - race_id: 431
+    race_name: "Clàssica Terres de l'Ebre"
+    firstcycling_id: 22014
+    pcs_slug: "clasica-terres-de-l-ebre"
+  - race_id: 432
+    race_name: "Classica Camp de Morvedre"
+    firstcycling_id: 24922
+    pcs_slug: "classica-camp-de-morvedre"
+  - race_id: 437
+    race_name: "Gran Premio Primavera Ontur - Diputación de Albacete"
+    firstcycling_id: 1499
+    pcs_slug: "gran-premio-de-primavera-ontur-copa-de-espana-elit"
+  - race_id: 438
+    race_name: "Clásica de Pascua"
+    firstcycling_id: 1242
+    pcs_slug: "clasica-pascua"
+  - race_id: 444
+    race_name: "Veneto Classic"
+    firstcycling_id: 15208
+    pcs_slug: "veneto-classic"
+  - race_id: 445
+    race_name: "Giro del Veneto"
+    firstcycling_id: 8238
+    pcs_slug: "giro-del-veneto"
+  - race_id: 448
+    race_name: "Coppa della Pace - Trofeo Fratelli Anelli"
+    firstcycling_id: 550
+    pcs_slug: "coppa-della-pace-trofeo-flli-anelli"
+  - race_id: 449
+    race_name: "Puchar MON"
+    firstcycling_id: 4014
+    pcs_slug: "puchar-ministra-obrony-narodowej"
+  - race_id: 450
+    race_name: "Tour of Kosovo"
+    firstcycling_id: 9699
+    pcs_slug: "tour-of-kosovo"
+  - race_id: 451
+    race_name: "Tour de Kyushu"
+    firstcycling_id: 18945
+    pcs_slug: "tour-de-kyushu"
+  - race_id: 453
+    race_name: "Boucle de l'Artois"
+    firstcycling_id: 290
+    pcs_slug: "boucle-de-l-artois"
+  - race_id: 454
+    race_name: "Vuelta Ciclista Internacional a Costa Rica"
+    firstcycling_id: 453
+    pcs_slug: "vuelta-internacional-a-costa-rica"
+  - race_id: 455
+    race_name: "Chrono des Nations U23"
+    firstcycling_id: 463
+    pcs_slug: "chrono-des-nations-u23"
+  - race_id: 456
+    race_name: "Giro della Provincia di Biella - Torino-Biella"
+    firstcycling_id: 798
+    pcs_slug: "trofeo-torino-biella-giro-della-provincia-di-biell"
+  - race_id: 457
+    race_name: "Tour of Sharjah"
+    firstcycling_id: 460
+    pcs_slug: "tour-of-sharjah"
+  - race_id: 458
+    race_name: "Clásica Jaén"
+    firstcycling_id: 16519
+    pcs_slug: "clasica-jaen-paraiso-interior"
+  - race_id: 483
+    race_name: "Dhofar Classic"
+    firstcycling_id: 26819
+    pcs_slug: "dhofar-classic"
+  - race_id: 488
+    race_name: "Giro di Sardegna"
+    firstcycling_id: 109
+    pcs_slug: "giro-di-sardegna"
+  - race_id: 489
+    race_name: "Grand Prix International de la ville de Nogent-sur-Oise"
+    firstcycling_id: 287
+    pcs_slug: "gp-de-la-ville-de-nogent-sur-oise"
+  - race_id: 490
+    race_name: "Kryterium Asów - Beskid Race"
+    firstcycling_id: 22003
+    pcs_slug: "silesian-classic"
+  - race_id: 491
+    race_name: "Tour of Huangshan"
+    firstcycling_id: 20780
+    pcs_slug: "tour-of-huangshan"
+  - race_id: 493
+    race_name: "Kryterium Asów - Beskid Classic"
+    firstcycling_id: 23729
+    pcs_slug: "beskid-classic"
+  - race_id: 494
+    race_name: "Classic Grand Besançon Doubs"
+    firstcycling_id: 15075
+    pcs_slug: "classic-grand-besancon-doubs"
+  - race_id: 497
+    race_name: "O Gran Camiño -  The Historical Route"
+    firstcycling_id: 16526
+    pcs_slug: "gran-camino"
+  - race_id: 498
+    race_name: "Visit South Aegean GP"
+    firstcycling_id: 27602
+    pcs_slug: "visit-south-aegean-gp"
+  - race_id: 500
+    race_name: "Youngster Coast Challenge"
+    firstcycling_id: 10673
+    pcs_slug: "youngster-coast-challenge"
+  - race_id: 503
+    race_name: "Tour do Rio"
+    firstcycling_id: 431
+    pcs_slug: "tour-do-rio"
+  - race_id: 505
+    race_name: "Tour du Jura Cycliste"
+    firstcycling_id: 585
+    pcs_slug: "tour-du-jura-cycliste"
+  - race_id: 506
+    race_name: "Volta Ciclística de Santa Catarina"
+    firstcycling_id: 27049
+    pcs_slug: "tour-de-santa-catarina"
+  - race_id: 510
+    race_name: "Vuelta Ciclista a Venezuela"
+    firstcycling_id: 488
+    pcs_slug: "vuelta-ciclista-a-venezuela"
+  - race_id: 511
+    race_name: "Maryland Cycling Classic"
+    firstcycling_id: 13191
+    pcs_slug: "maryland-cycling-classic"
+  - race_id: 512
+    race_name: "GP Rik van Looy"
+    firstcycling_id: 9979
+    pcs_slug: "grote-prijs-rik-van-looy"
+  - race_id: 514
+    race_name: "Flanders Tomorrow Tour"
+    firstcycling_id: 15096
+    pcs_slug: "flanders-tomorrow-tour"
+  - race_id: 515
+    race_name: "Volta Ciclistica Internacional do Estado de São Paulo"
+    firstcycling_id: 26065
+    pcs_slug: "tour-do-brasil"
+  - race_id: 517
+    race_name: "Vuelta Ciclistica Internacional a Guatemala"
+    firstcycling_id: 595
+    pcs_slug: "vuelta-a-guatemala"
+  - race_id: 518
+    race_name: "Tour de Okinawa"
+    firstcycling_id: 457
+    pcs_slug: "tour-de-okinawa"
+  - race_id: 519
+    race_name: "Figueira Champions Classic"
+    firstcycling_id: 18947
+    pcs_slug: "figueira-champions-classic"
+  - race_id: 520
+    race_name: "GP Vorarlberg p/b RadHaus Rankweil"
+    firstcycling_id: 1047
+    pcs_slug: "gp-vorarlberg"
+  - race_id: 522
+    race_name: "Le Tour des 100 Communes"
+    firstcycling_id: 18953
+    pcs_slug: "le-tour-des-100-communes"
+  - race_id: 523
+    race_name: "West Bohemia Tour"
+    firstcycling_id: 22145
+    pcs_slug: "west-bohemia-tour"
+  - race_id: 525
+    race_name: "Muscat Classic"
+    firstcycling_id: 18946
+    pcs_slug: "muscat-classic"
+  - race_id: 526
+    race_name: "Grand Prix Apollon Temple"
+    firstcycling_id: 20015
+    pcs_slug: "grand-prix-apollon-temple-me"
+  - race_id: 527
+    race_name: "Tour of Lithuania"
+    firstcycling_id: 22010
+    pcs_slug: "tour-of-lithuania"
+  - race_id: 528
+    race_name: "Grand Prix de la Ville d'Alger"
+    firstcycling_id: 8772
+    pcs_slug: "gp-de-la-ville-d-alger"
+  - race_id: 529
+    race_name: "Tour du Maroc"
+    firstcycling_id: 291
+    pcs_slug: "tour-du-maroc"
+  - race_id: 530
+    race_name: "Tour du Mali"
+    firstcycling_id: 651
+    pcs_slug: "tour-du-mali"
+  - race_id: 533
+    race_name: "Tour of Changnyeong"
+    firstcycling_id: 20255
+    pcs_slug: null
+  - race_id: 534
+    race_name: "Tour de Gyeongnam"
+    firstcycling_id: 24919
+    pcs_slug: "tour-de-gyeongnam"
+  - race_id: 535
+    race_name: "Grand Prix Alanya"
+    firstcycling_id: 27614
+    pcs_slug: "alanya-cup"
+  - race_id: 536
+    race_name: "Grand Prix Syedra Ancient City"
+    firstcycling_id: 20016
+    pcs_slug: "syedra-ancient-city"
+  - race_id: 537
+    race_name: "Tour of Hellas"
+    firstcycling_id: 513
+    pcs_slug: "tour-of-hellas"
+  - race_id: 538
+    race_name: "Region on Dodecanese GP"
+    firstcycling_id: 27604
+    pcs_slug: "region-on-dodecanese-gp"
+  - race_id: 539
+    race_name: "Tour of Hainan"
+    firstcycling_id: 139
+    pcs_slug: "tour-of-hainan"
+  - race_id: 541
+    race_name: "Vuelta Bantrab"
+    firstcycling_id: 17278
+    pcs_slug: "vuelta-bantrab"
+  - race_id: 542
+    race_name: "Tour d'Algérie"
+    firstcycling_id: 465
+    pcs_slug: "tour-d-algerie-cycliste"
+  - race_id: 544
+    race_name: "Due Giorni Marchigiana - G.P. Santa Rita"
+    firstcycling_id: 734
+    pcs_slug: "due-giorni-marchigiana-gp-santa-rita"
+  - race_id: 545
+    race_name: "Due Giorni Marchigiana - Trofeo Città di Castelfidardo"
+    firstcycling_id: 408
+    pcs_slug: "trofeo-citta-di-castelfidardo"
+  - race_id: 550
+    race_name: "Grand Prix de Plouay"
+    firstcycling_id: 8328
+    pcs_slug: "grand-prix-de-plouay"
+  - race_id: 551
+    race_name: "Mapei Cadel Evans Great Ocean Road Race"
+    firstcycling_id: 1172
+    pcs_slug: "great-ocean-road-race"
+  - race_id: 552
+    race_name: "Altebra MuurClassic Geraardsbergen"
+    firstcycling_id: 28106
+    pcs_slug: "muurclassic-geraardsbergen"
+  - race_id: 554
+    race_name: "Tour of Salalah"
+    firstcycling_id: 16578
+    pcs_slug: "tour-of-salalah"
+  - race_id: 557
+    race_name: "Ronde van Limburg"
+    firstcycling_id: 437
+    pcs_slug: "ronde-van-limburg"
+  - race_id: 558
+    race_name: "Duracell Dwars door het Hageland"
+    firstcycling_id: 425
+    pcs_slug: "dwars-door-het-hageland"
+  - race_id: 560
+    race_name: "Oberösterreich Rundfahrt"
+    firstcycling_id: 552
+    pcs_slug: "oberosterreichrundfahrt"
+  - race_id: 562
+    race_name: "Grand Prix Pedalia"
+    firstcycling_id: 27613
+    pcs_slug: "grand-prix-pedalia"
+  - race_id: 563
+    race_name: "Tour of Malopolska"
+    firstcycling_id: 386
+    pcs_slug: "tour-of-malopolska"
+  - race_id: 565
+    race_name: "Kampioenschap van Vlaanderen"
+    firstcycling_id: 167
+    pcs_slug: "kampioenschap-van-vlaanderen1"
+  - race_id: 567
+    race_name: "Tour of Samsun"
+    firstcycling_id: 27609
+    pcs_slug: "tour-of-samsun"
+  - race_id: 568
+    race_name: "Gooikse pijl p/b Lotto"
+    firstcycling_id: 444
+    pcs_slug: "gooikse-pijl"
+  - race_id: 571
+    race_name: "GP Internacional Torres Vedras - Trofeu Joaquim Agostinho"
+    firstcycling_id: 398
+    pcs_slug: "gp-int-torres-vedras"
+  - race_id: 572
+    race_name: "Sibiu Cycling Tour"
+    firstcycling_id: 258
+    pcs_slug: "sibiu-cycling-tour"
+  - race_id: 573
+    race_name: "Giro d'Italia Next Gen"
+    firstcycling_id: 226
+    pcs_slug: "giro-ciclistico-d-italia"
+  - race_id: 574
+    race_name: "Tour of Poyang Lake"
+    firstcycling_id: 4048
+    pcs_slug: "tour-of-poyang-lake"
+  - race_id: 575
+    race_name: "Tour of Binzhou"
+    firstcycling_id: 16539
+    pcs_slug: "tour-of-binzhou"
+  - race_id: 576
+    race_name: "GP Industria & Artigianato"
+    firstcycling_id: 263
+    pcs_slug: "gp-industria-artigianato"
+  - race_id: 577
+    race_name: "Ronde van de Achterhoek"
+    firstcycling_id: 8310
+    pcs_slug: "ronde-van-de-achterhoek"
+  - race_id: 578
+    race_name: "Coppa Citta' di San Daniele"
+    firstcycling_id: 21437
+    pcs_slug: "coppa-citta-di-san-daniele2"
+  - race_id: 579
+    race_name: "Slag om Norg"
+    firstcycling_id: 3239
+    pcs_slug: "slag-om-norg"
+  - race_id: 580
+    race_name: "Lidl Deutschland Tour"
+    firstcycling_id: 36
+    pcs_slug: "deutschland-tour"
+  - race_id: 581
+    race_name: "POREČ Classic"
+    firstcycling_id: 278
+    pcs_slug: "porec-trophy"
+  - race_id: 582
+    race_name: "GP Slovenian Istria"
+    firstcycling_id: 508
+    pcs_slug: "gp-izola-butan-plin"
+  - race_id: 583
+    race_name: "G.P. Palio del Recioto"
+    firstcycling_id: 296
+    pcs_slug: "gp-palio-del-recioto"
+  - race_id: 584
+    race_name: "Tour de Maurice"
+    firstcycling_id: 5228
+    pcs_slug: "skoda-tour-de-maurice"
+  - race_id: 585
+    race_name: "CRO Race"
+    firstcycling_id: 773
+    pcs_slug: "tour-of-croatia"
+  - race_id: 586
+    race_name: "Vuelta Asturias Julio Alvarez Mendo"
+    firstcycling_id: 153
+    pcs_slug: "vuelta-asturias"
+  - race_id: 587
+    race_name: "Ixina Classic - GP Stad Halle"
+    firstcycling_id: 18958
+    pcs_slug: "grote-prijs-stad-halle"
+  - race_id: 588
+    race_name: "Tour of Guangxi"
+    firstcycling_id: 7591
+    pcs_slug: "tour-of-guangxi"
+  - race_id: 589
+    race_name: "Rhodes GP"
+    firstcycling_id: 7005
+    pcs_slug: "rhodes-gp"
+  - race_id: 590
+    race_name: "Tour of Rhodes p/b Rodos Palace"
+    firstcycling_id: 844
+    pcs_slug: "tour-of-rhodes"
+  - race_id: 591
+    race_name: "Grand Prix de la Ville de Lillers Souvenir Bruno Comini"
+    firstcycling_id: 284
+    pcs_slug: "gp-de-la-ville-de-lillers"
+  - race_id: 592
+    race_name: "Popolarissima"
+    firstcycling_id: 1194
+    pcs_slug: "popolarissima"
+  - race_id: 593
+    race_name: "Grote prijs Jean-Pierre Monseré"
+    firstcycling_id: 2729
+    pcs_slug: "grote-prijs-jean-pierre-monsere"
+  - race_id: 594
+    race_name: "Tour of Shanghai"
+    firstcycling_id: 24779
+    pcs_slug: "tour-of-shanghai"
+  - race_id: 595
+    race_name: "Il Giro d'Abruzzo"
+    firstcycling_id: 752
+    pcs_slug: "giro-d-abruzzo"
+  - race_id: 596
+    race_name: "La Roue Tourangelle Centre Val de Loire - Groupama P.V.L."
+    firstcycling_id: 260
+    pcs_slug: "la-roue-tourangelle"
+  - race_id: 597
+    race_name: "Annemasse Classic"
+    firstcycling_id: 1529
+    pcs_slug: "annemasse-classic2"
+  - race_id: 598
+    race_name: "Tour Poitou - Charentes en Nouvelle Aquitaine"
+    firstcycling_id: 187
+    pcs_slug: "tour-du-poitou-charentes-et-de-la-vienne"
+  - race_id: 599
+    race_name: "Mercan'Tour Classic Alpes-Maritimes"
+    firstcycling_id: 13188
+    pcs_slug: "mercan-tour-classic-alpes-maritimes"
+  - race_id: 601
+    race_name: "Trofeo Piva"
+    firstcycling_id: 297
+    pcs_slug: "trofeo-piva"
+  - race_id: 602
+    race_name: "Giro del Belvedere"
+    firstcycling_id: 295
+    pcs_slug: "circuito-belvedere"
+  - race_id: 603
+    race_name: "Yellow River Estuary (Dongying) Road Cycling Race"
+    firstcycling_id: 22519
+    pcs_slug: "yellow-river-estuary-road-cycling-race"
+  - race_id: 604
+    race_name: "Gran Premio della Liberazione"
+    firstcycling_id: 312
+    pcs_slug: "gp-liberazione"
+  - race_id: 605
+    race_name: "Tour of Mentougou"
+    firstcycling_id: 25513
+    pcs_slug: "tour-of-mentougou"
+  - race_id: 606
+    race_name: "BW Classic"
+    firstcycling_id: 20074
+    pcs_slug: "sd-worx-bw-classic"
+  - race_id: 607
+    race_name: "UMAG Classic"
+    firstcycling_id: 277
+    pcs_slug: "trofej-umag"
+  - race_id: 608
+    race_name: "Redlands Bicycle Classic"
+    firstcycling_id: 997
+    pcs_slug: null
+  - race_id: 609
+    race_name: "Dorpenomloop Rucphen"
+    firstcycling_id: 510
+    pcs_slug: "dorpenomloop-rucphen"
+  - race_id: 610
+    race_name: "Rad am Ring"
+    firstcycling_id: 5096
+    pcs_slug: null
+  - race_id: 612
+    race_name: "Tour of Istanbul"
+    firstcycling_id: 20781
+    pcs_slug: "tour-of-istanbul"
+  - race_id: 613
+    race_name: "Tour du Loir et Cher"
+    firstcycling_id: 294
+    pcs_slug: "tour-du-loir-et-cher"
+  - race_id: 614
+    race_name: "China Xizang Trans-Himalaya"
+    firstcycling_id: 18951
+    pcs_slug: "trans-himalaya-cycling-race"
+  - race_id: 616
+    race_name: "Velika Nagrada Novega Mesta"
+    firstcycling_id: 937
+    pcs_slug: "gp-adria-mobil"
+  - race_id: 617
+    race_name: "Tour of Estonia"
+    firstcycling_id: 250
+    pcs_slug: "tour-of-estonia"
+  - race_id: 618
+    race_name: "Paris-Roubaix Espoirs"
+    firstcycling_id: 41
+    pcs_slug: "paris-roubaix-u23"
+  - race_id: 619
+    race_name: "Paris - Tours Espoirs"
+    firstcycling_id: 238
+    pcs_slug: "paris-tours-espoirs"
+  - race_id: 622
+    race_name: "HIVE Slag om Woensdrecht"
+    firstcycling_id: 20757
+    pcs_slug: "slag-om-woensdrecht"
+  - race_id: 623
+    race_name: "Trofeo Città di Brescia - Mem. Rino Fiori"
+    firstcycling_id: 662
+    pcs_slug: "trofeo-citta-di-brescia"
+  - race_id: 624
+    race_name: "Tour of Antalya"
+    firstcycling_id: 8472
+    pcs_slug: "tour-of-antalya"
+  - race_id: 626
+    race_name: "Fyn Rundt - Tour of Funen"
+    firstcycling_id: 736
+    pcs_slug: "albani-classic-fyen-rundt"
+  - race_id: 627
+    race_name: "Gran Premio Sportivi di Poggiana - Trofeo Bonin Costruzioni"
+    firstcycling_id: 389
+    pcs_slug: "gp-di-poggiana"
+  - race_id: 628
+    race_name: "Paris-Chauny"
+    firstcycling_id: 949
+    pcs_slug: "paris-chauny-classique"
+  - race_id: 631
+    race_name: "Tour de Banyuwangi Ijen"
+    firstcycling_id: 455
+    pcs_slug: "banyuwangi-tour-de-ijen"
+  - race_id: 634
+    race_name: "Tour de Bintan"
+    firstcycling_id: 28115
+    pcs_slug: "tour-de-bintan"
+  - race_id: 635
+    race_name: "À travers les Hautes Fagnes"
+    firstcycling_id: 27797
+    pcs_slug: "a-travers-les-hautes-fagnes"
+  - race_id: 637
+    race_name: "Troféu Internacional da Arrábida"
+    firstcycling_id: 7004
+    pcs_slug: "trofeu-da-arrabida"
+  - race_id: 638
+    race_name: "Tour of Bostonliq"
+    firstcycling_id: 22005
+    pcs_slug: "tour-of-bostonliq"
+  - race_id: 639
+    race_name: "Grand Prix Fergana"
+    firstcycling_id: 27599
+    pcs_slug: "grand-prix-fergana"
+  - race_id: 640
+    race_name: "Grand Prix Criquielion"
+    firstcycling_id: 539
+    pcs_slug: "grand-prix-criquielion"
+  - race_id: 643
+    race_name: "Tour of Mersin"
+    firstcycling_id: 938
+    pcs_slug: "tour-of-mersin"
+  - race_id: 644
+    race_name: "Grand Prix de la ville de Cotonou"
+    firstcycling_id: 18424
+    pcs_slug: "grand-prix-de-cotonou"
+  - race_id: 647
+    race_name: "Oita Urban Classic Road Race"
+    firstcycling_id: 8523
+    pcs_slug: "oita-urban-classic"
+  - race_id: 654
+    race_name: "Ruota d'Oro - GP Festa del Perdono"
+    firstcycling_id: 409
+    pcs_slug: "ruota-d-oro-gp-festa-del-perdono"
+  - race_id: 655
+    race_name: "Tr. Città di S.Vendemiano - GP Industria & Commercio"
+    firstcycling_id: 318
+    pcs_slug: "gp-industria-e-commercio2"
+  - race_id: 657
+    race_name: "Tour of Romania"
+    firstcycling_id: 549
+    pcs_slug: "turul-romaniei"
+  - race_id: 658
+    race_name: "Grand Prix Chantal Biya"
+    firstcycling_id: 445
+    pcs_slug: "grand-prix-chantal-biya"
+  - race_id: 659
+    race_name: "Tour du Bénin"
+    firstcycling_id: 6156
+    pcs_slug: "tour-du-benin"
+  - race_id: 660
+    race_name: "Tour du Cameroun"
+    firstcycling_id: 473
+    pcs_slug: "tour-du-cameroun"
+  - race_id: 661
+    race_name: "Giro della Regione Friuli Venezia Giulia"
+    firstcycling_id: 538
+    pcs_slug: "giro-della-regione-friuli-venezia-giulia"
+  - race_id: 671
+    race_name: "Tour de la Mirabelle"
+    firstcycling_id: 7767
+    pcs_slug: "tour-de-la-mirabelle"
+  - race_id: 672
+    race_name: "Melbourne-Warrnambool"
+    firstcycling_id: 775
+    pcs_slug: "melbourne-to-warrnambool-classic"
+  - race_id: 674
+    race_name: "Ronde de l'Oise"
+    firstcycling_id: 345
+    pcs_slug: "ronde-de-l-oise"
+  - race_id: 680
+    race_name: "Tour of Szeklerland"
+    firstcycling_id: 566
+    pcs_slug: "tour-of-szeklerland"
+  - race_id: 685
+    race_name: "Erzgebirgsrundfahrt"
+    firstcycling_id: 6198
+    pcs_slug: null
+  - race_id: 688
+    race_name: "Lotto Famenne Ardenne Classic"
+    firstcycling_id: 7660
+    pcs_slug: "famenne-ardenne-classic"
+  - race_id: 694
+    race_name: "VDL Omloop der Kempen"
+    firstcycling_id: 544
+    pcs_slug: "omloop-der-kempen"
+  - race_id: 695
+    race_name: "Ronde van Overijssel"
+    firstcycling_id: 577
+    pcs_slug: "ronde-van-overijssel"
+  - race_id: 696
+    race_name: "Minamiuonuma Road Race"
+    firstcycling_id: 3928
+    pcs_slug: null
+  - race_id: 697
+    race_name: "Shinshiro Cycling Race"
+    firstcycling_id: 24687
+    pcs_slug: null
+  - race_id: 698
+    race_name: "Kreiz Breizh Elites"
+    firstcycling_id: 385
+    pcs_slug: "kreiz-breizh-elites"
+  - race_id: 699
+    race_name: "Okolo Slovenska / Tour de Slovaquie"
+    firstcycling_id: 380
+    pcs_slug: "okolo-slovenska"
+  - race_id: 747
+    race_name: "Heylen Vastgoed Heistse Pijl"
+    firstcycling_id: 349
+    pcs_slug: "heist-op-den-berg"
+  - race_id: 748
+    race_name: "Lotto Omloop van het Houtland"
+    firstcycling_id: 170
+    pcs_slug: "omloop-van-het-houtland-lichtervelde"
+  - race_id: 749
+    race_name: "Grand Prix d'Ongola"
+    firstcycling_id: 19038
+    pcs_slug: "grand-prix-d-ongola"
+  - race_id: 750
+    race_name: "Tour du Rwanda"
+    firstcycling_id: 450
+    pcs_slug: "tour-of-rwanda"
+  - race_id: 751
+    race_name: "Tour de Taiwan"
+    firstcycling_id: 132
+    pcs_slug: "tour-de-taiwan"
+  - race_id: 752
+    race_name: "Grande Prémio Internacional Beiras e Serra da Estrela"
+    firstcycling_id: 4008
+    pcs_slug: "gp-internacional-beiras-e-serra-da-estrela"
+  - race_id: 753
+    race_name: "Tour of Japan"
+    firstcycling_id: 341
+    pcs_slug: "tour-of-japan"
+  - race_id: 754
+    race_name: "Tour de Hongrie"
+    firstcycling_id: 765
+    pcs_slug: "tour-de-hongrie"
+  - race_id: 755
+    race_name: "Grande Prémio Anicolor"
+    firstcycling_id: 3277
+    pcs_slug: "gp-anicolor"
+  - race_id: 758
+    race_name: "Tour of Taihu Lake"
+    firstcycling_id: 242
+    pcs_slug: "tour-of-taihu-lake"
+  - race_id: 760
+    race_name: "Arno Wallaard Memorial"
+    firstcycling_id: 428
+    pcs_slug: "arno-wallaard-memorial"
+  - race_id: 761
+    race_name: "Memorial Andrzeja Trochanowskiego"
+    firstcycling_id: 531
+    pcs_slug: "memorial-andrzeja-trochanowskiego"
+  - race_id: 762
+    race_name: "Circuito del Porto - Trofeo Arvedi"
+    firstcycling_id: 535
+    pcs_slug: "circuito-del-porto-trofeo-arvedi"
+  - race_id: 764
+    race_name: "Visegrad 4 Kerekparverseny"
+    firstcycling_id: 582
+    pcs_slug: "visegrad-4-bicycle-race-gp-hungary"
+  - race_id: 765
+    race_name: "Visegrad 4 Bicycle Race - GP Slovakia"
+    firstcycling_id: 581
+    pcs_slug: "visegrad-4-bicycle-race-gp-slovakia"
+  - race_id: 766
+    race_name: "Visegrad 4 Bicycle Race Grand Prix Poland"
+    firstcycling_id: 579
+    pcs_slug: "visegrad-4-bicycle-race-gp-polski-via-odra"
+  - race_id: 767
+    race_name: "Visegrad 4 Bicycle Race - GP Czech Republic"
+    firstcycling_id: 580
+    pcs_slug: "gp-czech-republic"
+  - race_id: 771
+    race_name: "Trofeo Alcide Degasperi"
+    firstcycling_id: 546
+    pcs_slug: "trofeo-alcide-degasperi"
+  - race_id: 772
+    race_name: "GP Jornal de Noticias"
+    firstcycling_id: 894
+    pcs_slug: null
+  - race_id: 773
+    race_name: "Grande Premio O Jogo"
+    firstcycling_id: 11611
+    pcs_slug: null
+  - race_id: 774
+    race_name: "Tour Gateh d'Tranung - Jelajah Terengganu"
+    firstcycling_id: 22030
+    pcs_slug: null
+  - race_id: 775
+    race_name: "Slezanski Mnich - Bruki & Szutry"
+    firstcycling_id: 9376
+    pcs_slug: "slezanski-mnich1"
+  - race_id: 777
+    race_name: "GP Capodarco Comunita Di Capodarco"
+    firstcycling_id: 568
+    pcs_slug: "gp-capodarco"
+  - race_id: 778
+    race_name: "Clássica Viana do Castelo"
+    firstcycling_id: 15907
+    pcs_slug: null
+  - race_id: 779
+    race_name: "Vuelta al Tolima"
+    firstcycling_id: 26115
+    pcs_slug: "vuelta-al-tolima"
+  - race_id: 781
+    race_name: "Giro del Medio Brenta"
+    firstcycling_id: 559
+    pcs_slug: "giro-del-medio-brenta"
+  - race_id: 782
+    race_name: "Grand Prix de la Ville de Pérenchies"
+    firstcycling_id: 583
+    pcs_slug: "grand-prix-de-la-ville-de-perenchies"
+  - race_id: 789
+    race_name: "Vuelta al Táchira en Bicicleta"
+    firstcycling_id: 454
+    pcs_slug: "vuelta-al-tachira"
+  - race_id: 792
+    race_name: "Tour of the Gila"
+    firstcycling_id: 239
+    pcs_slug: "tour-of-the-gila"
+  - race_id: 793
+    race_name: "Clásico RCN"
+    firstcycling_id: 375
+    pcs_slug: null
+  - race_id: 794
+    race_name: "Cycling Tour of Albania"
+    firstcycling_id: 7657
+    pcs_slug: "tour-of-albania"
+  - race_id: 795
+    race_name: "Flèche du Sud"
+    firstcycling_id: 67
+    pcs_slug: "fleche-du-sud"
+  - race_id: 796
+    race_name: "Tour de Kumano"
+    firstcycling_id: 502
+    pcs_slug: "tour-de-kumano"
+  - race_id: 797
+    race_name: "Tour de Beauce"
+    firstcycling_id: 235
+    pcs_slug: "tour-de-beauce"
+  - race_id: 798
+    race_name: "Dookola Mazowsza"
+    firstcycling_id: 563
+    pcs_slug: "dookola-mazowsza"
+  - race_id: 799
+    race_name: "Tour de Serbie"
+    firstcycling_id: 344
+    pcs_slug: "tour-de-serbie"
+  - race_id: 800
+    race_name: "Gran Premio Industrie del Marmo"
+    firstcycling_id: 313
+    pcs_slug: "gp-industrie-del-marmo"
+  - race_id: 802
+    race_name: "Le Tour de Filipinas"
+    firstcycling_id: 506
+    pcs_slug: "le-tour-de-filipinas"
+  - race_id: 854
+    race_name: "Tour Cycliste International de la Guadeloupe"
+    firstcycling_id: 586
+    pcs_slug: "tour-cycliste-international-de-la-guadeloupe"
+  - race_id: 855
+    race_name: "Baltic Chain Tour"
+    firstcycling_id: 391
+    pcs_slug: "baltic-chain-tour"
+  - race_id: 856
+    race_name: "Chengdu Tianfu Greenway"
+    firstcycling_id: 20616
+    pcs_slug: null
+  - race_id: 857
+    race_name: "Guangzhou International Road Cycling Race"
+    firstcycling_id: 3830
+    pcs_slug: "guangzhou-international-road-cycling-race"
+  - race_id: 859
+    race_name: "Belgrade Banjaluka"
+    firstcycling_id: 9018
+    pcs_slug: "banja-luka-belgrade-i"
+  - race_id: 860
+    race_name: "Tour of Bosnia and Herzegovina"
+    firstcycling_id: 27606
+    pcs_slug: "tour-of-bosnia-and-herzegovina"
+  - race_id: 863
+    race_name: "Grand Prix Herning"
+    firstcycling_id: 72
+    pcs_slug: "gp-herning"
+  - race_id: 875
+    race_name: "Grand Prix de la Somme Conseil Départemental 80"
+    firstcycling_id: 166
+    pcs_slug: "gp-de-la-somme"
+  - race_id: 878
+    race_name: "The Princess Maha Chakri Sirindhorn's Cup Tour of Thailand"
+    firstcycling_id: 507
+    pcs_slug: "tour-of-thailand"
+  - race_id: 881
+    race_name: "Tour of Bulgaria"
+    firstcycling_id: 955
+    pcs_slug: "tour-of-bulgaria"
+  - race_id: 882
+    race_name: "Okolo jižních Čech / Tour of South Bohemia"
+    firstcycling_id: 401
+    pcs_slug: "okolo-jiznich-cech"
+  - race_id: 884
+    race_name: "Vuelta a Colombia"
+    firstcycling_id: 86
+    pcs_slug: "vuelta-pilsen-a-colombia"
+  - race_id: 885
+    race_name: "Vuelta Ciclística al Ecuador"
+    firstcycling_id: 672
+    pcs_slug: "vuelta-a-ecuador"
+  - race_id: 891
+    race_name: "Pune Grand Tour"
+    firstcycling_id: 27605
+    pcs_slug: "pune-grand-tour"
+  - race_id: 892
+    race_name: "Sun Hung Kai Properties Hong Kong Cyclothon"
+    firstcycling_id: 8499
+    pcs_slug: "sun-hung-kai-properties-hong-kong-challenge"
+  - race_id: 893
+    race_name: "Tour de Korea"
+    firstcycling_id: 255
+    pcs_slug: "tour-de-korea"
+  - race_id: 960
+    race_name: "Antwerp Port Epic / Sels Trophy"
+    firstcycling_id: 10204
+    pcs_slug: "antwerp-port-epic"

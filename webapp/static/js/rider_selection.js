@@ -1,7 +1,8 @@
 (() => {
     const form = document.getElementById('rider-selection-form');
     const boxes = [...form.querySelectorAll('.rider-select')];
-    const buttons = form.querySelectorAll('button');
+    const buttons = [...document.querySelectorAll('#rider-selection-form button, button[form="rider-selection-form"]')]
+        .filter((button) => button.form === form);
     const clear = document.getElementById('clear-rider-selection');
     const count = document.getElementById('rider-selection-count');
     const payload = form.elements.rider_ids;

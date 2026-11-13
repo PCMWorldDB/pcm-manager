@@ -11,7 +11,7 @@ from sqlalchemy_utils import create_database, drop_database
 from webapp.extensions import db
 from webapp.integrations.cdb import editability
 from webapp.models import User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 

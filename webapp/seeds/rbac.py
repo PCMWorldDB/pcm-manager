@@ -61,6 +61,11 @@ ROLES = [
 
 RESOURCES = [
     {
+        'name': 'identities',
+        'description': 'Review and correct shared FirstCycling and PCS identity pairs',
+        'supported_actions': ['read', 'update'],
+    },
+    {
         'name': 'cdb_attributes',
         'description': 'Propose and review non-stat CDB attribute changes',
         'supported_actions': ['read', 'update', 'approve'],
@@ -157,6 +162,7 @@ ACTIONS = [
 
 ROLE_PERMISSIONS = {
     'admin': {
+        'identities': ['read', 'update'],
         'cdb_attributes': ['read', 'update', 'approve'],
         'audit_logs': ['read'],
         'activity-monitor': ['read'],

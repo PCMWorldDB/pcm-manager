@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
 from webapp.models import AuditLog, FirstCyclingRace, RaceResultMap
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 

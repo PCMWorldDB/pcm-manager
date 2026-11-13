@@ -133,7 +133,7 @@ PCS_LOCK = 812734902
 
 
 def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
-                  origin='manual', priority=None, provider=None, sync_type=None, scheduled_job_id=None,
+                  origin='manual', priority=None, provider=None, workflow_type=None, scheduled_job_id=None,
                   draft=False):
     """Validate all requests before inserting; caller commits before dispatch."""
     if origin not in {'manual', 'scheduled'}:
@@ -149,7 +149,7 @@ def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=N
     group = ExternalCallTaskGroup(status='draft' if draft else 'queued', origin=origin, priority=priority,
                                   namespace_id=namespace_id, executed_by_id=executed_by_id,
                                   message=message, requested_count=len(requests),
-                                  provider=provider, sync_type=sync_type, scheduled_job_id=scheduled_job_id)
+                                  provider=provider, workflow_type=workflow_type, scheduled_job_id=scheduled_job_id)
     db.session.add(group)
     db.session.flush()
     _add_group_requests(group, requests)
@@ -157,6 +157,7 @@ def enqueue_group(requests, *, namespace_id=None, executed_by_id=None, message=N
 
 
 def _add_group_requests(group, requests):
+    group.sync_types = sorted({f"{request['provider']}.{request['endpoint']}" for request in requests})
     for request in requests:
         is_pcs = request['provider'] == 'pcs'
         # Keep the validated slug available to workers that predate URL-backed tasks.
@@ -222,8 +223,10 @@ def _refresh_group(group_id):
     group.failed_count = states.count('failed')
     if group.status in {'draft', 'cancelled'}:
         return
-    if any(state in {'queued', 'retry_wait', 'running'} for state in states):
+    if 'running' in states:
         group.status = 'running'
+    elif any(state in {'queued', 'retry_wait'} for state in states):
+        group.status = 'queued'
     elif group.failed_count:
         group.status = 'partial' if group.synced_count else 'failed'
     else:
@@ -381,7 +384,7 @@ def submit_external_group(group_id):
 
 
 def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=None, message=None,
-                                 provider=None, sync_type=None):
+                                 provider=None, workflow_type=None):
     """Create/commit high-priority work and notify Celery immediately.
 
     Call from an authorized application action after resolving selected riders.
@@ -390,7 +393,7 @@ def create_manual_external_group(requests, *, namespace_id=None, executed_by_id=
     """
     group = enqueue_group(requests, namespace_id=namespace_id,
                           executed_by_id=executed_by_id, message=message, origin='manual',
-                          provider=provider, sync_type=sync_type)
+                          provider=provider, workflow_type=workflow_type)
     group_id = group.id
     db.session.commit()
     try:
@@ -723,7 +726,7 @@ def run_rider_check_now(job, namespace_id, executed_by_id, settings, job_id=None
         status, message = 'success', 'No eligible riders matched these settings.'
     if not group_ids:
         db.session.add(ExternalCallTaskGroup(
-            namespace_id=namespace_id, executed_by_id=executed_by_id, sync_type=job,
+            namespace_id=namespace_id, executed_by_id=executed_by_id, workflow_type=job,
             scheduled_job_id=job_id, status=status, requested_count=0, message=f'{RIDER_CHECK_JOBS[job]}: {message}',
         ))
     db.session.commit()
@@ -750,7 +753,7 @@ def _queue_due_scheduled_job(job_id, now):
         start = today - timedelta(days=settings['start_days_ago'])
         end = today - timedelta(days=settings['end_days_ago'])
         db.session.add(ExternalCallTaskGroup(
-            scheduled_job_id=job.id, provider='firstcycling', sync_type=SYNC_TYPE_RACE_RESULTS,
+            scheduled_job_id=job.id, provider='firstcycling', workflow_type=SYNC_TYPE_RACE_RESULTS,
             origin='scheduled', priority='low', season_year=settings['year'], gender=settings['gender'],
             status='queued', message=f'Queued scheduled race results sync ({start} to {end})',
             details_json=json.dumps({'start_date': start.isoformat(), 'end_date': end.isoformat()}),
@@ -761,7 +764,7 @@ def _queue_due_scheduled_job(job_id, now):
                 enqueue_rider_check(job.job_type, now, enqueue_group, job.namespace, job.params, job_id=job.id)
         except ValueError as exc:
             db.session.add(ExternalCallTaskGroup(
-                scheduled_job_id=job.id, namespace_id=job.namespace_id, sync_type=job.job_type,
+                scheduled_job_id=job.id, namespace_id=job.namespace_id, workflow_type=job.job_type,
                 origin='scheduled', priority='low', status='failed', failed_count=1, message=str(exc),
             ))
     job.last_run_on = today
@@ -790,7 +793,7 @@ def poll_external_sync_schedules():
                     logger.exception('Could not enqueue scheduled job %s', job_id)
 
             groups = ExternalCallTaskGroup.query.filter_by(
-                provider='firstcycling', sync_type=SYNC_TYPE_RACE_RESULTS, origin='scheduled', namespace_id=None,
+                provider='firstcycling', workflow_type=SYNC_TYPE_RACE_RESULTS, origin='scheduled', namespace_id=None,
             )
             groups.filter_by(status='running').update({
                 'status': 'failed', 'message': 'Worker interrupted during the scheduled race results sync.',
@@ -804,7 +807,7 @@ def poll_external_sync_schedules():
                 try:
                     dates = json.loads(group.details_json)
                     run_external_sync_task.run(
-                        log_id=group.id, sync_type=group.sync_type, season_year=group.season_year,
+                        log_id=group.id, sync_type=group.workflow_type, season_year=group.season_year,
                         gender=group.gender, start_date=dates['start_date'], end_date=dates['end_date'],
                     )
                 except Exception:

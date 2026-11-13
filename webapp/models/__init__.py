@@ -23,12 +23,15 @@ from webapp.models.main.firstcycling import (
 )
 from webapp.models.main.race_result_map import RaceResultMap
 from webapp.models.main.pcs import PcsRaceResult, PcsRider, PcsRiderResult
+from webapp.models.main.identity import RaceIdentity, RiderIdentity
 
 
 # Association tables and relationship configuration are handled in CLI after db.create_all()
 
 
 __all__ = [
+    'RaceIdentity',
+    'RiderIdentity',
     'MainDBModel',
     'NamespaceModel',
     'TimestampMixin',

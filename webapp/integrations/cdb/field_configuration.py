@@ -29,7 +29,9 @@ def configurable_columns(object_name):
 
 def can_edit_column(object_name, name):
     column = configurable_columns(object_name).get(name)
-    return (object_name in ('rider', 'team') and column is not None and not column.primary_key
+    return ((object_name in ('rider', 'team') or
+             (object_name == 'race' and name in ('first_cycling_id', 'pcs_slug')))
+            and column is not None and not column.primary_key
             and isinstance(column.type, (Boolean, Float, Integer, String)))
 
 

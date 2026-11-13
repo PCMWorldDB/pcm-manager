@@ -6,7 +6,7 @@ import os
 import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy_utils import database_exists, create_database
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase, get_table_names
 from webapp.integrations.cdb import cdb_import
 from webapp.integrations.cdb.field_configuration import seed_fields
 from webapp.config import get_setting
@@ -24,7 +24,7 @@ class NamespaceProvisioner:
         if not self.admin_db_url:
             raise ValueError('Admin database URL not provided')
     
-    def create_namespace_database(self, database_name):
+    def create_namespace_database(self, database_name, *, require_new=False):
         """Create a new namespace database
         
         Args:
@@ -38,21 +38,22 @@ class NamespaceProvisioner:
         # Connect to admin database to create new database
         admin_engine = create_engine(self.admin_db_url)
         
-        # Check if database already exists
-        with admin_engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            result = conn.execute(text(
-                "SELECT 1 FROM pg_database WHERE datname = :dbname"
-            ), {"dbname": full_db_name})
-            
-            if result.fetchone():
-                return full_db_name
-            
-            # Create the database
-            safe_db_name = full_db_name.replace('"', '""')
-            conn.execute(text(f'CREATE DATABASE "{safe_db_name}"'))
-        
-        admin_engine.dispose()
+        try:
+            with admin_engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                result = conn.execute(text(
+                    "SELECT 1 FROM pg_database WHERE datname = :dbname"
+                ), {"dbname": full_db_name})
+
+                if result.fetchone():
+                    if require_new:
+                        raise ValueError('The destination database already exists.')
+                    return full_db_name
+
+                safe_db_name = full_db_name.replace('"', '""')
+                conn.execute(text(f'CREATE DATABASE "{safe_db_name}"'))
+        finally:
+            admin_engine.dispose()
         return full_db_name
     
     def create_namespace_schema(self, connection_string, pcm_version='PCM2025'):
@@ -65,6 +66,7 @@ class NamespaceProvisioner:
         
         try:
             with engine.begin() as conn:
+                get_table_names()  # Register all namespace models before creating tables.
                 NamespaceBase.metadata.create_all(conn)
                 seed_fields(conn, pcm_version)
         finally:

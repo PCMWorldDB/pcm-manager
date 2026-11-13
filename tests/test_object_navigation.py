@@ -3,6 +3,7 @@ from uuid import uuid4
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 
 from webapp.extensions import db
 from webapp.models import Role, User
@@ -48,7 +49,23 @@ def test_object_pages_and_permissions(app, client, monkeypatch, allowed):
                     assert b'Select a namespace to review' in response.data
                 if path.endswith('/change-log'):
                     assert b'Select a namespace to view change history.' in response.data
-                    assert b'class="nav-link active" href="' + path.encode() + b'">Change Log</a>' in response.data
+                    if path == '/riders/change-log':
+                        markup = BeautifulSoup(response.data, 'html.parser')
+                        sections = markup.select_one('nav[aria-label="Riders sections"]')
+                        assert sections.select_one('.active').get_text(strip=True) == 'Review'
+                        assert sections.find('a', string='Change Log') is None
+                        areas = markup.select_one('nav[aria-label="Rider review areas"]')
+                        assert areas.select_one('.active').get_text(strip=True) == 'Change Log'
+                        assert areas.select_one('.active')['aria-current'] == 'page'
+                    else:
+                        assert b'class="nav-link active" href="' + path.encode() + b'">Change Log</a>' in response.data
+                if path in ['/riders/review', '/riders/change-log']:
+                    markup = BeautifulSoup(response.data, 'html.parser')
+                    areas = markup.select_one('nav[aria-label="Rider review areas"]')
+                    assert [link.get_text(strip=True) for link in areas.select('a')] == [
+                        'Stats', 'Identity', 'Activity', 'Attributes', 'Change Log',
+                    ]
+                    assert areas.find('a', string='Change Log')['href'] == '/riders/change-log'
         if allowed:
             assert b'<h2 class="mb-1">Teams</h2>' in client.get('/teams').data
             assert b'<h2 class="mb-1">Riders</h2>' in client.get('/riders').data
