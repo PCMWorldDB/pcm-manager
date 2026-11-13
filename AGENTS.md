@@ -8,7 +8,8 @@ data; `main` holds shared application data, while `namespace` databases are isol
 - `webapp/__init__.py`, `webapp/config.py`, `webapp/extensions.py`: app setup.
 - `webapp/web/`: routes/forms; `webapp/templates/`, `webapp/static/`: UI.
 - `webapp/models/main/`, `webapp/models/ns/`: shared and namespace models.
-- `webapp/rbac_seed.py`, `webapp/security.py`: permissions and authentication helpers.
+- `webapp/seeds/`: application and namespace seed datasets and loaders.
+- `webapp/seeds/rbac.py`, `webapp/security.py`: permissions and authentication helpers.
 - `webapp/namespace/`: namespace provisioning and setup.
 - `webapp/integrations/cdb/`: CDB import/export and active `cdb_mappings.yaml`.
 - `webapp/integrations/`, `webapp/worker.py`: integrations and async work.
@@ -62,7 +63,7 @@ changes, verify referenced paths/commands and run `git diff --check`.
 - Enforce authentication and resource/action permissions on the server for every
   protected route, including direct requests. UI visibility is not authorization.
 - Preserve edit/approval separation: `stat_editor` cannot approve stats;
-  `stat_editor_approver` handles approval. Follow `rbac_seed.py` for release,
+  `stat_editor_approver` handles approval. Follow `seeds/rbac.py` for release,
   administration, and other permissions; do not infer access from role names.
 - Resolve reads and writes to the selected Namespace's database. Reject mismatched
   connections; never fall back to `main` or another Namespace. IDs can overlap

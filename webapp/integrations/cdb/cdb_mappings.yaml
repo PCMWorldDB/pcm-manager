@@ -1,18 +1,27 @@
 PCM_VERSION_MAPPINGS:
   PCM2026:
-    cyclist: v1
+    race: v1
+    stage: v1
+    race_class: v1
+    rider: v1
     team: v1
     country: v1
     division: v1
     region: v1
   PCM2025:
-    cyclist: v1
+    race: v1
+    stage: v1
+    race_class: v1
+    rider: v1
     team: v1
     country: v1
     division: v1
     region: v1
   PCM2024:
-    cyclist: v1
+    race: v1
+    stage: v1
+    race_class: v1
+    rider: v1
     team: v1
     country: v1
     division: v1
@@ -20,80 +29,139 @@ PCM_VERSION_MAPPINGS:
 
 CDB_TABLE_MAPPINGS:
   v1:
-    cyclist:
+    race_class:
+      cdb_table_name: STA_race_class
+      mappings:
+        id: {source: IDrace_class, policy: identity, nulls: reject}
+        name_string_id: {source: gene_strID_class, policy: preserve, nulls: allow}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        max_teams: {source: gene_i_max_team, policy: preserve, nulls: allow}
+        min_riders: {source: gene_i_min_riders, policy: preserve, nulls: allow}
+        max_riders: {source: gene_i_max_riders, policy: preserve, nulls: allow}
+        sort_order: {source: gene_i_sort_order, policy: preserve, nulls: allow}
+        procyclist_pass: {source: value_i_procyclist_pass, policy: preserve, nulls: allow}
+        calendar_color: {source: gene_sz_calendar_color, policy: preserve, nulls: allow}
+        division_id: {source: fkIDdivision, policy: preserve, nulls: allow}
+        cost: {source: value_i_cost, policy: preserve, nulls: allow}
+        material: {source: gene_sz_material, policy: preserve, nulls: allow}
+        is_stage_race: {source: gene_b_is_stagerace, policy: preserve, nulls: allow}
+    race:
+      cdb_table_name: STA_race
+      mappings:
+        id: {source: IDrace, policy: identity, nulls: reject}
+        race_name: {source: gene_sz_race_name, policy: preserve, nulls: allow}
+        abbreviation: {source: gene_sz_abbreviation, policy: preserve, nulls: allow}
+        filename: {source: gene_sz_filename, policy: preserve, nulls: allow}
+        country_id: {source: fkIDcountry, policy: preserve, nulls: allow}
+        race_class_id: {source: fkIDrace_class, policy: preserve, nulls: allow}
+        first_stage_id: {source: fkIDfirst_stage, policy: preserve, nulls: allow}
+        last_stage_id: {source: fkIDlast_stage, policy: preserve, nulls: allow}
+        popularity: {source: gene_f_popularity, policy: preserve, nulls: allow}
+        number_stages: {source: gene_i_number_stages, policy: preserve, nulls: allow}
+        organizer_email: {source: gene_sz_mailOrganisateur, policy: preserve, nulls: allow}
+        team_ids: {source: gene_ilist_fkIDteam, policy: preserve, nulls: allow}
+        objective_info: {source: gene_ilist_objectif_info, policy: preserve, nulls: allow}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        classification_xml: {source: gene_sz_classification_xml, policy: preserve, nulls: allow}
+        organizer_coefficient: {source: gene_f_organisateur_coeff, policy: preserve, nulls: allow}
+        race_type_id: {source: fkIDrace_type, policy: preserve, nulls: allow}
+        is_national_tour: {source: gene_b_national_tour, policy: preserve, nulls: allow}
+        iconic_region_id: {source: fkID_iconic_region, policy: preserve, nulls: allow}
+        comfort: {source: gene_i_comfort, policy: preserve, nulls: allow}
+        is_aso: {source: gene_b_aso, policy: preserve, nulls: allow}
+        current_variant: {source: gene_sz_currentvariant, policy: preserve, nulls: allow}
+        prize: {source: value_i_prime, policy: preserve, nulls: allow}
+        is_selected: {source: gene_b_selected, policy: preserve, nulls: allow}
+        leap_year_offset: {source: value_i_offsetLeapYear, policy: preserve, nulls: allow}
+    stage:
+      cdb_table_name: STA_stage
+      mappings:
+        id: {source: IDstage, policy: identity, nulls: reject}
+        race_id: {source: fkIDrace, policy: preserve, nulls: allow}
+        day: {source: gene_i_day, policy: preserve, nulls: allow}
+        month: {source: gene_i_month, policy: preserve, nulls: allow}
+        computed_date: {source: gene_i_computed_date, policy: preserve, nulls: allow}
+        stage_number: {source: gene_i_stage_number, policy: preserve, nulls: allow}
+        is_selected: {source: gene_b_selected, policy: preserve, nulls: allow}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        variant: {source: gene_sz_variant, policy: preserve, nulls: allow}
+    rider:
       cdb_table_name: DYN_cyclist
-      fields:
-        id: IDcyclist
-        first_cycling_id: value_f_current_ability
-        team_id: fkIDteam
-        region_id: fkIDregion
-        first_name: gene_sz_firstname
-        last_name: gene_sz_lastname
-        first_last_name: gene_sz_firstlastname
-        birth_date: gene_i_birthdate
-        weight_kg: gene_i_weight
-        size_cm: gene_i_size
-        stat_fla: charac_i_plain
-        stat_mo: charac_i_mountain
-        stat_mm: charac_i_medium_mountain
-        stat_dh: charac_i_downhilling
-        stat_hil: charac_i_hill
-        stat_tt: charac_i_timetrial
-        stat_prl: charac_i_prologue
-        stat_spr: charac_i_sprint
-        stat_acc: charac_i_acceleration
-        stat_end: charac_i_endurance
-        stat_res: charac_i_resistance
-        stat_rec: charac_i_recuperation
-        stat_cob: charac_i_cobble
-        stat_att: charac_i_baroudeur
+      mappings:
+        id: {source: IDcyclist, policy: identity, nulls: reject}
+        first_cycling_id: {source: value_f_current_ability, policy: preserve, nulls: allow}
+        pcs_slug: {source: CONSTANT, policy: overwrite, nulls: ignore, required: false}
+        team_id: {source: fkIDteam, policy: preserve, nulls: allow}
+        region_id: {source: fkIDregion, policy: preserve, nulls: allow}
+        first_name: {source: gene_sz_firstname, policy: preserve, nulls: allow}
+        last_name: {source: gene_sz_lastname, policy: preserve, nulls: allow}
+        first_last_name: {source: gene_sz_firstlastname, policy: preserve, nulls: allow}
+        birth_date: {source: gene_i_birthdate, policy: preserve, nulls: allow}
+        weight_kg: {source: gene_i_weight, policy: preserve, nulls: allow}
+        size_cm: {source: gene_i_size, policy: preserve, nulls: allow}
+        stat_fla: {source: charac_i_plain, policy: preserve, nulls: allow}
+        stat_mo: {source: charac_i_mountain, policy: preserve, nulls: allow}
+        stat_mm: {source: charac_i_medium_mountain, policy: preserve, nulls: allow}
+        stat_dh: {source: charac_i_downhilling, policy: preserve, nulls: allow}
+        stat_hil: {source: charac_i_hill, policy: preserve, nulls: allow}
+        stat_tt: {source: charac_i_timetrial, policy: preserve, nulls: allow}
+        stat_prl: {source: charac_i_prologue, policy: preserve, nulls: allow}
+        stat_spr: {source: charac_i_sprint, policy: preserve, nulls: allow}
+        stat_acc: {source: charac_i_acceleration, policy: preserve, nulls: allow}
+        stat_end: {source: charac_i_endurance, policy: preserve, nulls: allow}
+        stat_res: {source: charac_i_resistance, policy: preserve, nulls: allow}
+        stat_rec: {source: charac_i_recuperation, policy: preserve, nulls: allow}
+        stat_cob: {source: charac_i_cobble, policy: preserve, nulls: allow}
+        stat_att: {source: charac_i_baroudeur, policy: preserve, nulls: allow}
+      export_fields:
+        pcs_profile_slug: CONSTANT
     team:
       cdb_table_name: DYN_team
-      fields:
-        id: IDteam
-        short_name: gene_sz_shortname
-        team_name: gene_sz_name
-        abbreviation: abbreviation
-        country_id: fkIDcountry
-        division_id: fkIDdivision
-        email_suffix: gene_sz_suffixeMail
-        manager_general: gene_sz_manager_general
-        current_evaluation: value_f_current_evaluation
-        budget: value_i_budget
-        primary_color: gene_sz_color
-        secondary_color: gene_sz_secondary_color
+      mappings:
+        id: {source: IDteam, policy: identity, nulls: reject}
+        short_name: {source: gene_sz_shortname, policy: preserve, nulls: allow}
+        team_name: {source: gene_sz_name, policy: preserve, nulls: allow}
+        abbreviation: {source: abbreviation, policy: preserve, nulls: allow}
+        country_id: {source: fkIDcountry, policy: preserve, nulls: allow}
+        division_id: {source: fkIDdivision, policy: preserve, nulls: allow}
+        email_suffix: {source: gene_sz_suffixeMail, policy: preserve, nulls: allow}
+        manager_general: {source: gene_sz_manager_general, policy: preserve, nulls: allow}
+        current_evaluation: {source: value_f_current_evaluation, policy: preserve, nulls: allow}
+        budget: {source: value_i_budget, policy: preserve, nulls: allow}
+        primary_color: {source: gene_sz_color, policy: preserve, nulls: allow}
+        secondary_color: {source: gene_sz_secondary_color, policy: preserve, nulls: allow}
     country:
       cdb_table_name: STA_country
-      fields:
-        id: IDcountry
-        constant: CONSTANT
-        continent_id: fkIDcontinent
-        territory_id: fkIDterritory
-        flag_name: gene_sz_flag
-        name_string_id: gene_strID_country_name
-        calendar: gene_i_calendar
-        cyclist_world_championship_count: gene_i_num_cyclist_WC
-        cyclist_world_championship_itt_count: gene_i_num_cyclist_WC_ITT
-        cycling_popularity: value_i_cycling_popularity
-        training_structure: value_i_training_structure
+      mappings:
+        id: {source: IDcountry, policy: identity, nulls: reject}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        continent_id: {source: fkIDcontinent, policy: preserve, nulls: allow}
+        territory_id: {source: fkIDterritory, policy: preserve, nulls: allow}
+        flag_name: {source: gene_sz_flag, policy: preserve, nulls: allow}
+        name_string_id: {source: gene_strID_country_name, policy: preserve, nulls: allow}
+        calendar: {source: gene_i_calendar, policy: preserve, nulls: allow}
+        cyclist_world_championship_count: {source: gene_i_num_cyclist_WC, policy: preserve, nulls: allow}
+        cyclist_world_championship_itt_count: {source: gene_i_num_cyclist_WC_ITT, policy: preserve, nulls: allow}
+        cycling_popularity: {source: value_i_cycling_popularity, policy: preserve, nulls: allow}
+        training_structure: {source: value_i_training_structure, policy: preserve, nulls: allow}
     division:
       cdb_table_name: STA_division
-      fields:
-        id: IDdivision
-        name_string_id: gene_strID_name
-        constant: CONSTANT
-        race_wanted_ratio: value_f_ratioRaceWanted
+      mappings:
+        id: {source: IDdivision, policy: identity, nulls: reject}
+        name_string_id: {source: gene_strID_name, policy: preserve, nulls: allow}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        race_wanted_ratio: {source: value_f_ratioRaceWanted, policy: preserve, nulls: allow}
     region:
       cdb_table_name: STA_region
-      fields:
-        id: IDregion
-        constant: CONSTANT
-        name_string_id: gene_strID_name
-        country_id: fkIDcountry
-        climat_id: fkIDclimat
-        is_europe: gene_b_europa
-        weight: gene_i_weight
-        position_x: gene_i_pos_x
-        position_y: gene_i_pos_y
-        training_structure: value_i_training_structure
-        cycling_popularity: value_i_cycling_popularity
+      mappings:
+        id: {source: IDregion, policy: identity, nulls: reject}
+        constant: {source: CONSTANT, policy: preserve, nulls: allow}
+        name_string_id: {source: gene_strID_name, policy: preserve, nulls: allow}
+        country_id: {source: fkIDcountry, policy: preserve, nulls: allow}
+        climat_id: {source: fkIDclimat, policy: preserve, nulls: allow}
+        is_europe: {source: gene_b_europa, policy: preserve, nulls: allow}
+        weight: {source: gene_i_weight, policy: preserve, nulls: allow}
+        position_x: {source: gene_i_pos_x, policy: preserve, nulls: allow}
+        position_y: {source: gene_i_pos_y, policy: preserve, nulls: allow}
+        training_structure: {source: value_i_training_structure, policy: preserve, nulls: allow}
+        cycling_popularity: {source: value_i_cycling_popularity, policy: preserve, nulls: allow}

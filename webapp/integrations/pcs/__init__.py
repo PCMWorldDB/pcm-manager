@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 from webapp.extensions import db
 from webapp.models.main.race_result_map import RaceResultMap
 from webapp.models.main.pcs import PcsRaceResult
+from webapp.integrations.pcs.slug import rider_profile_url, valid_rider_slug
 
 logger = logging.getLogger('pcs')
 
@@ -36,6 +37,7 @@ class PcsRaceResultRow:
     age: int | None = None
     points: int | None = None
     time: str | None = None
+    result_position: str | None = None
 
 
 @dataclass
@@ -80,13 +82,19 @@ def _normalize_pcs_rider_path(value):
     if not uri:
         return None
 
-    absolute_uri = urljoin('https://www.procyclingstats.com', uri)
-    parsed = urlparse(absolute_uri)
-    path = parsed.path.rstrip('/')
-    if not path:
+    try:
+        parsed = urlparse(urljoin('https://www.procyclingstats.com', uri))
+        if parsed.scheme not in ('http', 'https') or parsed.hostname not in (
+            'www.procyclingstats.com', 'procyclingstats.com',
+        ):
+            return None
+    except ValueError:
         return None
-
-    return path.lower()
+    parts = parsed.path.strip('/').lower().split('/')
+    if (len(parts) not in (2, 3) or parts[0] != 'rider'
+            or (len(parts) == 3 and parts[2] != 'road') or not valid_rider_slug(parts[1])):
+        return None
+    return urlparse(rider_profile_url(parts[1])).path
 
 
 def _title_from_slug(value):
@@ -256,13 +264,13 @@ def parse_pcs_race_results_html(html, source_url=None):
     for row in table.select('tbody tr'):
         cells = _row_cells_by_header(row, headers)
         position_cell = _cell_by_code(row, 'rnk') or cells.get('rnk')
-        rider_cell = _cell_by_code(row, 'ridername') or cells.get('ridername')
-        team_cell = _cell_by_code(row, 'teamnamelink') or cells.get('teamnamelink')
+        rider_cell = _cell_by_code(row, 'ridername') or cells.get('ridername') or cells.get('rider')
+        team_cell = _cell_by_code(row, 'teamnamelink') or cells.get('teamnamelink') or cells.get('riderteam')
         age_cell = _cell_by_code(row, 'age') or cells.get('age')
         points_cell = _cell_by_code(row, 'pnt') or cells.get('pnt')
-        time_cell = _cell_by_code(row, 'time') or cells.get('time')
+        time_cell = _cell_by_code(row, 'time') or cells.get('time') or cells.get('timelag')
 
-        rider_link = rider_cell.select_one('a[href*="/rider/"]') if rider_cell else None
+        rider_link = rider_cell.select_one('a[href*="rider/"]') if rider_cell else None
         rider_name = _extract_rider_name(rider_cell, rider_link)
         if not rider_name:
             continue
@@ -274,6 +282,7 @@ def parse_pcs_race_results_html(html, source_url=None):
 
         parsed_rows.append(PcsRaceResultRow(
             position=_parse_int(position_text),
+            result_position=position_text,
             rider_name=rider_name,
             pcs_rider_path=pcs_rider_path,
             team_name=_clean_text(team_link.get_text(' ', strip=True)) if team_link else None,
@@ -302,20 +311,29 @@ class PcsRiderMatcher:
 
         engine = create_engine(self.namespace.build_connection_string())
         try:
+            if (engine.url.database != self.namespace.database_name
+                    or engine.url.database == db.engines['main'].url.database):
+                raise ValueError('PCS rider database does not match the selected namespace.')
             with engine.connect() as conn:
+                if conn.scalar(text('SELECT current_database()')) != self.namespace.database_name:
+                    raise ValueError('PCS rider database does not match the selected namespace.')
                 rows = conn.execute(text("""
                     SELECT
                         id,
                         first_name,
                         last_name,
                         first_last_name,
-                        pcs_rider_path
-                    FROM cdb_cyclist
+                        pcs_slug
+                    FROM rider
+                    WHERE NOT is_deleted
                 """)).mappings().all()
         finally:
             engine.dispose()
 
         self._cyclists = [dict(row) for row in rows]
+        for cyclist in self._cyclists:
+            slug = (cyclist.get('pcs_slug') or '').strip()
+            cyclist['pcs_rider_url'] = rider_profile_url(slug) if valid_rider_slug(slug) else None
         return self._cyclists
 
     def match(self, rider_name, pcs_rider_path=None):
@@ -327,7 +345,7 @@ class PcsRiderMatcher:
         cyclists = self._load_cyclists()
         if normalized_path:
             for cyclist in cyclists:
-                cyclist_path = _normalize_pcs_rider_path(cyclist.get('pcs_rider_path'))
+                cyclist_path = _normalize_pcs_rider_path(cyclist.get('pcs_rider_url'))
                 if cyclist_path and cyclist_path == normalized_path:
                     return PcsRiderMatch(
                         cyclist_id=cyclist['id'],
@@ -379,6 +397,23 @@ class PcsClient:
         self.db_session = db_session or db.session
         self.matcher = PcsRiderMatcher(namespace, fuzzy_threshold=fuzzy_threshold)
 
+    def sync_race_from_html(self, *, html, source_url, year=None, commit=True):
+        """Upsert an edition and its race/rider results from one fetched page."""
+        from webapp.integrations.pcs.race import parse_race_url, parse_pcs_race_html, store_race
+
+        year = year if year is not None else self.namespace.database_year
+        params = dict(parse_race_url(source_url, year), gender=self.namespace.gender)
+        payload = parse_pcs_race_html(html, source_url=source_url, year=year, gender=params['gender'])
+        try:
+            summary = store_race(params, payload, namespace_id=self.namespace.id, db_session=self.db_session)
+            if commit:
+                self.db_session.commit()
+            return summary
+        except Exception:
+            if commit:
+                self.db_session.rollback()
+            raise
+
     def sync_race_results_from_html(
         self,
         *,
@@ -402,10 +437,11 @@ class PcsClient:
 
             row_payload = asdict(parsed_row)
             row_payload.pop('pcs_rider_path', None)
+            row_payload.pop('result_position', None)
             pcs_result = PcsRaceResult(
                 namespace_id=self.namespace.id,
                 race_name=parsed.race_name,
-                matched_cdb_cyclist_id=match.cyclist_id,
+                matched_rider_id=match.cyclist_id,
                 match_method=match.method,
                 match_score=match.score,
                 last_synced_at=datetime.utcnow(),

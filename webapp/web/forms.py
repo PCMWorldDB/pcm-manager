@@ -2,7 +2,7 @@
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
 from wtforms import StringField, PasswordField, BooleanField, SubmitField, TextAreaField, SelectField, IntegerField
-from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError
+from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError, NumberRange
 from webapp.security import PasswordPolicy
 
 
@@ -69,9 +69,23 @@ class AdminPasswordResetForm(FlaskForm):
     submit = SubmitField('Create Reset Link')
 
 
+class NamespaceMetadataForm(FlaskForm):
+    """Current season and game version; neither changes namespace identity."""
+    database_year = IntegerField('Database Year', validators=[DataRequired(), NumberRange(min=1900, max=9999)])
+    pcm_version = SelectField('PCM Version', validators=[DataRequired()])
+    submit = SubmitField('Save current season and version')
+
+
 class NamespaceForm(FlaskForm):
     """Namespace creation/edit form"""
-    name = StringField('Name', validators=[
+    creation_method = SelectField('Creation method', choices=[
+        ('import', 'Import CDB'), ('clone', 'Clone Existing Namespace')], default='import')
+    source_namespace = SelectField('Source namespace', choices=[], validators=[Optional()])
+    copy_rider_stats = BooleanField('Rider Stats', default=True)
+    copy_rider_attributes = BooleanField('Rider Attributes', default=True)
+    copy_teams = BooleanField('Teams', default=True)
+    copy_races = BooleanField('Races', default=True)
+    name = StringField('Name', default='WDBO', validators=[
         DataRequired(message='Name is required'),
         Length(min=3, max=100, message='Name must be between 3 and 100 characters')
     ])
@@ -84,9 +98,9 @@ class NamespaceForm(FlaskForm):
     pcm_version = SelectField('PCM Version', validators=[Optional()], default='PCM2025')
     database_year = IntegerField('Database Year', validators=[Optional()], default=2026)
     gender = SelectField('Gender', choices=[('Men', 'Men'), ('Women', 'Women')], default='Men')
-    cdb_file = FileField('CDB Database File (SQLite)', validators=[
+    cdb_file = FileField('CDB Database File', validators=[
         Optional(),
-        FileAllowed(['sqlite'], 'Only .sqlite files are allowed')
+        FileAllowed(['cdb', 'sqlite'], 'Only .cdb or .sqlite files are allowed')
     ])
     status = SelectField('Status', choices=[
         ('active', 'Active'),

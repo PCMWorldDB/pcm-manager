@@ -1,5 +1,6 @@
 """Individual edits save drafts and explicitly submit the current edits for approval."""
 import json
+from bs4 import BeautifulSoup
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
 from webapp.models import AuditLog, Role, User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 
@@ -48,7 +49,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         engine = create_engine(db.engine.url, connect_args={'options': f'-csearch_path={schema}'})
         NamespaceBase.metadata.create_all(engine)
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO cdb_cyclist (id,first_name,last_name,stat_mo) VALUES (1,'Test','Rider',70)"))
+            conn.execute(text("INSERT INTO rider (id,first_name,last_name,stat_mo) VALUES (1,'Test','Rider',70)"))
         user = User(username=uuid4().hex, is_active=True)
         user.roles.append(Role.query.filter_by(name=role).one())
         db.session.add(user)
@@ -60,6 +61,7 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
     monkeypatch.setattr(routes, 'create_engine', lambda url: engine if url == 'selected-list-namespace' else pytest.fail('Wrong namespace'))
     monkeypatch.setattr(routes, '_load_namespace_roster_rider', lambda ns, rider_id: SimpleNamespace(
         cyclist_id=rider_id, team_id=None, size_cm=None, weight_kg=None, name='Test Rider',
+        is_deleted=False, pcs_slug=None, first_name='Test', last_name='Rider',
     ))
     monkeypatch.setattr(routes, '_enrich_namespace_roster_rider_with_firstcycling', lambda rider: rider)
     monkeypatch.setattr(routes, '_namespace_roster_stats_from_rider', lambda rider: {'mo': 70})
@@ -73,7 +75,21 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
         assert b'Edit Rider Stats' in profile.data
         assert b'stat_input_controls.js' in profile.data
         assert b'>Edit Stats<' not in profile.data
-        assert b'No stat edits found for this rider.' in profile.data
+        assert b'No reviews needed' in profile.data
+        markup = BeautifulSoup(profile.data, 'html.parser')
+        editor = markup.select_one('#rider-stats-editor')
+        assert editor.has_attr('hidden')
+        stats_card = editor.find_parent('section', id='rider-stats')
+        assert stats_card is not None
+        assert stats_card.select_one('#rider-stats-title').get_text(strip=True) == 'Stats'
+        assert markup.select_one('#rider-stats-view').find_parent('section') is stats_card
+        assert markup.select_one('#rider-review-title').get_text(strip=True) == 'Review (0)'
+        assert markup.select_one('#rider-review #rider-history') is not None
+        actions = [form['action'].rsplit('/', 1)[-1] for form in editor.select('form[action*="/stats/"]')]
+        assert actions == (['save', 'approve'] if role == 'admin' else ['save'])
+        assert editor.select_one('#save-stat-delta-btn').get_text(strip=True) == 'Save & Submit'
+        assert not markup.select('#rider-stats-toggle')[0].parent.select('form')
+        assert b"editing ? 'View' : 'Edit'" in profile.data
         wrong_rider = json.dumps([{'first_cycling_rider_id': 2, 'stat_name': 'mo', 'final_value': 80}])
         assert client.post(base + 'save', data={'changes_json': wrong_rider}).status_code == 400
         assert client.post(base + 'submit').status_code == 302
@@ -83,38 +99,46 @@ def test_profile_save_submit_resubmit_and_approve(app, client, monkeypatch, role
             with app.app_context():
                 with engine.connect() as conn:
                     fingerprint = routes._individual_pending_fingerprint(conn, 1)
-                assert not routes._individual_submission_matches(namespace, 1, fingerprint)
-            if role == 'admin':
-                assert client.post(base + 'approve').status_code == 302
-                with engine.connect() as conn:
-                    assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 70
-            assert client.post(base + 'submit').status_code == 302
+                assert routes._individual_submission_matches(namespace, 1, fingerprint)
+            with engine.connect() as conn:
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 70
             with app.app_context():
                 with engine.connect() as conn:
                     fingerprint = routes._individual_pending_fingerprint(conn, 1)
                 assert routes._individual_submission_matches(namespace, 1, fingerprint)
                 assert not routes._individual_submission_matches(SimpleNamespace(id=987654321), 1, fingerprint)
         with engine.connect() as conn:
-            assert conn.execute(text('SELECT COUNT(*) FROM stat_lists')).scalar_one() == 0
+            assert conn.execute(text('SELECT COUNT(*) FROM rider_list')).scalar_one() == 0
             assert conn.execute(text('SELECT COUNT(*) FROM stat_changes WHERE race_result_id IS NULL AND stat_list_id IS NULL')).scalar_one() == 1
         history = client.get('/riders/1')
         assert history.status_code == 200
-        assert b'<th>Name</th>' in history.data
-        assert b'Individual' in history.data
+        markup = BeautifulSoup(history.data, 'html.parser')
+        review = markup.select_one('#rider-review')
+        assert review.h3.get_text(strip=True) == 'Review (1)'
+        assert [heading.get_text(strip=True) for heading in review.select('h4')] == ['Reviews Needed', 'History']
+        assert review.find('td', string='Individual') is not None
+        assert review.find('td', string='MO') is not None
+        assert markup.select_one('#rider-history').find('td', string='MO') is None
         assert b'Test Rider' in history.data
+        assert (b'Approve rider stats' in history.data) == (role == 'admin')
         if role == 'admin':
             with engine.begin() as conn:
-                conn.execute(text('UPDATE cdb_cyclist SET stat_mo=71 WHERE id=1'))
+                conn.execute(text('UPDATE rider SET stat_mo=71 WHERE id=1'))
             assert client.post(base + 'approve').status_code == 302
             with engine.connect() as conn:
-                assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 71
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 71
             with engine.begin() as conn:
-                conn.execute(text('UPDATE cdb_cyclist SET stat_mo=70 WHERE id=1'))
+                conn.execute(text('UPDATE rider SET stat_mo=70 WHERE id=1'))
             assert client.post(base + 'approve').status_code == 302
             with engine.connect() as conn:
-                assert conn.execute(text('SELECT stat_mo FROM cdb_cyclist WHERE id=1')).scalar_one() == 73
+                assert conn.execute(text('SELECT stat_mo FROM rider WHERE id=1')).scalar_one() == 73
+            markup = BeautifulSoup(client.get('/riders/1').data, 'html.parser')
+            assert markup.select_one('#rider-pending-reviews').find('td', string='MO') is None
+            assert markup.select_one('#rider-review-tab').get_text(strip=True) == 'Review (0)'
+            event = markup.select_one('#rider-history tbody tr')
+            assert [cell.get_text(strip=True) for cell in event.select('td')][1:5] == ['Applied', 'MO', '70', '73']
             with engine.begin() as conn:
-                conn.execute(text('UPDATE stat_changes SET release_id=7 WHERE cdb_cyclist_id=1'))
+                conn.execute(text('UPDATE stat_changes SET release_id=7 WHERE rider_id=1'))
             payload = json.dumps([{'first_cycling_rider_id': 1, 'stat_name': 'mo', 'final_value': 74}])
             assert client.post(base + 'save', data={'changes_json': payload}).status_code == 302
             with engine.connect() as conn:

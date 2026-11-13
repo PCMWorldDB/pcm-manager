@@ -1,0 +1,15 @@
+    {% from '_attribute_review_actions.html' import attribute_review_actions with context %}
+    {% if changes %}
+    <div class="table-responsive"><table class="table table-sm align-middle">
+        <thead><tr>{% if not hide_object %}<th>{{ 'Rider' if object_type == 'riders' else 'Object ID' }}</th>{% endif %}<th>Attribute</th><th>Before</th><th>Proposed</th><th>Submitted On</th><th>Review</th></tr></thead>
+        <tbody>{% for change in changes %}<tr>
+            {% if not hide_object %}<td>{% if object_type == 'riders' %}<a href="{{ url_for('web.rider_detail', rider_id=change.entity_id, namespace_slug=selected_namespace.slug) }}">{{ change.rider_name }}</a>{% else %}{{ change.entity_id }}{% endif %}</td>{% endif %}<td>{{ change.attribute_name }}</td>
+            <td>{{ change.before_value if change.before_value is not none else 'Empty' }}</td>
+            <td>{{ change.after_value if change.after_value is not none else 'Empty' }}</td>
+            <td>{{ change.created_at.strftime('%Y-%m-%d %H:%M:%S') if change.created_at else '-' }} &middot; {{ change.submitted_by }}</td>
+            <td class="text-nowrap">
+                {{ attribute_review_actions(change, return_to_rider) }}</td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% if changes|length == 200 %}<p>Showing the oldest 200 proposals. Review these to see the next proposals.</p>{% endif %}
+    {% else %}<p class="mb-0">No pending attribute changes.</p>{% endif %}

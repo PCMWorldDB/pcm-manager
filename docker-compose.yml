@@ -2,7 +2,7 @@ version: '3.8'
 
 x-common-env: &common-env
   FLASK_APP: wsgi.py
-  FLASK_ENV: development
+  ENV: ${ENV:-local}
   BCRYPT_LOG_ROUNDS: 12
   SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-this-in-production}
   DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/main
@@ -11,6 +11,9 @@ x-common-env: &common-env
   FIRST_CYCLING_BASE_URL: ${FIRST_CYCLING_BASE_URL:-https://firstcycling.com}
   FIRST_CYCLING_API_PATH: ${FIRST_CYCLING_API_PATH}
   FIRST_CYCLING_FETCH_ONLY_MISSING: True
+  ACTIVITY_MONITOR_PCS_ENABLED: ${ACTIVITY_MONITOR_PCS_ENABLED:-false}
+  ACTIVITY_MONITOR_FC_ENABLED: ${ACTIVITY_MONITOR_FC_ENABLED:-false}
+  ACTIVITY_MONITOR_REQUEST_DELAY_SECONDS: ${ACTIVITY_MONITOR_REQUEST_DELAY_SECONDS:-1.5}
 
 x-common-depends: &common-depends
   database:
@@ -68,6 +71,7 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     volumes:
       - ./webapp:/app/webapp
+      - ./envs:/app/envs:ro
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
     ports:
@@ -87,11 +91,13 @@ services:
       context: .
       dockerfile: docker/webapp/Dockerfile
     container_name: worker
-    command: celery -A webapp.worker:celery worker --loglevel=info
+    # Run exactly one instance: embedded Beat must not be replicated.
+    command: celery -A webapp.worker:celery worker --beat --concurrency=1 --prefetch-multiplier=1 --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
       <<: *common-env
     volumes:
       - ./webapp:/app/webapp
+      - ./envs:/app/envs:ro
       - ./migrations:/app/migrations
       - filestore_vol:/app/filestore
     depends_on: *common-depends

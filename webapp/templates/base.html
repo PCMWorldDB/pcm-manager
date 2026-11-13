@@ -11,6 +11,12 @@
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+        .pending-approval {
+            display: inline-block;
+            flex-shrink: 0;
+            text-decoration: none;
+            vertical-align: middle;
+        }
         :root {
             --brand-primary: #002352;
             --brand-primary-hover: #001a3d;
@@ -75,7 +81,8 @@
                                 body.dark-mode .data-table tbody tr:hover, body.dark-mode .table tbody tr:hover {
                                     background: #374151 !important;
                                 }
-                                body.dark-mode .data-table td, body.dark-mode .table td {
+                                body.dark-mode .data-table td, body.dark-mode .table td,
+                                body.dark-mode .data-table tbody th[scope="row"], body.dark-mode .table tbody th[scope="row"] {
                                     border-color: #4b5563 !important;
                                     color: #fff !important;
                                 }
@@ -100,6 +107,7 @@
                                     content: ' ↓';
                                     color: var(--brand-primary);
                                 }
+
                                 body.dark-mode th.sortable-col::after {
                                     color: #9ca3af;
                                 }
@@ -284,26 +292,6 @@
             --bs-btn-disabled-border-color: #4a5568;
         }
 
-        body.dark-mode .nav-tabs {
-            --bs-nav-tabs-border-color: #4a5568;
-            --bs-nav-tabs-link-hover-border-color: #4a5568;
-            --bs-nav-tabs-link-active-color: #ffffff;
-            --bs-nav-tabs-link-active-bg: var(--brand-primary);
-            --bs-nav-tabs-link-active-border-color: var(--brand-primary-border);
-        }
-
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled) {
-            color: #ffffff;
-            background-color: #374151;
-            border-color: #4a5568;
-        }
-
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):hover,
-        body.dark-mode .nav-tabs .nav-link:not(.active):not(.disabled):not(:disabled):focus-visible {
-            background-color: #4a5568;
-            border-color: var(--brand-primary-border);
-        }
-
         .bg-primary {
             background-color: var(--brand-primary) !important;
         }
@@ -314,11 +302,6 @@
 
         .border-primary {
             border-color: var(--brand-primary) !important;
-        }
-
-        .nav-pills .nav-link.active,
-        .nav-pills .show > .nav-link {
-            background-color: var(--brand-primary);
         }
 
         .nav-link {
@@ -385,17 +368,28 @@
         }
         
         .container {
-            max-width: 1200px;
+            width: 100%;
+            max-width: 1760px;
             margin: 0 auto;
             padding: 20px;
         }
+        body.activity-monitor-page > .container {
+            max-width: 1760px;
+        }
         body.has-side-panel {
-            padding-left: 48px;
-            --header-height: 86px;
+            padding-left: 220px;
+            --header-height: 6px;
+            background-color: #f5f5f5;
+            background-image: linear-gradient(var(--brand-primary), var(--brand-primary));
+            background-repeat: no-repeat;
+            background-size: 100% var(--header-height);
+        }
+        body.dark-mode.has-side-panel {
+            background-color: #1a1a1a;
         }
         body.has-side-panel .header {
-            margin-left: -48px;
-            width: calc(100% + 48px);
+            margin-left: -220px;
+            width: calc(100% + 220px);
         }
         .header {
             background-color: var(--brand-primary);
@@ -405,8 +399,8 @@
             background-size: cover;
             color: white;
             padding: 0;
-            margin-bottom: 20px;
-            height: var(--header-height, 86px);
+            margin-bottom: 8px;
+            height: var(--header-height, 6px);
             overflow: hidden;
         }
         .header .container {
@@ -462,12 +456,12 @@
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            height: 86px;
+            height: 6px;
             overflow: hidden;
         }
         .header-logo {
-            height: 210px;
-            transform: translateY(4px);
+            height: 120px;
+            transform: translateY(-42px);
             vertical-align: middle;
         }
         .header-title-link:hover {
@@ -652,12 +646,11 @@
 
         .side-panel {
             position: fixed;
-            top: 0;
+            top: var(--header-height, 6px);
             left: 0;
-            width: 48px;
-            height: 100vh;
+            width: 220px;
+            height: calc(100vh - var(--header-height, 6px));
             box-sizing: border-box;
-            padding-top: var(--header-height, 86px);
             background: #f2f4f7;
             border-right: 1px solid #d1d5db;
             transition: width 0.22s ease, box-shadow 0.22s ease;
@@ -666,12 +659,28 @@
             flex-direction: column;
             overflow: visible;
         }
+        .side-panel-brand {
+            height: 72px;
+            flex: 0 0 72px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: var(--brand-primary);
+        }
+        .side-panel-brand img {
+            display: block;
+            width: 176px;
+            height: 176px;
+            object-fit: contain;
+            transform: translateY(-1px);
+        }
         body.dark-mode .side-panel {
             background: #1f2937;
             border-right-color: #4b5563;
         }
         .side-panel-content {
-            padding: 6px;
+            padding: 10px;
             overflow-y: auto;
             overflow-x: hidden;
             flex: 1;
@@ -760,14 +769,15 @@
         .side-panel .panel-menu-disabled,
         .side-panel .settings-btn,
         .side-panel .user-btn {
-            width: 36px;
-            justify-content: center;
-            gap: 0;
-            padding-left: 0;
-            padding-right: 0;
+            width: 100%;
+            justify-content: flex-start;
+            gap: 10px;
+            padding-left: 12px;
+            padding-right: 12px;
         }
         .side-panel .side-panel-label {
-            display: none;
+            display: inline;
+            opacity: 1;
         }
         .side-panel-label {
             font-family: inherit;
@@ -779,11 +789,9 @@
             margin-left: auto;
             font-size: 0.8rem;
         }
-        .side-panel .panel-lock {
-            display: none;
-        }
+        .side-panel .panel-lock { display: inline; }
         .side-panel-footer {
-            padding: 6px;
+            padding: 10px;
             border-top: 1px solid #d1d5db;
         }
         body.dark-mode .side-panel-footer {
@@ -797,29 +805,49 @@
             padding: 0;
             list-style: none;
         }
+        @media (max-width: 768px) {
+            body.has-side-panel { padding-left: 48px; }
+            body.has-side-panel .header {
+                margin-left: -48px;
+                width: calc(100% + 48px);
+            }
+            .side-panel {
+                width: 48px;
+                overflow: visible;
+            }
+            .side-panel-brand { display: none; }
+            .side-panel-content, .side-panel-footer { padding: 6px; }
+            .side-panel .panel-menu-link,
+            .side-panel .panel-menu-disabled,
+            .side-panel .settings-btn,
+            .side-panel .user-btn {
+                width: 36px;
+                justify-content: center;
+                gap: 0;
+                padding-left: 0;
+                padding-right: 0;
+            }
+            .side-panel .side-panel-label, .side-panel .panel-lock { display: none; }
+        }
         {% block styles %}{% endblock %}
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/navigation.css', v=config.get('STATIC_ASSET_VERSION')) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/object_attributes.css', v=(config.get('STATIC_ASSET_VERSION') or '') ~ '-attribute-list-2') }}">
 </head>
-<body class="{% if current_user.is_authenticated %}has-side-panel{% endif %}">
+<body class="{% if current_user.is_authenticated %}has-side-panel{% endif %} {% block body_class %}{% endblock %}">
     {% if current_user.is_authenticated %}
     <div class="header">
-        <div class="container">
-            <h1>
-                <a class="header-title-link" href="{{ url_for('web.dashboard') }}">
-                    <img src="{{ url_for('static', filename='images/wdbo_title.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" 
-                         alt="WorldDB Online" 
-                         class="header-logo">
-                </a>
-            </h1>
-        </div>
     </div>
 
     <aside class="side-panel" id="sidePanel" aria-label="Primary navigation">
+        <a class="side-panel-brand" href="{{ url_for('web.dashboard') }}" aria-label="WorldDB home" title="WorldDB home">
+            <img src="{{ url_for('static', filename='images/wdbo_title.opt.png', v=config.get('STATIC_ASSET_VERSION')) }}" alt="WorldDB">
+        </a>
         <div class="side-panel-content">
             <div class="side-panel-section namespace-navigation">
-                <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespaces" aria-label="Namespaces">
+                <a class="panel-menu-link" href="{{ url_for('web.namespaces') }}" title="Namespace" aria-label="Namespace">
                     {{ navigation_icon('namespace') }}
-                    <span class="side-panel-label">Namespaces</span>
+                    <span class="side-panel-label">Namespace</span>
                 </a>
             </div>
             <div class="side-panel-section">
@@ -879,6 +907,7 @@
             {% endif %}
         {% endwith %}
 
+        {% include 'object_nav.html' %}
         {% block content %}{% endblock %}
     </div>
 
@@ -893,6 +922,9 @@
     <script>
         // Check for saved dark mode preference on page load
         document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.pending-approval[data-bs-toggle="tooltip"]').forEach(function (indicator) {
+                new bootstrap.Tooltip(indicator, {container: 'body', trigger: 'hover focus'});
+            });
             const darkMode = localStorage.getItem('darkMode');
             if (darkMode === 'enabled') {
                 document.body.classList.add('dark-mode');

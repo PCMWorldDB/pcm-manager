@@ -3,9 +3,9 @@
 {% block title %}Settings{% endblock %}
 
 {% block content %}
-{% macro settings_item(title, description, endpoint, allowed, provider=none) %}
+{% macro settings_item(title, description, endpoint, allowed, provider=none, kind=none) %}
     {% if allowed %}
-    <a href="{{ url_for(endpoint, provider=provider) if provider else url_for(endpoint) }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3 py-3">
+    <a href="{{ url_for(endpoint, provider=provider) if provider else url_for(endpoint, kind=kind) if kind else url_for(endpoint) }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3 py-3">
         <div>
             <h6 class="mb-1">{{ title }}</h6>
             <p class="mb-0 text-muted">{{ description }}</p>
@@ -26,7 +26,7 @@
 <div class="row justify-content-center">
     <div class="col-xl-10">
         <h2 class="mb-2">Settings</h2>
-        <p class="text-muted mb-4">Manage users, namespaces, and integrations. Access depends on your assigned permissions.</p>
+        <p class="text-muted mb-4">Manage users, namespaces, identity maps, and integrations. Access depends on your assigned permissions.</p>
 
         <section class="card mb-4" aria-labelledby="administration-heading">
             <div class="card-header">
@@ -39,13 +39,23 @@
             </div>
         </section>
 
+        <section class="card mb-4" aria-labelledby="identity-maps-heading">
+            <div class="card-header">
+                <h5 class="mb-0" id="identity-maps-heading">Identity maps</h5>
+            </div>
+            <div class="list-group list-group-flush">
+                {{ settings_item('Rider identity map', 'Review shared FirstCycling and PCS rider links and resolve conflicting contributions.', 'web.identities', can_read_identities, kind='rider') }}
+                {{ settings_item('Race identity map', 'Review shared FirstCycling and PCS race links and resolve conflicting contributions.', 'web.identities', can_read_identities, kind='race') }}
+            </div>
+        </section>
+
         <section class="card mb-4" aria-labelledby="integrations-heading">
             <div class="card-header">
                 <h5 class="mb-0" id="integrations-heading">Integrations</h5>
             </div>
             <div class="list-group list-group-flush">
-                {{ settings_item('FirstCycling', 'Run synchronization tasks and review task status and history.', 'web.admin_integrations', provider_access.get('firstcycling'), 'firstcycling') }}
-                {{ settings_item('Discord', 'Configure namespace workflow channels and approver roles, and review integration activity.', 'web.admin_integrations', provider_access.get('discord'), 'discord') }}
+                {{ settings_item('External Data Integrations', 'Review external call task groups and start manual syncs.', 'web.admin_integrations_index', can_access_external_integrations) }}
+                {{ settings_item('Discord', 'Configure namespace workflow channels and approver roles, and review integration activity.', 'web.admin_integrations', can_access_discord_integrations, 'discord') }}
             </div>
         </section>
     </div>

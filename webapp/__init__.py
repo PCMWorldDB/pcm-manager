@@ -1,7 +1,7 @@
 """Flask application factory"""
 import os
 from flask import Flask
-from webapp.config import config
+from webapp.config import Config, ConfigError, LocalConfig, DevelopmentConfig, ProductionConfig, TestingConfig, config, load_config
 from webapp.extensions import init_extensions
 
 
@@ -9,10 +9,15 @@ def create_app(config_name=None):
     """Create and configure the Flask application"""
     
     if config_name is None:
-        config_name = os.getenv('FLASK_ENV', 'development')
+        config_name = os.getenv('ENV') or Config.ENV
     
     app = Flask(__name__)
-    app.config.from_object(config[config_name])
+    if config_name not in config:
+        raise ConfigError('Unknown configuration environment')
+    if config[config_name] in (Config, LocalConfig, DevelopmentConfig, ProductionConfig, TestingConfig):
+        app.config.from_mapping(load_config(environment=config_name))
+    else:
+        app.config.from_object(config[config_name])
     
     # Initialize extensions
     init_extensions(app)

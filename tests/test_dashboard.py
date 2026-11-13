@@ -8,6 +8,39 @@ import pytest
 from webapp.web import routes
 
 
+@pytest.mark.parametrize('has_other_namespace', [False, True])
+def test_missing_namespace_dashboard_renders_404(app, client, monkeypatch, has_other_namespace):
+    from uuid import uuid4
+
+    from webapp.extensions import db
+    from webapp.models import User
+
+    namespaces = [SimpleNamespace(id=999, slug='other')] if has_other_namespace else []
+    monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: namespaces)
+    with app.app_context():
+        user = User(username=f'missing-namespace-{uuid4().hex}', is_active=True)
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+    try:
+        with client.session_transaction() as session:
+            session['_user_id'] = str(user_id)
+            session['_fresh'] = True
+        with patch.object(routes, '_load_dashboard_tasks') as tasks, \
+                patch.object(routes, '_get_panel_menu_items') as panels:
+            response = client.get('/n/missing/dashboard')
+        assert response.status_code == 404
+        assert '404 - Page Not Found' in response.get_data(as_text=True)
+        tasks.assert_not_called()
+        panels.assert_not_called()
+        with client.session_transaction() as session:
+            assert session.get('selected_namespace_id') is None
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(User, user_id))
+            db.session.commit()
+
+
 @pytest.mark.parametrize('release,review,editing', [
     (False, False, False), (True, False, False),
     (False, True, False), (False, False, True), (True, True, True),
@@ -107,6 +140,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
     monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: [namespace])
     monkeypatch.setattr(routes, '_get_selected_namespace', lambda namespaces: namespace)
     monkeypatch.setattr(routes, '_load_namespace_stage_delta_status', lambda namespace, ids: {})
+    monkeypatch.setattr(routes, '_load_namespace_catalog_races', lambda namespace: [])
     build_result_state = routes._build_race_result_state
 
     def result_state(race):
@@ -153,7 +187,7 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
         assert response.status_code == 302
         with client.session_transaction() as session:
             assert session['stats_editor_state_by_namespace']['other'] == {'active_method': 'by_list'}
-        result = client.get('/stats-editor').get_json()
+        result = client.get('/races').get_json()
         assert set(result['races']) == {'untouched', 'downloaded', 'unknown-end'}
         assert result['method'] == 'by_race'
         assert result['filters']['start_date_to'] == today.isoformat()
@@ -164,13 +198,13 @@ def test_classification_shortcut_and_waiting_edits_filter(app, client, monkeypat
             'start_date_to': today.isoformat(), 'edit_status': 'waiting_edits',
         })
         assert response.status_code == 302
-        assert set(client.get('/stats-editor').get_json()['races']) == {'untouched', 'downloaded', 'unknown-end'}
+        assert set(client.get('/races').get_json()['races']) == {'untouched', 'downloaded', 'unknown-end'}
         for legacy_status in ('no_edits', 'pending_edits'):
             with client.session_transaction() as session:
                 states = dict(session['stats_editor_state_by_namespace'])
                 states[str(namespace.id)]['race_filters']['edit_statuses'] = [legacy_status]
                 session['stats_editor_state_by_namespace'] = states
-            result = client.get('/stats-editor').get_json()
+            result = client.get('/races').get_json()
             assert result['filters']['edit_statuses'] == ['waiting_edits']
             assert set(result['races']) == {'untouched', 'downloaded', 'unknown-end'}
         client.post('/stats-editor', data={'action': 'clear_filters'})

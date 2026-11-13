@@ -1,9 +1,9 @@
 """Main database model - CDB Namespace registry"""
 from webapp.extensions import db
+from webapp.config import get_setting
 from webapp.models.main.base import MainDBModel, SoftDeleteMixin
 from sqlalchemy_utils import EncryptedType
 from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
-import os
 
 
 class Namespace(MainDBModel, SoftDeleteMixin):
@@ -46,7 +46,7 @@ class Namespace(MainDBModel, SoftDeleteMixin):
     
     def build_connection_string(self):
         """Build connection string dynamically for namespace database"""
-        base_url = os.getenv('PROVISIONER_DATABASE_URL')
+        base_url = get_setting('PROVISIONER_DATABASE_URL')
         if not base_url:
             raise ValueError('PROVISIONER_DATABASE_URL environment variable not set')
         

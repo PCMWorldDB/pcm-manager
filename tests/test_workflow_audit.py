@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 from webapp.extensions import db
 from webapp.models import AuditLog, FirstCyclingRace, Role, User
-from webapp.models.ns.schema import NamespaceBase
+from webapp.models.ns.base import NamespaceBase
 from webapp.web import routes
 
 
@@ -79,15 +79,15 @@ def test_race_save_audit_includes_resets_and_namespace(app, client, actor, monke
         db.session.add(race)
         db.session.commit()
         race_pk = race.id
-    namespace = SimpleNamespace(id=201, build_connection_string=lambda: 'audit-namespace')
+    namespace = SimpleNamespace(id=201, database_name=engine.url.database, build_connection_string=lambda: 'audit-namespace')
     monkeypatch.setattr(routes, '_get_accessible_namespaces', lambda: [namespace])
     monkeypatch.setattr(routes, '_get_selected_namespace', lambda _: namespace)
     monkeypatch.setattr(routes, 'create_engine', lambda url: engine if url == 'audit-namespace' else pytest.fail('Wrong namespace'))
     monkeypatch.setattr(routes, '_get_firstcycling_race_result_map', lambda *a: SimpleNamespace(race_result_id=1))
     try:
         with engine.begin() as conn:
-            conn.execute(text('INSERT INTO cdb_cyclist (id, first_cycling_id, stat_mo) VALUES (1, 123, 70)'))
-        path = '/stats-editor/races/987123456/save-stat-deltas'
+            conn.execute(text('INSERT INTO rider (id, first_cycling_id, stat_mo) VALUES (1, 123, 70)'))
+        path = '/races/987123456/save-stat-deltas'
         for ns_id, value in ((201, 75), (202, 70)):
             namespace.id = ns_id
             assert client.post(path, data={'changes_json': json.dumps([{

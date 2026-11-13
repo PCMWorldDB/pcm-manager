@@ -6,7 +6,7 @@ from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
 from flask_marshmallow import Marshmallow
 from celery import Celery
-import os
+from kombu import Queue
 
 # Initialize extensions (will be bound to app in create_app)
 db = SQLAlchemy()
@@ -17,11 +17,7 @@ csrf = CSRFProtect()
 ma = Marshmallow()
 
 # Initialize Celery with broker URL
-celery = Celery(
-    'pcm_manager',
-    broker=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-    backend=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-)
+celery = Celery('pcm_manager')
 
 
 def init_extensions(app):
@@ -49,7 +45,39 @@ def init_extensions(app):
     ma.init_app(app)
     
     # Celery
-    celery.conf.update(app.config)
+    celery_config = dict(app.config)
+    # Celery 5.6 rejects mixing the legacy ``CELERY_*`` names in Flask's
+    # config with the modern setting names used by the Celery instance.
+    celery_config.pop('CELERY_BROKER_URL', None)
+    celery_config.pop('CELERY_RESULT_BACKEND', None)
+    celery.conf.update(celery_config)
+    celery.conf.update(
+        broker_url=app.config['REDIS_URL'],
+        result_backend=app.config['REDIS_URL'],
+        worker_concurrency=1,
+        worker_prefetch_multiplier=1,
+        task_queues=(Queue('celery'), Queue('external.high'), Queue('external.low')),
+        # Lexicographic order: control work, high groups, then low groups.
+        # Redis active_queues is a set; 'priority' would retain arbitrary order.
+        broker_transport_options={'queue_order_strategy': 'sorted'},
+    )
+    celery.conf.timezone = app.config['WORKER_TIMEZONE']
+    celery.conf.beat_schedule = {
+        **(celery.conf.beat_schedule or {}),
+        'poll-external-calls': {
+            'task': 'webapp.tasks.poll_external_calls',
+            'schedule': app.config['EXTERNAL_CALL_POLL_SECONDS'],
+        },
+        'poll-external-sync-schedules': {
+            'task': 'webapp.tasks.poll_external_sync_schedules',
+            'schedule': 60,
+            'options': {'expires': 60},
+        },
+        'poll-activity-monitor-schedules': {
+            'task': 'webapp.tasks.poll_activity_monitor_schedules',
+            'schedule': app.config['ACTIVITY_MONITOR_POLL_SECONDS'],
+        },
+    }
     
     class ContextTask(celery.Task):
         """Make celery tasks work with Flask app context"""

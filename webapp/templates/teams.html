@@ -1,8 +1,11 @@
 {% extends "base.html" %}
+{% from '_stat_value.html' import stat_value_range, stat_value_styles %}
+{% from '_pending_approval.html' import pending_approval %}
 
-{% block title %}Team - WDB{% endblock %}
+{% block title %}{{ 'Riders' if active_method == 'riders' else 'Teams' }} - WDB{% endblock %}
 
 {% block styles %}
+    {{ stat_value_styles() }}
     .teams-table {
         table-layout: fixed;
         width: 100%;
@@ -29,61 +32,101 @@
     .riders-table {
         table-layout: fixed;
         width: 100%;
+        min-width: 1300px;
     }
-    .riders-table .col-id {
-        width: 82px;
+    .riders-table-attributes {
+        min-width: 1050px;
+    }
+    .riders-table-wrapper {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .rider-view-filters > div {
+        flex: 0 1 12rem;
+        min-width: 0;
+        max-width: 100%;
+    }
+    #rider-view {
+        width: 6.75rem;
+        padding-left: .5rem;
+        padding-right: 1.5rem;
+        background-position: right .375rem center;
+    }
+    #per_page {
+        width: 4rem;
+        padding-left: .5rem;
+        padding-right: 1.5rem;
+        background-position: right .375rem center;
     }
     .riders-table .col-rider {
-        width: calc(260px + 12ch);
+        width: 200px;
     }
     .riders-table .col-team {
-        width: calc(240px + 10ch);
+        width: 180px;
     }
     .riders-table .col-country {
         width: 130px;
     }
-    .riders-table .col-birth {
-        width: 120px;
+    .riders-table .col-select {
+        width: 40px;
+    }
+    .rider-selection-cell {
+        cursor: pointer;
+        text-align: center;
+        touch-action: none;
+        user-select: none;
+    }
+    .rider-selection-cell input {
+        margin: 0;
+        pointer-events: none;
+    }
+    .riders-table tr.rider-selected > td {
+        box-shadow: inset 0 0 0 9999px rgba(13, 110, 253, .18);
+    }
+    .riders-table .col-stat {
+        width: 48px;
+        text-align: center;
+    }
+    .riders-table th {
+        white-space: nowrap;
+    }
+    .riders-table .rider-flag {
+        display: inline-block;
+        cursor: help;
+    }
+    .riders-table td.rider-stat {
+        text-align: center;
+        font-weight: 600;
     }
     .riders-table .text-truncate-cell {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
+    .riders-table .has-pending-attributes > a:first-child {
+        display: inline-block;
+        max-width: calc(100% - 1.75rem);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        vertical-align: middle;
+    }
 {% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">Teams</h2>
+        <h2 class="mb-1">{{ 'Riders' if active_method == 'riders' else 'Teams' }}</h2>
         <p class="text-muted mb-0">Browse teams and riders in the selected namespace.</p>
     </div>
 </div>
 
-<ul class="nav nav-tabs mb-3">
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="teams">
-            <button class="nav-link {% if active_method == 'teams' %}active{% endif %}" type="submit">Teams</button>
-        </form>
-    </li>
-    <li class="nav-item">
-        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_method">
-            <input type="hidden" name="method" value="riders">
-            <button class="nav-link {% if active_method == 'riders' %}active{% endif %}" type="submit">Riders</button>
-        </form>
-    </li>
-</ul>
+
 
 {% if season_selected %}
 {% if active_method == 'teams' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}" id="teams-filters-form">
+        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" id="teams-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="teams">
             <div class="section-block">
@@ -176,7 +219,7 @@
 {% elif active_method == 'riders' %}
 <div class="panel-card card">
     <div class="card-body">
-        <form method="post" action="{{ url_for('web.teams') }}" id="riders-filters-form">
+        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" id="riders-filters-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="riders">
             <div class="section-block">
@@ -208,15 +251,30 @@
                         <label for="rider_team" class="form-label">Team</label>
                         <input id="rider_team" name="team" class="form-control" type="search" value="{{ rider_filters.team }}" placeholder="Search by team name">
                     </div>
-                    <div class="col-lg-2 col-md-6">
-                        <label for="per_page" class="form-label">Per page</label>
-                        <select id="per_page" name="per_page" class="form-select">
-                            {% for option in per_page_options %}
-                            <option value="{{ option }}" {% if rider_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-12 d-flex align-items-end gap-2 flex-wrap">
+                    <div class="col-12 d-flex align-items-end gap-2 flex-wrap rider-view-filters">
+                        <div>
+                            <label for="rider-stat" class="form-label">Stat</label>
+                            <select id="rider-stat" name="stat_key" class="form-select">
+                                <option value="">Any stat</option>
+                                {% for stat in stat_fields %}<option value="{{ stat }}" {{ 'selected' if rider_filters.stat_key == stat else '' }}>{{ stat|upper }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <div><label for="stat-min" class="form-label">Minimum</label><input id="stat-min" name="stat_min" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_min }}"></div>
+                        <div><label for="stat-max" class="form-label">Maximum</label><input id="stat-max" name="stat_max" type="number" min="0" max="99" class="form-control" value="{{ rider_filters.stat_max }}"></div>
+                        {% if can_view_activity %}
+                        <div>
+                            <label for="activity-status" class="form-label">Activity</label>
+                            <select id="activity-status" name="activity_status" class="form-select">
+                                {% for value, label in activity_filter_options.items() %}<option value="{{ value }}" {{ 'selected' if rider_filters.activity_status == value else '' }}>{{ label }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
+                        <div>
+                            <label for="identity-flag" class="form-label">Flag</label>
+                            <select id="identity-flag" name="identity_flag" class="form-select">
+                                {% for value, label in identity_filter_options.items() %}<option value="{{ value }}" {{ 'selected' if rider_filters.identity_flag == value else '' }}>{{ label }}</option>{% endfor %}
+                            </select>
+                        </div>
                         <button class="btn btn-outline-secondary" type="button" id="reset-riders-filters">Reset</button>
                     </div>
                 </div>
@@ -227,40 +285,116 @@
 
 <div class="panel-card card">
     <div class="card-body">
+        {% set can_create_stat_list = can_start_stat_list %}
+        {% set can_open_attribute_editor = can_create_rider_list and can_bulk_edit_attributes %}
+        {% set can_run_data_sync = 'pcs.get_rider_profile' in rider_task_types and 'firstcycling.get_rider_profile' in rider_task_types %}
+        {% set can_select_riders = can_create_stat_list or can_open_attribute_editor or can_run_data_sync %}
         <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
-            <h5 class="mb-0">Riders ({{ rider_pagination.total }})</h5>
-            <div class="text-muted">
-                Showing {{ rider_pagination.start }}-{{ rider_pagination.end }} of {{ rider_pagination.total }}
+            <h5 class="mb-0" id="rider-table-title">Riders ({{ rider_pagination.total }})</h5>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                {% if can_select_riders %}
+                <div class="dropdown">
+                    <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false">Actions &gt;</button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        {% if can_create_stat_list %}
+                        <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="list_type" value="stat"
+                                    formaction="{{ url_for('web.stats_editor_create_list', namespace_slug=selected_namespace.slug) }}" disabled>Edit Stats</button></li>
+                        {% endif %}
+                        {% if can_open_attribute_editor %}
+                        <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="list_type" value="attribute"
+                                    formaction="{{ url_for('web.stats_editor_create_list', namespace_slug=selected_namespace.slug) }}" disabled>Bulk Edit Attributes</button></li>
+                        {% endif %}
+                        {% if can_run_data_sync %}
+                        <li><button class="dropdown-item" type="submit" form="rider-selection-form" name="action" value="run_data_sync"
+                                    formaction="{{ url_for('web.rider_bulk_tasks', namespace_slug=selected_namespace.slug) }}" disabled>Fetch Data</button></li>
+                        {% endif %}
+                    </ul>
+                </div>
+                {% endif %}
+                <span class="text-muted" id="rider-result-count" role="status">Showing <span id="rider-result-start">{{ rider_pagination.start }}</span>–<span id="rider-result-end">{{ rider_pagination.end }}</span> of <span id="rider-result-total">{{ rider_pagination.total }}</span></span>
+                <label for="per_page" class="small text-muted">Rows per page</label>
+                <select id="per_page" name="per_page" form="riders-filters-form" class="form-select form-select-sm" aria-label="Maximum rows per page">
+                    {% for option in per_page_options %}
+                    <option value="{{ option }}" {% if rider_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
             </div>
         </div>
 
-        {% if riders %}
-        <div class="table-wrapper">
-            <table class="table table-sm table-hover align-middle mb-0 riders-table">
+        <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+            <label for="rider-view" class="small text-muted">View</label>
+            <button id="previous-rider-view" class="btn btn-outline-secondary btn-sm px-2" type="button" aria-label="Previous rider view">←</button>
+            <select id="rider-view" class="form-select form-select-sm">
+                {% for view, label in rider_views.items() if view != 'activity' or can_view_activity %}
+                <option value="{{ view }}" {% if rider_filters.view == view %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <button id="next-rider-view" class="btn btn-outline-secondary btn-sm px-2" type="button" aria-label="Next rider view">→</button>
+            <span id="rider-snapshot-updated" class="small text-muted ms-auto"></span>
+            <button id="refresh-riders" class="btn btn-outline-secondary btn-sm" type="button">Refresh</button>
+        </div>
+
+        {% if can_select_riders %}
+        <form method="post" id="rider-selection-form"
+              data-storage-key="riders-selection:{{ current_user.id }}:{{ selected_namespace.id }}"
+              data-limit="{{ rider_selection_limit }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="rider_ids">
+            <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+                <span class="small text-muted" role="status"><span id="rider-selection-count">0</span> selected · maximum {{ rider_selection_limit }}</span>
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="clear-rider-selection" disabled>Deselect all</button>
+            </div>
+        {% endif %}
+        <p id="rider-snapshot-error" class="text-danger" role="alert" hidden></p>
+        <div class="table-wrapper riders-table-wrapper">
+            <table class="table table-sm table-hover align-middle mb-0 riders-table{% if rider_filters.view == 'attributes' %} riders-table-attributes{% endif %}">
                 <colgroup>
-                    <col class="col-id">
+                    {% if can_select_riders %}<col class="col-select">{% endif %}
                     <col class="col-rider">
                     <col class="col-team">
                     <col class="col-country">
-                    <col class="col-birth">
+                    {% if rider_filters.view == 'stats' %}
+                    {% for stat in stat_fields %}<col class="col-stat">{% endfor %}
+                    {% elif rider_filters.view == 'attributes' %}
+                    <col><col><col>
+                    {% else %}
+                    <col><col><col><col><col>
+                    {% endif %}
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>CDB ID</th>
-                        <th>Rider</th>
+                        {% if can_select_riders %}<th scope="col"><span class="visually-hidden">Select</span></th>{% endif %}
+                        <th>Name</th>
                         <th>Team</th>
                         <th>Country</th>
-                        <th>Birth Date</th>
+                        {% if rider_filters.view == 'stats' %}
+                        {% for stat in stat_fields %}<th class="col-stat">{{ stat|upper }}</th>{% endfor %}
+                        {% elif rider_filters.view == 'activity' %}
+                        <th>Last Race</th><th>Race Date</th><th>Days Since Race</th><th>Last Checked</th><th>Check Status</th>
+                        {% elif rider_filters.view == 'identity' %}
+                        <th>PCS</th><th>Identity ID</th><th>FirstCycling ID</th><th>DOB</th><th>Flags</th>
+                        {% else %}
+                        <th>Birth Date</th><th>Height</th><th>Weight</th>
+                        {% endif %}
                     </tr>
                 </thead>
                 <tbody>
                     {% for rider in riders %}
                     <tr>
-                        <td>{{ rider.cyclist_id }}</td>
-                        <td class="text-truncate-cell">
+                        {% if can_select_riders %}
+                        <td class="rider-selection-cell">
+                            <input class="form-check-input rider-select" type="checkbox" value="{{ rider.rider_id }}"
+                                   aria-label="Select {{ rider.name or ('Rider #' ~ rider.rider_id) }}"
+                                   {% if rider.is_deleted or rider.rider_id <= 0 %}disabled{% endif %}>
+                        </td>
+                        {% endif %}
+                        <td class="text-truncate-cell{% if rider.has_pending_attribute_changes %} has-pending-attributes{% endif %}">
                             <a href="{{ url_for('web.rider_detail', rider_id=rider.rider_id) }}">
                                 {{ rider.name or ('Rider #' ~ rider.rider_id) }}
                             </a>
+                            {% if rider.has_pending_attribute_changes %}
+                            {{ pending_approval('Attributes pending approval', 'This rider has attribute changes awaiting approval.', url_for('web.rider_detail', rider_id=rider.rider_id) ~ '#rider-attribute-approvals') }}
+                            {% endif %}
                         </td>
                         <td class="text-truncate-cell">
                             {% if rider.team_id %}
@@ -272,18 +406,47 @@
                             {% endif %}
                         </td>
                         <td>{{ rider.nation_name or '-' }}</td>
+                        {% if rider_filters.view == 'stats' %}
+                        {% for stat in stat_fields %}
+                        {% set value = rider_stats_map[rider.rider_id][stat] %}
+                        <td class="rider-stat stat-value {{ stat_value_range(value) }}">{{ value if value is not none else '-' }}</td>
+                        {% endfor %}
+                        {% elif rider_filters.view == 'activity' %}
+                        <td>{{ rider.latest_race_name or '-' }}</td>
+                        <td>{{ rider.latest_result_date or '-' }}</td>
+                        <td>{{ rider.days_since_last_race if rider.days_since_last_race is not none else '-' }}</td>
+                        <td>{{ rider.latest_check_at|activity_datetime if rider.latest_check_at else '-' }}</td>
+                        <td>{{ rider.latest_check_status|activity_check_status if rider.latest_check_status else ('History unavailable' if rider.activity_available == false else 'Awaiting check' if rider.monitor_id else 'Not monitored') }}</td>
+                        {% elif rider_filters.view == 'identity' %}
+                        <td class="text-truncate-cell">{% if rider.pcs_slug and rider.pcs_slug != '0' %}<a href="https://www.procyclingstats.com/rider/{{ rider.pcs_slug|urlencode }}" target="_blank" rel="noopener noreferrer">{{ rider.pcs_slug }}</a>{% else %}-{% endif %}</td>
+                        <td>{{ 'Mapping conflict' if rider.mapping_conflict else (rider.identity_id or '-') }}</td>
+                        <td>{% if rider.first_cycling_id %}<a href="https://firstcycling.com/rider.php?r={{ rider.first_cycling_id }}" target="_blank" rel="noopener noreferrer">{{ rider.first_cycling_id }}</a>{% else %}-{% endif %}</td>
                         <td>{{ rider.birth_date_display or '-' }}</td>
+                        <td>
+                            {% set status = 'override' if rider.pcs_identity_verified_override else rider.pcs_identity_status %}
+                            {% set symbols = {'verified': '🟢', 'review': '🟡', 'failed': '🔴', 'unknown': '🔴', 'override': '🟢'} %}
+                            <span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" title="{{ identity_filter_options.get(status, identity_filter_options.unknown) }}" tabindex="0">{{ symbols.get(status, '🔴') }}</span>
+                            {% if not rider.first_cycling_id %}<span class="rider-flag" data-bs-toggle="tooltip" role="img" aria-label="Missing FirstCycling ID" title="Missing FirstCycling ID" tabindex="0">🔴</span>{% endif %}
+                        </td>
+                        {% else %}
+                        <td>{{ rider.birth_date_display or '-' }}</td>
+                        <td>{{ (rider.size_cm ~ ' cm') if rider.size_cm is not none else '-' }}</td>
+                        <td>{{ (rider.weight_kg ~ ' kg') if rider.weight_kg is not none else '-' }}</td>
+                        {% endif %}
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        {% if can_select_riders %}
+        </form>
+        <script defer src="{{ url_for('static', filename='js/rider_drag_selection.js', v=(config.get('STATIC_ASSET_VERSION') or '') ~ '-riders-drag-2') }}"></script>
+        {% endif %}
 
-        {% if rider_pagination.total_pages > 1 %}
-        <nav class="mt-3" aria-label="Rider result pages">
+        <nav class="mt-3" aria-label="Rider result pages" id="rider-pagination">
             <ul class="pagination mb-0 flex-wrap">
                 <li class="page-item {% if not rider_pagination.has_prev %}disabled{% endif %}">
-                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                    <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="action" value="set_page">
                         <input type="hidden" name="method" value="riders">
@@ -294,7 +457,7 @@
                 {% for page_number in range(1, rider_pagination.total_pages + 1) %}
                     {% if page_number == 1 or page_number == rider_pagination.total_pages or (page_number >= rider_pagination.page - 2 and page_number <= rider_pagination.page + 2) %}
                     <li class="page-item {% if page_number == rider_pagination.page %}active{% endif %}">
-                        <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                        <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="action" value="set_page">
                             <input type="hidden" name="method" value="riders">
@@ -307,7 +470,7 @@
                     {% endif %}
                 {% endfor %}
                 <li class="page-item {% if not rider_pagination.has_next %}disabled{% endif %}">
-                    <form method="post" action="{{ url_for('web.teams') }}" class="d-inline">
+                    <form method="post" action="{{ url_for('web.riders' if active_method == 'riders' else 'web.teams') }}" class="d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="action" value="set_page">
                         <input type="hidden" name="method" value="riders">
@@ -317,10 +480,10 @@
                 </li>
             </ul>
         </nav>
-        {% endif %}
-        {% else %}
-        <p class="text-muted mb-0">No riders found for the selected filters.</p>
-        {% endif %}
+        <p id="riders-empty" class="text-muted mb-0" {% if riders %}hidden{% endif %}>No riders found for the selected filters.</p>
+        <script id="rider-snapshot" type="application/json">{{ rider_snapshot|tojson }}</script>
+        <script id="rider-table-config" type="application/json">{{ {'state': rider_filters, 'stats': stat_fields, 'identityLabels': identity_filter_options, 'namespaceId': selected_namespace.id, 'storageKey': 'riders-table:' ~ current_user.id ~ ':' ~ selected_namespace.id, 'snapshotUrl': url_for('web.rider_snapshot', namespace_slug=selected_namespace.slug)}|tojson }}</script>
+        <script defer src="{{ url_for('static', filename='js/rider_table.js', v=(config.get('STATIC_ASSET_VERSION') or '') ~ '-riders-table-2') }}"></script>
     </div>
 </div>
 {% endif %}
@@ -387,8 +550,10 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    const filtersForm = document.getElementById('teams-filters-form')
-        || document.getElementById('riders-filters-form');
+    document.querySelectorAll('.riders-table .rider-flag[data-bs-toggle="tooltip"]').forEach(function (flag) {
+        new bootstrap.Tooltip(flag, {container: 'body', trigger: 'hover focus'});
+    });
+    const filtersForm = document.getElementById('teams-filters-form');
     if (!filtersForm) {
         return;
     }
@@ -405,7 +570,10 @@ document.addEventListener('DOMContentLoaded', function () {
         clearTimeout(filterTimer);
         submitting = true;
     });
-    filtersForm.querySelectorAll('select').forEach(function (field) {
+    Array.from(filtersForm.elements).filter(field => field.tagName === 'SELECT').forEach(function (field) {
+        field.addEventListener('change', applyFilters);
+    });
+    filtersForm.querySelectorAll('input[type="number"]').forEach(function (field) {
         field.addEventListener('change', applyFilters);
     });
     filtersForm.querySelectorAll('input[type="search"]').forEach(function (field) {

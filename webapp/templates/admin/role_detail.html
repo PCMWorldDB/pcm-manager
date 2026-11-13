@@ -65,6 +65,35 @@
         </div>
     </div>
 
+{% if current_user.has_permission('roles', 'update') %}
+<section class="card my-3" id="field-permissions">
+    <div class="card-body">
+        <h2 class="h5">Object field permissions</h2>
+        <p>Grants apply to this role across namespaces. Namespace settings control which fields are editable.</p>
+        <form method="post" action="{{ url_for('web.admin_update_field_permission', role_id=role.id) }}" class="d-flex flex-wrap gap-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div>
+                <label for="field-slug" class="form-label">Resource slug</label>
+                <select id="field-slug" name="slug" class="form-select">
+                    {% for slug in field_slugs %}
+                    <option value="{{ slug }}">{{ slug }}{% if (slug, 'update') in field_grants %} · update{% endif %}{% if (slug, 'approve') in field_grants %} · approve{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="field-action" class="form-label">Permission</label>
+                <select id="field-action" name="action" class="form-select">
+                    <option value="update">Update</option>
+                    <option value="approve">Approve</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" name="decision" value="grant">Grant</button>
+            <button class="btn btn-outline-danger" name="decision" value="revoke">Revoke</button>
+        </form>
+    </div>
+</section>
+{% endif %}
+
     <div class="card">
         <div class="card-header bg-secondary text-white">
             <h5 class="mb-0">Users with This Role</h5>

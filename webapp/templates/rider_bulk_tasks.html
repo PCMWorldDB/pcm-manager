@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Bulk Tasks - WDB{% endblock %}
+{% block content %}
+<div class="mb-3">
+    <h2 class="mb-1">Bulk Tasks</h2>
+    <p class="text-muted mb-0">Prepare rider task groups and queue them when ready.</p>
+</div>
+<nav class="nav nav-tabs mb-3" aria-label="Bulk Tasks sections">
+    {% for value, label in [('groups', 'Groups'), ('editor', 'Editor')] %}
+    <a class="nav-link{% if tab == value %} active{% endif %}" {% if tab == value %}aria-current="page"{% endif %}
+       href="{{ url_for('web.rider_bulk_tasks', tab=value, group_id=group.id if group else none) }}">{{ label }}</a>
+    {% endfor %}
+</nav>
+{% if not selected_namespace %}
+<p class="alert alert-info">Select a namespace to use rider bulk tasks.</p>
+{% elif tab == 'groups' %}
+<section class="panel-card card" aria-labelledby="rider-task-history">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+            <h3 class="h5 mb-0" id="rider-task-history">Task groups</h3>
+            {% if editor_types %}<a class="btn btn-primary btn-sm" href="{{ url_for('web.rider_bulk_tasks', tab='editor') }}">New group</a>{% endif %}
+        </div>
+        <form method="get" class="row g-2 align-items-end mb-3">
+            <input type="hidden" name="tab" value="groups">
+            <div class="col-sm-6 col-lg-4">
+                <label for="group-task-type" class="form-label">Task type</label>
+                <select name="sync_type" id="group-task-type" class="form-select">
+                    <option value="">All types</option>
+                    {% for value, label in task_types.items() if value != 'all' %}
+                    <option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" type="submit">Filter</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('web.rider_bulk_tasks', tab='groups') }}">Clear</a>
+            </div>
+        </form>
+        {% if page and page.items %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead><tr>
+                    <th scope="col">Group</th><th scope="col">Name</th><th scope="col">Task type</th><th scope="col">Status</th>
+                    <th scope="col">Requested</th><th scope="col">Succeeded</th><th scope="col">Failed</th>
+                    <th scope="col">Origin</th><th scope="col">Created (UTC)</th>
+                </tr></thead>
+                <tbody>
+                    {% for item in page.items %}
+                    <tr>
+                        <th scope="row"><a href="{{ url_for('web.rider_bulk_tasks', tab='editor', group_id=item.id) }}">#{{ item.id }}</a></th>
+                        <td>{{ item.message or '—' }}</td><td>{{ sync_types_display(item.sync_types) }}</td>
+                        <td>{{ item.status|replace('_', ' ')|capitalize }}</td>
+                        {% for count in (item.requested_count, item.synced_count, item.failed_count) %}<td>{{ count if count is not none else '—' }}</td>{% endfor %}
+                        <td>{{ item.origin|capitalize }}</td><td class="text-nowrap">{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if page.pages > 1 %}
+        <nav class="d-flex align-items-center gap-3" aria-label="Rider task group pages">
+            {% if page.has_prev %}<a href="{{ url_for('web.rider_bulk_tasks', tab='groups', sync_type=selected_type, page=page.prev_num) }}">Previous</a>{% endif %}
+            <span>Page {{ page.page }} of {{ page.pages }}</span>
+            {% if page.has_next %}<a href="{{ url_for('web.rider_bulk_tasks', tab='groups', sync_type=selected_type, page=page.next_num) }}">Next</a>{% endif %}
+        </nav>
+        {% endif %}
+        {% else %}<p class="text-muted mb-0">No task groups match these filters in this namespace.</p>{% endif %}
+    </div>
+</section>
+{% else %}
+{% set can_edit = group and group.status == 'draft' and can_run_group %}
+{% if not group and editor_types or can_edit %}
+<section class="panel-card card mb-3" aria-labelledby="task-group-heading">
+    <div class="card-body">
+        <h3 class="h5" id="task-group-heading">{{ 'Edit draft #' ~ group.id if group else 'New task group' }}</h3>
+        <form method="post" id="task-group-form" class="row g-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if group %}<input type="hidden" name="group_id" value="{{ group.id }}">{% endif %}
+            <div class="col-12">
+                <label for="task-group-name" class="form-label">Group name</label>
+                <input id="task-group-name" name="name" class="form-control" maxlength="255" value="{{ group.message or '' if group else '' }}">
+            </div>
+            <div class="col-12">
+                {% if group and group.workflow_type %}
+                <label class="form-label">Workflow</label>
+                <p>{{ sync_type_display(group.workflow_type) }}</p>
+                {% else %}
+                <label for="bulk-task-type" class="form-label">Methods</label>
+                <select id="bulk-task-type" name="sync_types" class="form-select" multiple required>
+                    {% for value, label in editor_types.items() %}<option value="{{ value }}" {% if group and value in group.sync_types %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+                {% endif %}
+            </div>
+            <div class="col-12"><button type="submit" name="action" value="{{ 'save' if group else 'create' }}" class="btn btn-primary">{{ 'Save draft' if group else 'Create Group' }}</button></div>
+        </form>
+        <p class="form-text mb-0">Only drafts can be edited. Add riders, choose methods, then queue the group.</p>
+    </div>
+</section>
+{% elif not group %}<p class="alert alert-info">Select a group to view its tasks.</p>{% endif %}
+{% if group %}
+<section class="panel-card card mb-3" aria-labelledby="group-riders-heading">
+    <div class="card-body">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <h3 class="h5 mb-0" id="group-riders-heading">Group #{{ group.id }} · {{ sync_types_display(group.sync_types) }}{% if group.workflow_type %} · {{ sync_type_display(group.workflow_type) }}{% endif %} · {{ group.status|capitalize }}</h3>
+            <div class="d-flex gap-2">
+                {% if can_run_group and group.status in ('draft', 'queued', 'running') %}
+                <form method="post" class="d-flex gap-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="group_id" value="{{ group.id }}">
+                    {% if can_edit %}<button form="task-group-form" class="btn btn-primary btn-sm" name="action" value="queue" {% if not members %}disabled{% endif %}>Start</button>{% endif %}
+                    <button class="btn btn-outline-danger btn-sm" name="action" value="cancel">Cancel</button>
+                </form>
+                {% endif %}
+                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('web.rider_bulk_tasks', tab='editor', group_id=group.id) }}">Refresh</a>
+            </div>
+        </div>
+        {% if group.status in ('queued', 'running', 'cancelled') %}<p class="text-muted">Cancellation stops pending tasks. An active request may finish.</p>{% endif %}
+        {% if members %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead><tr><th scope="col">Rider</th><th scope="col">Provider</th><th scope="col">Status</th>{% if can_edit %}<th scope="col">Actions</th>{% endif %}</tr></thead>
+                <tbody>
+                    {% for member in members %}
+                    <tr>
+                        <td>{% if member.rider_id %}<a href="{{ url_for('web.rider_detail', rider_id=member.rider_id) }}">{{ member.name }} (#{{ member.rider_id }})</a>{% else %}{{ member.name }}{% endif %}</td>
+                        <td>{{ {'pcs': 'PCS Rider', 'firstcycling': 'FC Rider'}.get(member.provider, member.provider) }}</td><td>{{ member.status|replace('_', ' ')|capitalize }}</td>
+                        {% if can_edit %}<td>
+                            <form method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="group_id" value="{{ group.id }}">
+                                <input type="hidden" name="rider_id" value="{{ member.rider_id }}">
+                                <button class="btn btn-sm btn-outline-danger" name="action" value="remove">Remove</button>
+                            </form>
+                        </td>{% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}<p class="text-muted mb-0">This group has no riders yet.</p>{% endif %}
+    </div>
+</section>
+{% if can_edit %}
+<section class="panel-card card mb-3" aria-labelledby="add-group-riders">
+    <div class="card-body">
+        <h3 class="h5 mb-3" id="add-group-riders">Add riders to group</h3>
+        <form method="get" class="d-flex flex-wrap gap-2 mb-3">
+            <input type="hidden" name="tab" value="editor"><input type="hidden" name="group_id" value="{{ group.id }}">
+            <input class="form-control form-control-sm w-auto" name="rider_search" aria-label="Filter rider name" placeholder="Filter rider name" value="{{ rider_search }}">
+            <input class="form-control form-control-sm w-auto" name="team_search" aria-label="Filter team name" placeholder="Filter team name" value="{{ team_search }}">
+            <button class="btn btn-outline-primary btn-sm" type="submit">Search</button>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('web.rider_bulk_tasks', tab='editor', group_id=group.id) }}">Clear</a>
+        </form>
+        {% if search_results %}
+        <div class="table-responsive mb-3"><table class="table table-sm table-hover align-middle">
+            <thead><tr><th scope="col">Rider</th><th scope="col">Team</th><th scope="col">Actions</th></tr></thead>
+            <tbody>{% for rider in search_results %}<tr>
+                <td>{{ rider.name }}</td><td>{{ rider.team_name or '—' }}</td>
+                <td><form method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="group_id" value="{{ group.id }}">
+                    <input type="hidden" name="rider_ids" value="{{ rider.rider_id }}">
+                    <button class="btn btn-outline-primary btn-sm" name="action" value="add">Add</button>
+                </form></td>
+            </tr>{% endfor %}</tbody>
+        </table></div>
+        {% elif rider_search or team_search %}<p class="text-muted">No riders found.</p>{% endif %}
+        <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="group_id" value="{{ group.id }}">
+            <label for="bulk-task-rider-ids" class="form-label">Rider IDs</label>
+            <textarea class="form-control mb-2" id="bulk-task-rider-ids" name="rider_ids" rows="2" aria-describedby="bulk-task-rider-help" required></textarea>
+            <p class="form-text" id="bulk-task-rider-help">Enter WorldDB rider IDs from this namespace, separated by commas or spaces. A group can contain up to {{ max_riders }} riders.</p>
+            <button class="btn btn-primary btn-sm" name="action" value="add">Add riders</button>
+        </form>
+    </div>
+</section>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

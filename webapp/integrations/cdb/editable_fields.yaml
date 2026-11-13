@@ -1,0 +1,28 @@
+# Shared manual-edit allowlist. Names are internal model attributes, not CDB
+# column names. Omitted objects/attributes are read-only. Never allow primary
+# keys or is_deleted here. Import policies remain in cdb_mappings.yaml.
+rider:
+  - stat_fla
+  - stat_mo
+  - stat_mm
+  - stat_hil
+  - stat_dh
+  - stat_cob
+  - stat_tt
+  - stat_prl
+  - stat_spr
+  - stat_acc
+  - stat_end
+  - stat_res
+  - stat_rec
+  - stat_att
+  - birth_date
+  - pcs_slug
+  - first_cycling_id
+  - pcs_identity_verified_override
+team: []
+# Only namespace-local source identity fields are editable; CDB race fields
+# retain their existing read-only policy.
+race:
+  - first_cycling_id
+  - pcs_slug

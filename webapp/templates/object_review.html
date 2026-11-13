@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ object_type|title }} Review - WDB{% endblock %}
+{% block styles %}
+#identity-review-table .rider-selection-cell {
+    cursor: pointer;
+    text-align: center;
+    touch-action: none;
+    user-select: none;
+}
+#identity-review-table .rider-selection-cell input {
+    margin: 0;
+    pointer-events: none;
+}
+#identity-review-table tr.rider-selected > td {
+    box-shadow: inset 0 0 0 9999px rgba(13, 110, 253, .18);
+}
+{% endblock %}
+{% block content %}
+<h2>{{ object_type|title }} Review</h2>
+{% if object_type == 'riders' %}
+{% include '_rider_review_nav.html' %}
+{% endif %}
+{% if not selected_namespace %}
+<div class="panel-card card"><div class="card-body"><p class="mb-0">Select a namespace to review {{ object_type }}.</p></div></div>
+{% elif review_tab == 'identity' %}
+{% include '_rider_identity_review.html' %}
+{% elif review_tab == 'activity' %}
+<div class="panel-card card"><div class="card-body"><h5>Activity</h5><p class="text-muted mb-0">Rider race participation counts are coming soon.</p></div></div>
+{% elif review_tab == 'stats' %}
+{% from '_rider_review_stats.html' import stat_table with context %}
+<div class="panel-card card mb-3"><div class="card-body">
+    <h5>Reviews Needed</h5>
+    <p class="text-muted">Individual approvals apply the rider's submitted individual stats together. Open the source for race or list approvals.</p>
+    {{ stat_table(pending_stats, true) }}
+</div></div>
+<div class="panel-card card"><div class="card-body">
+    <h5>History</h5>
+    {{ stat_table(historical_stats, false) }}
+</div></div>
+{% else %}
+<div class="panel-card card mb-3"><div class="card-body">
+    <h5>Pending Attribute Approvals</h5>
+    {% include '_attribute_review_table.html' %}
+</div></div>
+{% if object_type == 'riders' %}
+<div class="panel-card card"><div class="card-body">
+    <h5>Attribute Change History</h5>
+    {% with changes=attribute_history %}{% include '_attribute_history_table.html' %}{% endwith %}
+</div></div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,19 @@
+{% macro season_fields(configured_seasons, selected_season, prefix, compact=false) %}
+{% set column = 'col-6 col-md-3 col-lg' if compact else 'col-sm-6 col-lg-3' %}
+<div class="{{ column }}">
+    <label for="{{ prefix }}-year" class="form-label">Season Year</label>
+    <select id="{{ prefix }}-year" name="year" class="form-select{% if compact %} form-select-sm{% endif %}" required>
+        {% for year in configured_seasons|map(attribute='year')|unique %}
+        <option value="{{ year }}" {% if selected_season and selected_season.year == year %}selected{% endif %}>{{ year }}</option>
+        {% endfor %}
+    </select>
+</div>
+<div class="{{ column }}">
+    <label for="{{ prefix }}-gender" class="form-label">Gender</label>
+    <select id="{{ prefix }}-gender" name="gender" class="form-select{% if compact %} form-select-sm{% endif %}" required>
+        {% for gender in configured_seasons|map(attribute='gender')|unique %}
+        <option value="{{ gender }}" {% if selected_season and selected_season.gender == gender %}selected{% endif %}>{{ gender }}</option>
+        {% endfor %}
+    </select>
+</div>
+{% endmacro %}

@@ -3,7 +3,7 @@
 
 # Authentication, permissions, and database boundaries
 /webapp/security.py             @benvneal88
-/webapp/rbac_seed.py            @benvneal88
+/webapp/seeds/                  @benvneal88
 /webapp/models/main/            @benvneal88
 /webapp/namespace/              @benvneal88
 

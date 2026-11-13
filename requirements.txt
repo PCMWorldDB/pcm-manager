@@ -21,7 +21,7 @@ beautifulsoup4==4.12.3
 Pillow==13.0.0
 
 # Background Jobs
-redis==5.0.1
+redis==6.4.0
 celery==5.3.4
 
 # Security

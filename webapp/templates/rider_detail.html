@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% from '_stat_value.html' import stat_value_range, stat_value_styles %}
 
 {% block title %}Rider Detail - WDB{% endblock %}
 
 {% block styles %}
 body > .container {
-    max-width: 1400px;
+    max-width: 1760px;
 }
 .panel-card {
     background: white;
@@ -20,54 +21,64 @@ body.dark-mode .panel-card {
     box-shadow: none;
     border: 1px solid #4a5568;
 }
-.meta-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+body.dark-mode #rider-debug-modal {
+    --bs-modal-bg: #2d3748;
+    --bs-modal-color: #f1f5f9;
+    --bs-modal-border-color: #4a5568;
+    --bs-modal-header-border-color: #4a5568;
+    --bs-modal-footer-border-color: #4a5568;
 }
-.meta-item--full {
-    grid-column: 1 / -1;
+body.dark-mode #rider-debug-modal code {
+    color: #bcd6f7;
 }
-.meta-label {
-    font-size: 0.8rem;
-    color: #6c757d;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+body.dark-mode #rider-debug-modal .nav-tabs {
+    --bs-nav-link-color: #bcd6f7;
+    --bs-nav-link-hover-color: #f1f5f9;
+    --bs-nav-tabs-border-color: #4a5568;
+    --bs-nav-tabs-link-active-bg: #253142;
+    --bs-nav-tabs-link-active-color: #f1f5f9;
+    --bs-nav-tabs-link-active-border-color: #4a5568;
 }
-.meta-value {
-    font-weight: 600;
+body.dark-mode #rider-debug-modal .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
 }
-/* Stat value background color classes */
-td.stat-value.range-low {
-    background-color: #6c757d !important;
-    box-shadow: inset 0 0 0 9999px #6c757d !important;
-    color: #ffffff !important;
+#rider-identifiers .object-attribute {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0;
+    min-height: 0;
+    border: 0;
 }
-td.stat-value.range-decent {
-    background-color: var(--brand-primary) !important;
-    box-shadow: inset 0 0 0 9999px var(--brand-primary) !important;
-    color: #ffffff !important;
+#rider-identifiers .attribute-inline-editor > summary svg {
+    order: 1;
 }
-td.stat-value.range-good {
-    background-color: #90ee90 !important;
-    box-shadow: inset 0 0 0 9999px #90ee90 !important;
-    color: #000000 !important;
+
+.rider-flag {
+    position: relative;
+    display: inline-block;
+    cursor: help;
 }
-td.stat-value.range-very-good {
-    background-color: #ffd700 !important;
-    box-shadow: inset 0 0 0 9999px #ffd700 !important;
-    color: #000000 !important;
+
+.rider-flag:hover::after,
+.rider-flag:focus-visible::after {
+    content: attr(aria-label);
+    position: absolute;
+    z-index: 2;
+    inset-inline-end: 0;
+    bottom: calc(100% + 0.25rem);
+    width: max-content;
+    max-width: 14rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    background: #212529;
+    color: #fff;
+    font-size: 0.875rem;
+    font-weight: 400;
+    text-align: start;
+    pointer-events: none;
 }
-td.stat-value.range-excellent {
-    background-color: #ff8c00 !important;
-    box-shadow: inset 0 0 0 9999px #ff8c00 !important;
-    color: #000000 !important;
-}
-td.stat-value.range-elite {
-    background-color: #dc3545 !important;
-    box-shadow: inset 0 0 0 9999px #dc3545 !important;
-    color: #ffffff !important;
-}
+
+{{ stat_value_styles() }}
 .stat-value {
     font-weight: 700;
 }
@@ -77,104 +88,211 @@ td.stat-value.range-elite {
     min-width: 36px;
     text-align: center;
 }
-body.dark-mode .meta-label {
-    color: #9ca3af;
-}
-@media (max-width: 768px) {
-    .meta-grid {
-        grid-template-columns: 1fr;
-    }
 
-    .meta-item--full {
-        grid-column: auto;
-    }
-}
 {% endblock %}
 
 {% block content %}
+{% from '_attribute_editor.html' import attribute_field, additional_attributes with context %}
+{% set pcs_status = rider.pcs_identity_status|default('unknown', true) %}
+{% set pcs_flags = {
+    'verified': ('🟢', 'PCS identity verified. DOB matches.'),
+    'failed': ('🔴', 'PCS identity error. The check failed.'),
+    'review': ('🟡', 'PCS identity needs review. A birth date is missing or the dates differ.'),
+    'unknown': ('🔴', 'PCS identity unknown. No check result is recorded.')
+} %}
+{% set pcs_flag = ('🟢', 'PCS identity verified by manual override.') if rider.pcs_identity_verified_override else pcs_flags.get(pcs_status, pcs_flags['unknown']) %}
+{% if not rider.first_cycling_id %}
+    {% set identity_flag = ('🔴', 'Identity error. Missing FirstCycling ID.') %}
+{% elif not rider.pcs_identity_verified_override and (pcs_status not in ('verified', 'review') or (rider.pcs_slug or '')|trim in ('', '0')) %}
+    {% set identity_flag = ('🔴', 'Identity unknown or PCS identity check failed.') %}
+{% elif rider.pcs_identity_verified_override or (pcs_status == 'verified' and (rider.pcs_slug or '')|trim not in ('', '0')) %}
+    {% set identity_flag = ('🟢', 'Identity verified. FirstCycling ID exists and PCS identity is verified.') %}
+{% else %}
+    {% set identity_flag = ('🟡', 'Identity needs review. A birth date is missing or the dates differ.') %}
+{% endif %}
+{% set pcs_activity_values = dict(pcs_activity|default([])) %}
+{% set activity_days = pcs_activity_values.get('Days since last race') %}
+{% if activity_days is none or not pcs_activity_values.get('Last PCS sync (UTC)') %}
+    {% set activity_flag = ('🔴', 'Latest activity unknown. No latest race found or activity has not been checked.') %}
+{% elif activity_days > 360 %}
+    {% set activity_flag = ('🔴', 'Latest activity overdue. Last race was more than 360 days ago.') %}
+{% elif activity_days >= 200 %}
+    {% set activity_flag = ('🟡', 'Latest activity warning. Last race was 200–360 days ago.') %}
+{% else %}
+    {% set activity_flag = ('🟢', 'Recent activity. Last race was less than 200 days ago.') %}
+{% endif %}
+{% if identity_flag[0] == '🔴' or activity_flag[0] == '🔴' %}
+    {% set overall_flag = ('🔴', 'Overall status: identity is unknown or has an error, or latest activity is missing, unchecked or overdue.') %}
+{% elif identity_flag[0] == '🟡' or activity_flag[0] == '🟡' %}
+    {% set overall_flag = ('🟡', 'Overall status: identity or latest activity needs review.') %}
+{% else %}
+    {% set overall_flag = ('🟢', 'Overall status: identity is verified and activity is recent.') %}
+{% endif %}
+{% set firstcycling_display %}{% if rider.first_cycling_id %}<a href="https://firstcycling.com/rider.php?r={{ rider.first_cycling_id }}" target="_blank" rel="noopener noreferrer">{{ rider.first_cycling_id }}</a>{% else %}-{% endif %}{% endset %}
+{% set pcs_display %}{% if pcs_slug_display %}<a href="https://www.procyclingstats.com/rider/{{ pcs_slug_display }}" target="_blank" rel="noopener noreferrer">{{ pcs_slug_display }}</a>{% else %}-{% endif %}{% endset %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1">
-            {{ rider.name or ((rider.first_name or '') ~ ' ' ~ (rider.last_name or ''))|trim or ('Rider #' ~ rider.rider_id) }}
+        <h2 class="mb-1 d-flex align-items-center gap-2" id="rider-name-title">
+            <span>{{ (((rider.first_name or '')|trim) ~ ' ' ~ ((rider.last_name or '')|trim))|trim or ('Rider #' ~ rider.cyclist_id) }}</span>
+            <span class="rider-flag" id="rider-overall-flag" role="img" aria-label="{{ overall_flag[1] }}" tabindex="0">{{ overall_flag[0] }}</span>
+            {% if rider.has_pending_approval %}<span class="rider-flag" id="rider-pending-approval-flag" role="img" aria-label="Pending approval. This rider has stat or attribute changes awaiting approval." tabindex="0">⏳</span>{% endif %}
         </h2>
-        <p class="text-muted mb-0">Rider profile and attributes.</p>
-    </div>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="{{ back_url }}">{{ back_label }}</a>
-    </div>
-</div>
-
-<div class="panel-card card">
-    <div class="card-body">
-        <h5 class="mb-3">Rider Attributes</h5>
-        <div class="meta-grid">
-            <div class="meta-item--full">
-                <div class="meta-label">Team</div>
-                <div class="meta-value">
-                    {% if rider.team_id %}
-                        {% if team %}
-                            <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}">
-                                {{ team.team_name or rider.team_name or ('Team #' ~ rider.team_id) }}
-                            </a>
-                        {% else %}
-                            {{ rider.team_name or ('Team #' ~ rider.team_id) }}
-                        {% endif %}
-                    {% else %}
-                        {{ rider.team_name or '-' }}
-                    {% endif %}
-                </div>
+        <div class="text-muted mb-0 d-flex flex-wrap gap-2 column-gap-4" id="rider-identifiers">
+            <span>Rider Id: <strong>{{ rider.cyclist_id }}</strong></span>
+            <div class="d-flex align-items-baseline gap-2" id="rider-firstcycling-identifier">
+                {% if not rider.first_cycling_id %}<span class="rider-flag" role="img" aria-label="Missing FirstCycling ID" tabindex="0">🔴</span>{% endif %}
+                {{ attribute_field('first_cycling_id', 'FirstCycling', firstcycling_display) }}
             </div>
-            <div>
-                <div class="meta-label">Nation</div>
-                <div class="meta-value">
-                    {% if rider.nation_name %}
-                        {{ rider.nation_name }}
-                    {% elif rider.region_id %}
-                        Region #{{ rider.region_id }}
-                    {% else %}
-                        -
-                    {% endif %}
-                </div>
-            </div>
-            <div>
-                <div class="meta-label">Birth Date</div>
-                <div class="meta-value">{{ rider.birth_date_display or '-' }}</div>
-            </div>
-            <div>
-                <div class="meta-label">Height</div>
-                <div class="meta-value">
-                    {% if rider_measurements.get('size_cm') is not none %}
-                    {{ rider_measurements.get('size_cm') }}
-                    {% else %}
-                    -
-                    {% endif %}
-                </div>
-            </div>
-            <div>
-                <div class="meta-label">Weight</div>
-                <div class="meta-value">
-                    {% if rider_measurements.get('weight_kg') is not none %}
-                    {{ rider_measurements.get('weight_kg') }}
-                    {% else %}
-                    -
-                    {% endif %}
-                </div>
-            </div>
-            <div class="meta-item--full">
-                <div class="meta-label">CDB Cyclist ID</div>
-                <div class="meta-value">{{ rider.cyclist_id }}</div>
-            </div>
-            <div class="meta-item--full">
-                <div class="meta-label">FirstCycling Rider ID</div>
-                <div class="meta-value">{{ rider.first_cycling_id or '-' }}</div>
+            <div class="d-flex align-items-baseline gap-2" id="rider-pcs-identifier">
+                <span class="rider-flag" role="img" aria-label="{{ pcs_flag[1] }}" tabindex="0">{{ pcs_flag[0] }}</span>
+                {{ attribute_field('pcs_slug', 'PCS', pcs_display) }}
             </div>
         </div>
     </div>
 </div>
 
-<div class="panel-card card">
+<div class="modal fade" id="rider-debug-modal" tabindex="-1" aria-labelledby="rider-debug-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title h5" id="rider-debug-title">Rider {{ rider.cyclist_id }} · {{ selected_namespace.slug }}</h3>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                {% set debug_sources = rider_debug_sources|default({'CDB': rider.debug_columns|default({})}) %}
+                <nav class="nav nav-tabs mb-3" role="tablist" aria-label="Rider attribute tables">
+                    {% for label in debug_sources %}
+                    <button class="nav-link{% if loop.first %} active{% endif %}" id="rider-debug-{{ label|lower }}-tab" type="button" role="tab"
+                            data-bs-toggle="tab" data-bs-target="#rider-debug-{{ label|lower }}" aria-controls="rider-debug-{{ label|lower }}"
+                            aria-selected="{{ 'true' if loop.first else 'false' }}">{{ label }}</button>
+                    {% endfor %}
+                </nav>
+                <div class="tab-content">
+                    {% for label, columns in debug_sources.items() %}
+                    <div class="tab-pane fade{% if loop.first %} show active{% endif %}" id="rider-debug-{{ label|lower }}" role="tabpanel" aria-labelledby="rider-debug-{{ label|lower }}-tab" tabindex="0">
+                        <table class="table table-sm"{% if loop.first %} id="rider-debug-table"{% endif %}>
+                            <thead><tr><th scope="col">Column</th><th scope="col">Value</th></tr></thead>
+                            <tbody>
+                                {% for column, value in columns.items()|sort %}
+                                <tr><th scope="row">{{ column }}</th><td class="text-break"><code>{{ value|tojson }}</code></td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="panel-card card" id="rider-details" aria-labelledby="rider-attributes-title rider-identity-title rider-results-summary-title">
     <div class="card-body">
-        <h5 class="mb-3">Rider Stats</h5>
+        <div class="row g-4">
+            <div class="col-12" id="rider-attributes">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+                    <h3 class="h5 mb-0" id="rider-attributes-title">Attributes</h3>
+                    <div class="d-flex align-items-center gap-2" id="rider-data-actions">
+                    {% if can_fetch_data %}
+                    <form method="post" action="{{ url_for('web.fetch_rider_data', namespace_slug=selected_namespace.slug, rider_id=rider.cyclist_id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-success">Fetch Data</button>
+                    </form>
+                    {% endif %}
+                    <button class="btn btn-secondary text-white" type="button" data-bs-toggle="modal" data-bs-target="#rider-debug-modal" aria-label="Debug rider attributes" title="Debug rider attributes">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="m8 2 2 2m6-2-2 2M9 7V6a3 3 0 0 1 6 0v1M12 11v9"/>
+                            <path d="M18 11a6 6 0 0 0-12 0v3a6 6 0 0 0 12 0v-3ZM2 13h4m12 0h4M3 5l4 4m10 0 4-4M3 21l4-4m10 0 4 4"/>
+                        </svg>
+                    </button>
+                    </div>
+                </div>
+                <div class="object-attributes">
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">Team</div>
+                        <div class="object-attribute-value">
+                            {% if rider.team_id %}
+                                {% if team %}
+                                    <a href="{{ url_for('web.team_detail', team_id=rider.team_id) }}">
+                                        {{ team.team_name or rider.team_name or ('Team #' ~ rider.team_id) }}
+                                    </a>
+                                {% else %}
+                                    {{ rider.team_name or ('Team #' ~ rider.team_id) }}
+                                {% endif %}
+                            {% else %}
+                                {{ rider.team_name or '-' }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">Nation</div>
+                        <div class="object-attribute-value">
+                            {% if rider.nation_name %}
+                                {{ rider.nation_name }}
+                            {% elif rider.region_id %}
+                                Region #{{ rider.region_id }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </div>
+                    </div>
+                    {{ attribute_field('birth_date', 'Birth Date', rider.birth_date_display or '-') }}
+                    {{ attribute_field('size_cm', 'Height', (rider_measurements.get('size_cm') ~ ' CM') if rider_measurements.get('size_cm') is not none else '-') }}
+                    {{ attribute_field('weight_kg', 'Weight', (rider_measurements.get('weight_kg') ~ ' KG') if rider_measurements.get('weight_kg') is not none else '-') }}
+                    {{ additional_attributes(['birth_date', 'pcs_slug', 'pcs_identity_verified_override', 'size_cm', 'weight_kg', 'id', 'cyclist_id', 'first_cycling_id']) }}
+                </div>
+            </div>
+            <div class="col-12" id="rider-identity">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+                    <h3 class="h5 mb-0 d-flex align-items-center gap-2" id="rider-identity-title">Identity
+                        <span class="rider-flag" id="rider-identity-flag" role="img" aria-label="{{ identity_flag[1] }}" tabindex="0">{{ identity_flag[0] }}</span>
+                    </h3>
+                </div>
+                {% set pcs_status_labels = {'verified': 'Verified', 'review': 'Needs review', 'failed': 'Error', 'unknown': 'Unknown'} %}
+                <div class="object-attributes">
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">PCS Identity Status</div>
+                        <div class="object-attribute-value">{{ 'Verified by override' if rider.pcs_identity_verified_override else pcs_status_labels.get(pcs_status, 'Unknown') }}</div>
+                    </div>
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">PCS Date of Birth</div>
+                        <div class="object-attribute-value">{{ rider.pcs_birth_date or 'Unknown' }}</div>
+                    </div>
+                    {{ attribute_field('pcs_identity_verified_override', 'PCS Identity Verified Override', 'Yes' if rider.pcs_identity_verified_override else 'No') }}
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">Last PCS sync (UTC)</div>
+                        <div class="object-attribute-value">{{ pcs_activity_values.get('Last PCS sync (UTC)') or '—' }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12" id="rider-results-summary">
+                <h3 class="h5 mb-3 d-flex align-items-center gap-2" id="rider-results-summary-title">Latest Activity
+                    <span class="rider-flag" id="rider-activity-flag" role="img" aria-label="{{ activity_flag[1] }}" tabindex="0">{{ activity_flag[0] }}</span>
+                </h3>
+                {% if pcs_activity %}
+                <div class="object-attributes" id="rider-pcs-activity">
+                    {% for label, value in pcs_activity if label != 'Last PCS sync (UTC)' %}
+                    <div class="object-attribute">
+                        <div class="object-attribute-label">{{ label }}</div>
+                        <div class="object-attribute-value">{{ value if value is not none and value != '' else '—' }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">No PCS racing activity recorded for this rider.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="panel-card card" id="rider-stats" aria-labelledby="rider-stats-title">
+    <div class="card-body">
+        {% block rider_stats_section %}
+        {% if not profile_context %}<h3 class="h5 mb-3" id="rider-stats-title">Stats</h3>{% endif %}
         {% if selected_namespace and rider_stats %}
         <div class="table-wrapper">
             <table class="table table-sm table-striped align-middle mb-0">
@@ -189,7 +307,7 @@ body.dark-mode .meta-label {
                     <tr>
                         {% for stat_key in stat_fields %}
                         {% set stat_value = rider_stats.get(stat_key) %}
-                        <td class="stat-value stat-col{% if stat_value is not none %}{% if stat_value <= 65 %} range-low{% elif stat_value <= 69 %} range-decent{% elif stat_value <= 73 %} range-good{% elif stat_value <= 77 %} range-very-good{% elif stat_value <= 81 %} range-excellent{% else %} range-elite{% endif %}{% endif %}" data-stat-value="{{ stat_value if stat_value is not none else '' }}">
+                        <td class="stat-value stat-col {{ stat_value_range(stat_value) }}" data-stat-value="{{ stat_value if stat_value is not none else '' }}">
                             {{ stat_value if stat_value is not none else '-' }}
                         </td>
                         {% endfor %}
@@ -202,67 +320,137 @@ body.dark-mode .meta-label {
         {% else %}
         <p class="text-muted mb-0">Select a namespace to view rider stats.</p>
         {% endif %}
+        {% endblock %}
     </div>
-</div>
+</section>
 
-<div class="panel-card card">
+<nav class="nav nav-pills nav-subtabs mb-3" role="tablist" aria-label="Rider details">
+    <button class="nav-link active" id="rider-review-tab" data-bs-toggle="tab" data-bs-target="#rider-review" type="button" role="tab" aria-controls="rider-review" aria-selected="true">Review ({{ pending_stats|length + pending_attribute_changes|length }})</button>
+    <button class="nav-link" id="rider-results-tab" data-bs-toggle="tab" data-bs-target="#rider-results" type="button" role="tab" aria-controls="rider-results" aria-selected="false">Results</button>
+    {% if rider_external_calls is not none %}
+    <button class="nav-link" id="rider-external-calls-tab" data-bs-toggle="tab" data-bs-target="#rider-external-calls" type="button" role="tab" aria-controls="rider-external-calls" aria-selected="false">External Calls</button>
+    {% endif %}
+</nav>
+<div class="tab-content">
+<section class="tab-pane fade show active panel-card card" id="rider-review" role="tabpanel" aria-labelledby="rider-review-tab" tabindex="0">
     <div class="card-body">
-        <h5 class="mb-3">Stat Edits</h5>
-        {% if rider_stat_edits %}
-        <div class="table-wrapper">
-            <table class="table table-sm table-hover align-middle mb-0">
+        <h3 class="h5 mb-3" id="rider-review-title">Review ({{ pending_stats|length + pending_attribute_changes|length }})</h3>
+        <div id="rider-pending-reviews">
+        {% if pending_stats or pending_attribute_changes %}
+        <h4 class="h6">Reviews Needed</h4>
+        {% include '_rider_pending_reviews.html' %}
+        {% else %}
+        <p class="text-muted mb-0">No reviews needed</p>
+        {% endif %}
+        </div>
+        <div id="rider-history" class="mt-4" aria-labelledby="rider-history-title">
+            <h4 class="h6 mb-3" id="rider-history-title">History</h4>
+            {% with changes=rider_history, object_type='riders', hide_object=true %}
+            {% include '_attribute_history_table.html' %}
+            {% endwith %}
+            {% if attribute_history_at_limit %}<p class="text-muted">Showing the latest 200 attribute events.</p>{% endif %}
+        </div>
+    </div>
+</section>
+
+<section class="tab-pane fade panel-card card" id="rider-results" role="tabpanel" aria-labelledby="rider-results-tab" tabindex="0">
+    <div class="card-body">
+        <h3 class="h5 mb-3" id="rider-results-title">Results</h3>
+        <h4 class="h6">FirstCycling results</h4>
+        {% if rider_results %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-top mb-0">
+                <caption>FirstCycling race and stage results</caption>
                 <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Type</th>
-                        <th class="stat-col">Stat</th>
-                        <th class="stat-col">Original</th>
-                        <th class="stat-col">Final</th>
-                        <th class="stat-col">Delta</th>
-                        <th>Approval</th>
-                        <th>Release</th>
-                    </tr>
+                    <tr><th scope="col">Date</th><th scope="col">Race</th><th scope="col">Position</th><th scope="col">Time</th></tr>
                 </thead>
                 <tbody>
-                    {% for edit in rider_stat_edits %}
+                    {% for entry in rider_results %}
+                    {% set race = entry.race %}
                     <tr>
+                        <td class="text-nowrap">{{ entry.date or race.season_year }}</td>
                         <td>
-                            {% if edit.source.url %}
-                            <a href="{{ edit.source.url }}" class="text-reset text-decoration-none">
-                                {{ edit.source.label }}
-                            </a>
+                            {% if entry.stages %}
+                            <details>
+                                <summary>{{ race.name or ('Race #' ~ race.race_id) }}</summary>
+                                <div class="table-responsive mt-2">
+                                    <table class="table table-sm align-middle mb-0">
+                                        <caption>Stage results for {{ race.name or ('Race #' ~ race.race_id) }}</caption>
+                                        <thead>
+                                            <tr><th scope="col">Date</th><th scope="col">Stage</th><th scope="col">Position</th><th scope="col">Time</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for row in entry.stages %}
+                                            <tr>
+                                                <td class="text-nowrap">{{ row.date or race.season_year }}</td>
+                                                <td>{{ row.stage.stage_name or ('Stage ' ~ (row.stage.stage_number if row.stage.stage_number is not none else row.stage.stage_id or row.stage.id)) }}</td>
+                                                <td>{{ row.result.stage_position if row.result.stage_position is not none else '—' }}</td>
+                                                <td>{{ row.result.stage_time or '—' }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
                             {% else %}
-                            {{ edit.source.label }}
+                            {{ race.name or ('Race #' ~ race.race_id) }}
                             {% endif %}
                         </td>
-                        <td>{{ edit.source.type }}</td>
-                        <td class="stat-col">{{ edit.stat }}</td>
-                        <td class="stat-col">{{ edit.original_value }}</td>
-                        <td class="stat-col">{{ edit.final_value }}</td>
-                        <td class="stat-col">
-                            {% if edit.delta_value is not none and edit.delta_value > 0 %}+{% endif %}{{ edit.delta_value }}
-                        </td>
-                        <td>
-                            <span class="badge {% if edit.is_approved %}bg-success{% else %}bg-warning text-dark{% endif %}">
-                                {{ edit.approval_status }}
-                            </span>
-                        </td>
-                        <td>
-                            <span class="badge {% if edit.is_released %}bg-primary{% else %}bg-secondary{% endif %}">
-                                {{ edit.release_status }}
-                            </span>
-                        </td>
+                        <td>{{ entry.result.overall_position if entry.result.overall_position is not none else '—' }}</td>
+                        <td>{{ entry.result.overall_time or '—' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-        {% elif selected_namespace %}
-        <p class="text-muted mb-0">No stat edits found for this rider.</p>
         {% else %}
-        <p class="text-muted mb-0">Select a namespace to view stat edits.</p>
+        <p class="text-muted mb-0">{{ 'No FirstCycling results recorded.' if rider.first_cycling_id else 'No FirstCycling ID is linked to this rider.' }}</p>
         {% endif %}
     </div>
+</section>
+
+{% if rider_external_calls is not none %}
+<section class="tab-pane fade panel-card card" id="rider-external-calls" role="tabpanel" aria-labelledby="rider-external-calls-tab" tabindex="0">
+    <div class="card-body">
+        <h3 class="h5 mb-3" id="rider-external-calls-title">External Calls</h3>
+        {% if rider_external_calls %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0" aria-labelledby="rider-external-calls-title">
+                <thead>
+                    <tr>
+                        <th scope="col">Task</th>
+                        <th scope="col">Created (UTC)</th>
+                        <th scope="col">Provider</th>
+                        <th scope="col">Request</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Outcome</th>
+                        <th scope="col">HTTP Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in rider_external_calls %}
+                    <tr>
+                        <th scope="row"><a href="{{ url_for('web.external_call_task_detail', group_id=task.task_group_id, task_id=task.id) }}">#{{ task.id }}</a></th>
+                        <td class="text-nowrap">{{ task.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>{{ task.provider }}</td>
+                        <td>
+                            <code>{{ task.endpoint }}</code>
+                            {% if task.request_url %}<div class="small text-break">{{ task.request_url }}</div>{% endif %}
+                        </td>
+                        <td>{{ task.status|replace('_', ' ')|capitalize }}</td>
+                        <td>{{ task.outcome|replace('_', ' ')|capitalize if task.outcome else '—' }}</td>
+                        <td>{{ task.http_status if task.http_status is not none else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No external calls recorded for this rider.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
 </div>
 {% endblock %}
 

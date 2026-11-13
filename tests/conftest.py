@@ -28,6 +28,7 @@ def app(tmp_path_factory):
         TESTING = True
         SQLALCHEMY_DATABASE_URI = database_url
         SQLALCHEMY_BINDS = {"main": database_url}
+        PROVISIONER_DATABASE_URL = os.environ["PROVISIONER_DATABASE_URL"]
         WTF_CSRF_ENABLED = False
         BCRYPT_LOG_ROUNDS = 4
 

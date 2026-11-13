@@ -12,12 +12,36 @@
             <form method="POST" action="{{ url_for('web.admin_namespace_create') }}" enctype="multipart/form-data">
                 {{ form.hidden_tag() }}
 
+                <div class="mb-3">
+                    {{ form.creation_method.label(class="form-label") }}
+                    {{ form.creation_method(class="form-select") }}
+                    {% for error in form.creation_method.errors %}<div class="text-danger">{{ error }}</div>{% endfor %}
+                </div>
+                <div id="clone-options" {% if form.creation_method.data != 'clone' %}hidden{% endif %}>
+                    <div class="mb-3">
+                        {{ form.source_namespace.label(class="form-label") }}
+                        {{ form.source_namespace(class="form-select") }}
+                        {% for error in form.source_namespace.errors %}<div class="text-danger">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="clone-required" checked disabled>
+                        <label class="form-check-label" for="clone-required">Copy Latest CDB Release and CDB Mapped tables</label>
+                    </div>
+                    <fieldset class="mb-3">
+                        <legend class="fs-6">Copy Change History for:</legend>
+                        {% for field in [form.copy_rider_stats, form.copy_rider_attributes, form.copy_teams, form.copy_races] %}
+                        <div class="form-check">{{ field(class="form-check-input") }} {{ field.label(class="form-check-label") }}</div>
+                        {% endfor %}
+                    </fieldset>
+                    <p class="text-muted">Uses the latest published release, including its mapped tables and release files. Copies completed history through publication; pending proposals and unreleased stat work stay in the source. Select the source’s PCM version.</p>
+                </div>
+
                 <div class="row">
                     <div class="col-md-4 mb-3">
                         <label for="{{ form.name.id }}" class="form-label">
                             {{ form.name.label.text }} <span class="text-danger">*</span>
                         </label>
-                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="e.g., WDB") }}
+                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else "")) }}
                         {% if form.name.errors %}
                             <div class="invalid-feedback">
                                 {{ form.name.errors[0] }}
@@ -26,7 +50,7 @@
                         <small class="form-text text-muted">User-friendly display name</small>
                     </div>
 
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-2 mb-3">
                         <label for="{{ form.database_year.id }}" class="form-label">
                             Season
                         </label>
@@ -34,12 +58,28 @@
                         <small class="form-text text-muted">Database season year</small>
                     </div>
 
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-2 mb-3">
                         <label for="{{ form.gender.id }}" class="form-label">
                             {{ form.gender.label.text }}
                         </label>
                         {{ form.gender(class="form-select") }}
                         <small class="form-text text-muted">Database season gender</small>
+                    </div>
+
+                    <div class="col-md-2 mb-3">
+                        <label for="{{ form.pcm_version.id }}" class="form-label">
+                            {{ form.pcm_version.label.text }}
+                        </label>
+                        {{ form.pcm_version(class="form-select") }}
+                        <small class="form-text text-muted">Game version</small>
+                    </div>
+
+                    <div class="col-md-2 mb-3">
+                        <label for="{{ form.status.id }}" class="form-label">
+                            {{ form.status.label.text }}
+                        </label>
+                        {{ form.status(class="form-select") }}
+                        <small class="form-text text-muted">Initial status</small>
                     </div>
                 </div>
 
@@ -48,13 +88,13 @@
                         <label for="{{ form.slug.id }}" class="form-label">
                             {{ form.slug.label.text }} <span class="text-danger">*</span>
                         </label>
-                        {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-2024", readonly=true) }}
+                        {{ form.slug(class="form-control" + (" is-invalid" if form.slug.errors else ""), placeholder="e.g., wdb-men", readonly=true) }}
                         {% if form.slug.errors %}
                             <div class="invalid-feedback">
                                 {{ form.slug.errors[0] }}
                             </div>
                         {% endif %}
-                        <small class="form-text text-muted">Auto-generated from Name, Season, and Gender.</small>
+                        <small class="form-text text-muted">Auto-generated from Name and Gender. Stays the same when the season or PCM version changes.</small>
                     </div>
                 </div>
 
@@ -65,43 +105,62 @@
                     {{ form.description(class="form-control", rows=3, placeholder="Brief description of this namespace...") }}
                 </div>
 
-                <div class="mb-3">
+                <div class="mb-3" id="cdb-upload-options" {% if form.creation_method.data == 'clone' %}hidden{% endif %}>
                     <label for="{{ form.cdb_file.id }}" class="form-label">
                         {{ form.cdb_file.label.text }}
                     </label>
-                    {{ form.cdb_file(class="form-control", accept=".sqlite") }}
+                    {{ form.cdb_file(class="form-control", accept=".cdb,.sqlite") }}
                     {% if form.cdb_file.errors %}
                         <div class="invalid-feedback d-block">
                             {{ form.cdb_file.errors[0] }}
                         </div>
                     {% endif %}
-                    <small class="form-text text-muted">Upload a SQLite CDB database file (optional). File will be copied to the namespace import directory. Only .sqlite files are accepted.</small>
-                </div>
-
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label for="{{ form.pcm_version.id }}" class="form-label">
-                            {{ form.pcm_version.label.text }}
-                        </label>
-                        {{ form.pcm_version(class="form-select") }}
-                        <small class="form-text text-muted">Game version</small>
-                    </div>
-
-                    <div class="col-md-6 mb-3">
-                        <label for="{{ form.status.id }}" class="form-label">
-                            {{ form.status.label.text }}
-                        </label>
-                        {{ form.status(class="form-select") }}
-                        <small class="form-text text-muted">Initial status</small>
-                    </div>
+                    <small class="form-text text-muted">Upload a PCM .cdb file or an already converted .sqlite file (optional). CDB files are converted locally before import; the original file is preserved.</small>
                 </div>
 
                 <div class="d-flex justify-content-between">
                     <a href="{{ url_for('web.admin_namespaces') }}" class="btn btn-secondary">
                         Cancel
                     </a>
+                    <div class="d-flex gap-2">
+                    {% if clone_plan is defined %}
+                    <button class="btn btn-secondary" type="submit">Preview again</button>
+                    <button class="btn btn-primary" type="submit" name="confirm_clone" value="yes">Confirm and clone namespace</button>
+                    {% elif initial_analysis is defined %}
+                    <button class="btn btn-secondary" type="submit" name="analyze_import" value="yes">Analyze another file</button>
+                    <button class="btn btn-primary" type="submit" name="confirm_import" value="yes" {% if initial_analysis.errors %}disabled{% endif %}>Confirm and create namespace</button>
+                    {% else %}
                     {{ form.submit(class="btn btn-primary") }}
+                    {% endif %}
+                    </div>
                 </div>
+                {% if clone_plan is defined %}
+                <section class="mt-4" aria-labelledby="clone-preview-title">
+                    <h5 id="clone-preview-title">Namespace clone preview</h5>
+                    <p>Release {{ clone_plan.release.version }} — published {{ clone_plan.release.published_at }}.</p>
+                    <p>The clone starts with this release’s data. History is copied without applying it again.</p>
+                    <table class="table">
+                        <thead><tr><th>Change history</th><th>Records to copy</th></tr></thead>
+                        <tbody>{% for category, count in clone_plan.history_summary.items() %}
+                            <tr><td>{{ category }}</td><td>{{ '{:,}'.format(count) }}</td></tr>
+                        {% else %}<tr><td colspan="2">No change history selected.</td></tr>{% endfor %}</tbody>
+                    </table>
+                    <p>{{ clone_plan.files|length }} release files will be copied into the new namespace.</p>
+                </section>
+                {% endif %}
+                {% if initial_analysis is defined %}
+                <section class="mt-4" aria-labelledby="initial-import-plan">
+                    <h5 id="initial-import-plan">Initial CDB import plan</h5>
+                    <p>Review the record counts before creating this namespace.</p>
+                    <table class="table">
+                        <thead><tr><th>Table</th><th>Records to import</th></tr></thead>
+                        <tbody>{% for table, count in initial_analysis.tables.items() %}
+                            <tr><td>{{ table }}</td><td>{{ '{:,}'.format(count) }}</td></tr>
+                        {% endfor %}</tbody>
+                    </table>
+                    {% for error in initial_analysis.errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+                </section>
+                {% endif %}
             </form>
         </div>
     </div>
@@ -118,14 +177,14 @@ function slugifyPart(value) {
 
 function buildNamespaceSlug() {
     const nameValue = document.getElementById('{{ form.name.id }}').value;
-    const yearValue = document.getElementById('{{ form.database_year.id }}').value;
+
     const genderValue = document.getElementById('{{ form.gender.id }}').value;
 
     const base = slugifyPart(nameValue);
-    const year = slugifyPart(yearValue);
+
     const gender = slugifyPart(genderValue);
 
-    return [base, year, gender].filter(Boolean).join('-');
+    return [base, gender].filter(Boolean).join('-');
 }
 
 function maybeAutoUpdateSlug() {
@@ -134,10 +193,28 @@ function maybeAutoUpdateSlug() {
 }
 
 document.getElementById('{{ form.name.id }}').addEventListener('input', maybeAutoUpdateSlug);
-document.getElementById('{{ form.database_year.id }}').addEventListener('input', maybeAutoUpdateSlug);
+
 document.getElementById('{{ form.gender.id }}').addEventListener('change', maybeAutoUpdateSlug);
 
 // Initialize slug on first render.
 maybeAutoUpdateSlug();
+
+const cdbInput = document.getElementById('{{ form.cdb_file.id }}');
+const createButton = document.getElementById('{{ form.submit.id }}');
+const creationMethod = document.getElementById('{{ form.creation_method.id }}');
+function updateCreationMethod() {
+    const cloning = creationMethod.value === 'clone';
+    document.getElementById('clone-options').hidden = !cloning;
+    document.getElementById('cdb-upload-options').hidden = cloning;
+    cdbInput.disabled = cloning;
+    if (createButton) createButton.value = cloning ? 'Preview Clone' : (cdbInput.files.length ? 'Analyze CDB' : 'Create Namespace');
+}
+creationMethod.addEventListener('change', updateCreationMethod);
+updateCreationMethod();
+if (createButton) {
+    cdbInput.addEventListener('change', function() {
+        createButton.value = this.files.length ? 'Analyze CDB' : 'Create Namespace';
+    });
+}
 </script>
 {% endblock %}

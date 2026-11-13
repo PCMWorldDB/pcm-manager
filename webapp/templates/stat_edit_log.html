@@ -31,9 +31,9 @@
         {% endif %}
         {% if selected_namespace and (log_page > 1 or log_has_next) %}
         <nav aria-label="Stat edit log pages" class="d-flex align-items-center gap-3 mt-3">
-            {% if log_page > 1 %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', log_page=log_page - 1) }}">Previous</a>{% endif %}
+            {% if log_page > 1 %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stat_edit_log', log_page=log_page - 1) }}">Previous</a>{% endif %}
             <span>Page {{ log_page }}</span>
-            {% if log_has_next %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stats_editor', log_page=log_page + 1) }}">Next</a>{% endif %}
+            {% if log_has_next %}<a class="btn btn-outline-secondary" href="{{ url_for('web.stat_edit_log', log_page=log_page + 1) }}">Next</a>{% endif %}
         </nav>
         {% endif %}
     </div>

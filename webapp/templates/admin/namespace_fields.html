@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Field configuration · {{ namespace.name }}{% endblock %}
+{% block content %}
+<div class="container mt-4">
+    <a href="{{ url_for('web.admin_namespace_detail', namespace_id=namespace.id) }}">← {{ namespace.name }}</a>
+    <h1 class="h4 mt-3">Object field configuration</h1>
+    <p>Settings apply to this namespace. Field permissions are assigned to roles by resource slug.</p>
+    <nav class="nav nav-tabs mb-3" aria-label="Object">
+        {% for object in objects %}
+        <a class="nav-link{% if object == object_name %} active{% endif %}" {% if object == object_name %}aria-current="page"{% endif %}
+           href="{{ url_for('web.admin_namespace_fields', namespace_id=namespace.id, object=object) }}">{{ object|title }}</a>
+        {% endfor %}
+    </nav>
+    {% if not fields %}
+    <p class="text-muted">Field configuration has yet to be installed for this namespace.</p>
+    {% else %}
+    <div class="table-responsive">
+    <table class="table table-sm align-middle">
+        <thead><tr><th scope="col">Column</th><th scope="col">Resource slug</th><th scope="col">Mapped to CDB</th>
+        <th scope="col">CDB source</th><th scope="col">Import policy</th><th scope="col">Import NULLs</th>
+        <th scope="col">Editable</th><th scope="col">Requires approval</th>{% if can_update %}<th scope="col">Action</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for field in fields %}
+        {% set form = 'field-' ~ field.name %}
+        {% set writable = can_update and field.name != 'id' %}
+        <tr>
+            <th scope="row">{{ field.name }}</th>
+            <td><code>{{ field.slug }}</code></td>
+            <td><input type="checkbox" class="form-check-input" form="{{ form }}" name="is_mapped_to_cdb" value="1" aria-label="Map {{ field.name }} to CDB" {% if field.is_mapped_to_cdb %}checked{% endif %} {% if not writable %}disabled{% endif %}></td>
+            <td><input class="form-control form-control-sm" form="{{ form }}" name="cdb_source" maxlength="255" value="{{ field.cdb_source or '' }}" aria-label="{{ field.name }} CDB source" {% if not writable %}disabled{% endif %}></td>
+            <td>
+                <select class="form-select form-select-sm" form="{{ form }}" name="cdb_source_import_policy" aria-label="{{ field.name }} import policy" {% if not writable %}disabled{% endif %}>
+                    {% for policy in (('identity',) if field.name == 'id' else import_policies) %}
+                    <option {% if policy == field.cdb_source_import_policy %}selected{% endif %}>{{ policy }}</option>
+                    {% endfor %}
+                </select>
+            </td>
+            <td>
+                <select class="form-select form-select-sm" form="{{ form }}" name="cdb_source_import_null_handling" aria-label="{{ field.name }} import NULL handling" {% if not writable %}disabled{% endif %}>
+                    {% for policy in null_policies %}
+                    <option {% if policy == field.cdb_source_import_null_handling %}selected{% endif %}>{{ policy }}</option>
+                    {% endfor %}
+                </select>
+            </td>
+            {% set editing_supported = writable and can_edit_column(object_name, field.name) %}
+            <td><input type="checkbox" class="form-check-input" form="{{ form }}" name="is_editable" value="1" aria-label="Allow edits to {{ field.name }}" {% if field.is_editable %}checked{% endif %} {% if not editing_supported %}disabled{% endif %}></td>
+            <td><input type="checkbox" class="form-check-input" form="{{ form }}" name="is_require_approval" value="1" aria-label="Require approval for {{ field.name }}" {% if field.is_require_approval %}checked{% endif %} {% if not editing_supported %}disabled{% endif %}></td>
+            {% if can_update %}<td>
+                {% if writable %}
+                <form id="{{ form }}" method="post" action="{{ url_for('web.admin_namespace_fields', namespace_id=namespace.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="object" value="{{ object_name }}">
+                    <input type="hidden" name="name" value="{{ field.name }}">
+                    <button class="btn btn-sm btn-primary" aria-label="Save {{ field.name }}">Save</button>
+                </form>
+                {% endif %}
+            </td>{% endif %}
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

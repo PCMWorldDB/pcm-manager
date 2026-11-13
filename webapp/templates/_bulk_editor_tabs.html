@@ -1,0 +1,9 @@
+<div class="mb-3">
+    <h2 class="mb-1">Bulk Editor</h2>
+    <p class="text-muted mb-0">Make changes to rider stats</p>
+</div>
+{% set editor_list_id = stat_list.id if stat_list is defined else request.args.get('list_id') %}
+<nav class="nav nav-tabs mb-3" aria-label="Bulk Editor sections">
+    <a class="nav-link {{ 'active' if bulk_tab == 'lists' else '' }}" href="{{ url_for('web.bulk_editor', tab='lists', list_id=editor_list_id) }}">Lists</a>
+    <a class="nav-link {{ 'active' if bulk_tab == 'editor' else '' }}" href="{{ url_for('web.bulk_editor', tab='editor', list_id=editor_list_id) }}">Editor</a>
+</nav>

@@ -1,35 +1,18 @@
-# FirstCycling
+# FirstCycling Activity Monitor integration
 
-`FirstCyclingClient` fetches FirstCycling API data and synchronizes races, stages,
-results, teams, and riders into the main database. Background sync jobs in
-`webapp/tasks.py` use this client.
+`activity_profile.py` is a pure, offline normalizer for an already obtained
+FirstCycling rider JSON payload containing `description` and `allResults`. It
+does not call FirstCycling and does not write to the monitor database.
 
-## Configuration
+`normalize_activity_payload(...)` validates the response rider ID against the
+selected namespace rider's expected FC ID before mapping result rows to
+`ActivityMonitorResult`-shaped dictionaries. Invalid responses and ID
+mismatches return explicit statuses with no rows. A successful response is
+always marked `partial` coverage: no recent FC result must never be treated as
+proof of inactivity.
 
-- `FIRST_CYCLING_BASE_URL`: defaults to `https://firstcycling.com`.
-- `FIRST_CYCLING_API_PATH`: required API path; treated as sensitive and redacted
-  from request errors.
-- Sync settings in `webapp/config.py` control retries, request delays, logging,
-  sync method, and whether to fetch only missing data.
-
-## Usage
-
-Run persistence methods inside the configured Flask application context:
-
-```python
-from webapp.integrations.firstcycling.api import FirstCyclingClient
-
-client = FirstCyclingClient()
-client.sync_race_calendar(season_year=2026, gender='Men')
-client.sync_race(1, season_year=2026)
-```
-
-Other sync methods include `sync_teams`, `sync_riders`, and
-`sync_race_results_window`. They fetch external data and persist it in main
-database tables; use the admin Integrations workflow for normal background syncs.
-
-API paths include `/{api-path}/{year}/raceCalendar.json`,
-`/{api-path}/{year}/teamOverview.json`, `/{api-path}/{year}/{race-id}.json`,
-`/{api-path}/rider/{rider-id}.json`, and `/{api-path}/team/{team-id}.json`.
-The previous integration notes report the `latestResults.php` and
-`latestResultsTODAY.php` endpoints as not working.
+PCM Manager's existing `FirstCyclingClient.get_rider()` uses the configured
+`rider/{id}.json` endpoint for its application data sync. The Activity Monitor
+normalizer targets the separate `/dora/rider/{id}.json` `allResults` shape used
+by the Arie Activity Monitor. A future network adapter must establish that
+endpoint's availability and error handling before calling this normalizer.

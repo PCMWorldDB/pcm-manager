@@ -1,0 +1,93 @@
+{% set filter_choices = [
+    ('provider', 'Provider', [('firstcycling', 'FirstCycling'), ('pcs', 'ProCyclingStats')]),
+    ('status', 'Status', [('draft', 'Draft'), ('queued', 'Queued'), ('running', 'Running'), ('success', 'Success'), ('partial', 'Partial'), ('failed', 'Failed'), ('cancelled', 'Cancelled')]),
+    ('origin', 'Origin', [('manual', 'Manual'), ('scheduled', 'Scheduled')]),
+    ('priority', 'Priority', [('high', 'High'), ('low', 'Low')]),
+    ('sync_view', 'Task Type / Workflow', sync_views.items())
+] %}
+{% set provider_labels = dict(filter_choices[0][2]) %}
+<form method="get" action="{{ url_for('web.admin_integrations_index') }}" class="row g-2 align-items-end mb-3">
+    {% for key, label, options in filter_choices %}
+    <div class="col-sm-6 col-lg-3">
+        <label for="group-{{ key }}" class="form-label">{{ label }}</label>
+        <select id="group-{{ key }}" name="{{ key }}" class="form-select">
+            <option value="">All</option>
+            {% for value, name in options if value != 'all' %}
+            <option value="{{ value }}" {% if filters[key] == value %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endfor %}
+    <div class="col-sm-6 col-lg-3">
+        <label for="group-year" class="form-label">Season Year</label>
+        <input type="number" min="1" max="9999" id="group-year" name="year" class="form-control" value="{{ filters.year }}">
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <label for="group-gender" class="form-label">Gender</label>
+        <select id="group-gender" name="gender" class="form-select">
+            <option value="">All</option>
+            {% for gender in ('Men', 'Women') %}
+            <option value="{{ gender }}" {% if filters.gender == gender %}selected{% endif %}>{{ gender }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <a href="{{ url_for('web.admin_integrations_index') }}" class="btn btn-outline-secondary">Clear</a>
+    </div>
+</form>
+
+<p class="text-muted mb-2">{{ page.total }} task group{{ '' if page.total == 1 else 's' }} found</p>
+{% if page.items %}
+<div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+        <thead>
+            <tr>
+                <th scope="col">Group</th>
+                <th scope="col">Created (UTC)</th>
+                <th scope="col">Providers</th>
+                <th scope="col">Namespace</th>
+                <th scope="col">Task Types / Workflow</th>
+                <th scope="col">Season</th>
+                <th scope="col">Status</th>
+                <th scope="col">Origin</th>
+                <th scope="col">Priority</th>
+                <th scope="col">Message</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for group in page.items %}
+            <tr>
+                <th scope="row"><a href="{{ url_for('web.external_call_group_detail', group_id=group.id) }}">#{{ group.id }}</a></th>
+                <td>{{ group.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td>
+                    {% for provider in providers_by_group[group.id]|sort %}
+                    {{ provider_labels.get(provider, provider) }}{{ ', ' if not loop.last }}
+                    {% else %}—{% endfor %}
+                </td>
+                <td>{{ selected_namespace.name if group.namespace_id else 'Global' }}</td>
+                <td>{{ sync_types_display(group.sync_types) or '—' }}{% if group.workflow_type %}<br><small>{{ sync_type_display(group.workflow_type) }}</small>{% endif %}</td>
+                <td>{{ group.season_year or '—' }}{% if group.gender %} [{{ group.gender }}]{% endif %}</td>
+                <td>{{ group.status|replace('_', ' ')|capitalize }}</td>
+                <td>{{ group.origin|capitalize }}</td>
+                <td>{{ group.priority|capitalize }}</td>
+                <td>{{ group.message or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% if page.pages > 1 %}
+<nav class="d-flex align-items-center gap-3" aria-label="Task group pages">
+    {% if page.has_prev %}
+    <a href="{{ url_for('web.admin_integrations_index', page=page.prev_num, **filters) }}">Previous</a>
+    {% endif %}
+    <span>Page {{ page.page }} of {{ page.pages }}</span>
+    {% if page.has_next %}
+    <a href="{{ url_for('web.admin_integrations_index', page=page.next_num, **filters) }}">Next</a>
+    {% endif %}
+</nav>
+{% endif %}
+{% else %}
+<p class="alert alert-info">No task groups match these filters.</p>
+{% endif %}
